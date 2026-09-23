@@ -1,7 +1,9 @@
 import express, { Express } from 'express';
 import cors from 'cors';
 import { env } from './config/env';
+import { prisma } from './config/db';
 import { requestIdMiddleware } from './common/middleware/request-id';
+import { sensitiveFieldsMiddleware } from './common/middleware/sensitive-fields';
 import { errorHandler } from './common/middleware/error-handler';
 
 // Routers
@@ -19,11 +21,12 @@ export function createApp(): Express {
 
   // Global Middlewares
   app.use(cors({ origin: env.CORS_ORIGIN }));
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   app.use(requestIdMiddleware);
+  app.use(sensitiveFieldsMiddleware);
 
-  // Health check endpoint
+  // Health check endpoints
   app.get('/api/v1/health', (req, res) => {
     return res.status(200).json({
       status: 'OK',
@@ -31,6 +34,19 @@ export function createApp(): Express {
       service: 'StockPilot Backend Core API',
       version: '1.0.0',
     });
+  });
+
+  app.get('/api/v1/health/live', (req, res) => {
+    return res.status(200).json({ status: 'ALIVE' });
+  });
+
+  app.get('/api/v1/health/ready', async (req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      return res.status(200).json({ status: 'READY', database: 'CONNECTED' });
+    } catch (error: any) {
+      return res.status(503).json({ status: 'UNREADY', database: 'DISCONNECTED', error: error.message });
+    }
   });
 
   // Module routes

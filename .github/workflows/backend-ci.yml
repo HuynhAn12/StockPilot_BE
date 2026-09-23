@@ -1,0 +1,52 @@
+name: StockPilot Backend CI
+
+on:
+  push:
+    branches: [ main, Sang, master ]
+  pull_request:
+    branches: [ main, Sang, master ]
+
+jobs:
+  build-and-test:
+    name: Build, Lint & Test Suite
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: stockpilot_ci
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Validate Prisma Schema
+        run: npx prisma validate
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: TypeScript Build
+        run: npm run build
+
+      - name: Run Test Suites
+        run: npm test
+        env:
+          NODE_ENV: test
+          DATABASE_URL: mysql://root:password@127.0.0.1:3306/stockpilot_ci
+          JWT_SECRET: ci-test-secret-key-12345
+          JWT_REFRESH_SECRET: ci-test-refresh-secret-key-67890

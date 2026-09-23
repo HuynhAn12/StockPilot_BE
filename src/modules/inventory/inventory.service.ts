@@ -1,7 +1,8 @@
 import { prisma } from '../../config/db';
-import { InsufficientStockError, NotFoundError } from '../../common/errors/app-error';
+import { NotFoundError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { inflowSchema, outflowSchema, auditSchema } from './inventory.schema';
+import { StockLedgerService } from './stock-ledger.service';
 
 export class InventoryService {
   private async getTargetWarehouse(storeId: number, warehouseId?: number) {
@@ -25,64 +26,19 @@ export class InventoryService {
     const refId = input.referenceId || `INFLOW-${Date.now()}`;
 
     return prisma.$transaction(async (tx) => {
-      const movements = [];
-
-      for (const item of input.items) {
-        const stockItem = await tx.stockItem.findFirst({
-          where: { id: item.stockItemId, storeId, isActive: true },
-        });
-
-        if (!stockItem) {
-          throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại trong cửa hàng`);
-        }
-
-        let balance = await tx.inventoryBalance.findUnique({
-          where: {
-            warehouseId_stockItemId: {
-              warehouseId: warehouse.id,
-              stockItemId: stockItem.id,
-            },
-          },
-        });
-
-        const beforeQuantity = balance ? balance.quantity : 0;
-        const afterQuantity = beforeQuantity + item.quantity;
-
-        if (balance) {
-          balance = await tx.inventoryBalance.update({
-            where: { id: balance.id },
-            data: { quantity: afterQuantity },
-          });
-        } else {
-          balance = await tx.inventoryBalance.create({
-            data: {
-              storeId,
-              warehouseId: warehouse.id,
-              stockItemId: stockItem.id,
-              quantity: afterQuantity,
-              reservedQuantity: 0,
-            },
-          });
-        }
-
-        const movement = await tx.stockMovement.create({
-          data: {
-            storeId,
-            warehouseId: warehouse.id,
-            stockItemId: stockItem.id,
-            type: 'INFLOW',
-            delta: item.quantity,
-            beforeQuantity,
-            afterQuantity,
-            referenceType: 'GOODS_RECEIPT',
-            referenceId: refId,
-            note: input.note || 'Nhập hàng vào kho',
-            createdById: userId,
-          },
-        });
-
-        movements.push(movement);
-      }
+      const movements = await StockLedgerService.atomicAdd(
+        tx,
+        {
+          storeId,
+          warehouseId: warehouse.id,
+          userId,
+          referenceType: 'GOODS_RECEIPT',
+          referenceId: refId,
+          note: input.note || 'Nhập hàng vào kho',
+        },
+        'INFLOW',
+        input.items
+      );
 
       return { warehouse, movements };
     });
@@ -93,59 +49,19 @@ export class InventoryService {
     const refId = input.referenceId || `OUTFLOW-${Date.now()}`;
 
     return prisma.$transaction(async (tx) => {
-      const movements = [];
-
-      for (const item of input.items) {
-        const stockItem = await tx.stockItem.findFirst({
-          where: { id: item.stockItemId, storeId, isActive: true },
-        });
-
-        if (!stockItem) {
-          throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại trong cửa hàng`);
-        }
-
-        const balance = await tx.inventoryBalance.findUnique({
-          where: {
-            warehouseId_stockItemId: {
-              warehouseId: warehouse.id,
-              stockItemId: stockItem.id,
-            },
-          },
-        });
-
-        const beforeQuantity = balance ? balance.quantity : 0;
-
-        if (beforeQuantity < item.quantity) {
-          throw new InsufficientStockError(
-            `Tồn kho SKU ${stockItem.sku} không đủ (Hiện có: ${beforeQuantity}, Yêu cầu xuất: ${item.quantity})`
-          );
-        }
-
-        const afterQuantity = beforeQuantity - item.quantity;
-
-        await tx.inventoryBalance.update({
-          where: { id: balance!.id },
-          data: { quantity: afterQuantity },
-        });
-
-        const movement = await tx.stockMovement.create({
-          data: {
-            storeId,
-            warehouseId: warehouse.id,
-            stockItemId: stockItem.id,
-            type: 'OUTFLOW',
-            delta: -item.quantity,
-            beforeQuantity,
-            afterQuantity,
-            referenceType: 'MANUAL_OUTFLOW',
-            referenceId: refId,
-            note: input.note || 'Xuất hàng thủ công',
-            createdById: userId,
-          },
-        });
-
-        movements.push(movement);
-      }
+      const movements = await StockLedgerService.atomicDeduct(
+        tx,
+        {
+          storeId,
+          warehouseId: warehouse.id,
+          userId,
+          referenceType: 'MANUAL_OUTFLOW',
+          referenceId: refId,
+          note: input.note || 'Xuất hàng thủ công',
+        },
+        'OUTFLOW',
+        input.items
+      );
 
       return { warehouse, movements };
     });
@@ -157,8 +73,9 @@ export class InventoryService {
 
     return prisma.$transaction(async (tx) => {
       const movements = [];
+      const sortedItems = [...input.items].sort((a, b) => a.stockItemId - b.stockItemId);
 
-      for (const item of input.items) {
+      for (const item of sortedItems) {
         const stockItem = await tx.stockItem.findFirst({
           where: { id: item.stockItemId, storeId, isActive: true },
         });
@@ -167,7 +84,7 @@ export class InventoryService {
           throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại trong cửa hàng`);
         }
 
-        let balance = await tx.inventoryBalance.findUnique({
+        const balance = await tx.inventoryBalance.findUnique({
           where: {
             warehouseId_stockItemId: {
               warehouseId: warehouse.id,
@@ -208,7 +125,7 @@ export class InventoryService {
             afterQuantity,
             referenceType: 'STOCK_AUDIT',
             referenceId: refId,
-            note: input.note || `Kiểm kê điều chỉnh: ${delta >= 0 ? '+' : ''}${delta}`,
+            note: input.note || `Kiểm kê điều chỉnh kho: ${delta >= 0 ? '+' : ''}${delta}`,
             createdById: userId,
           },
         });
@@ -252,7 +169,7 @@ export class InventoryService {
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: Math.min(Math.max(1, limit), 200),
     });
   }
 }

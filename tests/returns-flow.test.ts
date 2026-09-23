@@ -6,7 +6,8 @@ jest.mock('../src/config/db', () => ({
   prisma: {
     warehouse: { findFirst: jest.fn() },
     order: { findFirst: jest.fn() },
-    inventoryBalance: { findUnique: jest.fn(), update: jest.fn() },
+    stockItem: { findFirst: jest.fn() },
+    inventoryBalance: { findUnique: jest.fn(), update: jest.fn(), upsert: jest.fn() },
     stockMovement: { create: jest.fn() },
     returnOrder: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
@@ -22,7 +23,7 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
   });
 
   it('Chỉ cho phép trả hàng trên đơn đã FULFILLED', async () => {
-    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true });
+    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
@@ -41,7 +42,7 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
   });
 
   it('Từ chối nếu số lượng trả vượt quá số lượng đã mua hoặc chưa hoàn trả', async () => {
-    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true });
+    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
@@ -62,7 +63,7 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
   });
 
   it('Hàng lỗi/hỏng (isRestockable = false) không được nhập lại vào kho', async () => {
-    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true });
+    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
@@ -85,7 +86,7 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
     });
 
     // Không cập nhật balance và không tạo movement RETURN_RESTOCK
-    expect(prisma.inventoryBalance.update).not.toHaveBeenCalled();
+    expect(prisma.inventoryBalance.upsert).not.toHaveBeenCalled();
     expect(prisma.stockMovement.create).not.toHaveBeenCalled();
     expect(result.status).toBe('COMPLETED');
   });
