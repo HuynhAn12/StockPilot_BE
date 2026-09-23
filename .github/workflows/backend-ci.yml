@@ -2,7 +2,7 @@ name: StockPilot Backend CI
 
 on:
   push:
-    branches: [ main, Sang, master ]
+    branches: [ main, Sang, master, 'fix/**' ]
   pull_request:
     branches: [ main, Sang, master ]
 
@@ -32,10 +32,10 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 24 LTS
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install Dependencies

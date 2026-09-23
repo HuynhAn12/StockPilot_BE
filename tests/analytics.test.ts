@@ -3,8 +3,8 @@ import { prisma } from '../src/config/db';
 
 jest.mock('../src/config/db', () => ({
   prisma: {
-    order: { findMany: jest.fn() },
-    returnOrder: { findMany: jest.fn() },
+    order: { aggregate: jest.fn(), findMany: jest.fn() },
+    returnOrder: { aggregate: jest.fn(), findMany: jest.fn() },
     inventoryBalance: { findMany: jest.fn() },
   },
 }));
@@ -18,20 +18,21 @@ describe('AnalyticsService - Dashboard Metrics Calculation', () => {
   });
 
   it('phải tính đúng Doanh thu gộp, Khoản hoàn tiền, Doanh thu ròng và Định giá tồn kho theo storeId', async () => {
-    // 2 fulfilled orders: 500,000 + 300,000 = 800,000
-    (prisma.order.findMany as jest.Mock).mockResolvedValue([
-      { totalAmount: 500000 },
-      { totalAmount: 300000 },
-    ]);
+    // 2 fulfilled orders aggregate: 800,000
+    (prisma.order.aggregate as jest.Mock).mockResolvedValue({
+      _count: { id: 2 },
+      _sum: { totalAmount: 800000 },
+    });
 
-    // 1 return: 100,000
-    (prisma.returnOrder.findMany as jest.Mock).mockResolvedValue([
-      { totalRefundAmount: 100000 },
-    ]);
+    // 1 return aggregate: 100,000
+    (prisma.returnOrder.aggregate as jest.Mock).mockResolvedValue({
+      _count: { id: 1 },
+      _sum: { totalRefundAmount: 100000 },
+    });
 
     // Inventory: 10 items * 50,000 cost = 500,000
     (prisma.inventoryBalance.findMany as jest.Mock).mockResolvedValue([
-      { quantity: 10, stockItem: { costPrice: 50000 } },
+      { quantity: 10, stockItem: { costPrice: 50000, sellingPrice: 100000 } },
     ]);
 
     const result = await analyticsService.getDashboardMetrics(1);

@@ -7,8 +7,9 @@ export class CategoryController {
   async list(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const categories = await categoryService.listCategories(storeId);
-      return res.status(200).json({ success: true, data: categories });
+      const query = (req as any).validatedQuery || req.query;
+      const result = await categoryService.listCategories(storeId, query);
+      return res.status(200).json({ success: true, ...result });
     } catch (error) {
       next(error);
     }

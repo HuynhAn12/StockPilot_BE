@@ -5,23 +5,42 @@ import { createProductSchema, updateProductSchema } from './product.schema';
 import { toDecimal } from '../../common/utils/decimal';
 
 export class ProductService {
-  async listProducts(storeId: number) {
-    return prisma.product.findMany({
-      where: { storeId },
-      include: {
-        category: true,
-        stockItems: {
-          include: {
-            balances: {
-              include: {
-                warehouse: true,
+  async listProducts(storeId: number, query?: any) {
+    const page = Number(query?.page) || 1;
+    const limit = Number(query?.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await Promise.all([
+      prisma.product.findMany({
+        where: { storeId },
+        include: {
+          category: true,
+          stockItems: {
+            include: {
+              balances: {
+                include: {
+                  warehouse: true,
+                },
               },
             },
           },
         },
+        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.product.count({ where: { storeId } }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
       },
-      orderBy: { createdAt: 'desc' },
-    });
+    };
   }
 
   async getProductById(storeId: number, id: number) {

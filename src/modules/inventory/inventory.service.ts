@@ -155,21 +155,41 @@ export class InventoryService {
     });
   }
 
-  async getMovements(storeId: number, stockItemId?: number, limit = 50) {
-    return prisma.stockMovement.findMany({
-      where: {
-        storeId,
-        ...(stockItemId ? { stockItemId } : {}),
-      },
-      include: {
-        stockItem: true,
-        warehouse: true,
-        createdBy: {
-          select: { id: true, fullName: true, email: true },
+  async getMovements(storeId: number, stockItemId?: number, query?: any) {
+    const page = Number(query?.page) || 1;
+    const limit = Number(query?.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const where = {
+      storeId,
+      ...(stockItemId ? { stockItemId } : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      prisma.stockMovement.findMany({
+        where,
+        include: {
+          stockItem: true,
+          warehouse: true,
+          createdBy: {
+            select: { id: true, fullName: true, email: true },
+          },
         },
+        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.stockMovement.count({ where }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
       },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(Math.max(1, limit), 200),
-    });
+    };
   }
 }

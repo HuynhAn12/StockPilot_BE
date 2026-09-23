@@ -240,18 +240,39 @@ export class OrderService {
     });
   }
 
-  async listOrders(storeId: number, status?: string) {
-    return prisma.order.findMany({
-      where: {
-        storeId,
-        ...(status ? { status: status as any } : {}),
+  async listOrders(storeId: number, status?: string, query?: any) {
+    const page = Number(query?.page) || 1;
+    const limit = Number(query?.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const where = {
+      storeId,
+      ...(status ? { status: status as any } : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        include: {
+          items: true,
+          returns: true,
+        },
+        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.order.count({ where }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
       },
-      include: {
-        items: true,
-        returns: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    };
   }
 
   async getOrderById(storeId: number, id: number) {

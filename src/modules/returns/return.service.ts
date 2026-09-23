@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createReturnSchema } from './return.schema';
 import { toDecimal, toNumber } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
+import { PaginationQuery, buildPaginationResult } from '../../common/utils/pagination';
 
 export class ReturnService {
   async createReturn(storeId: number, userId: number, input: z.infer<typeof createReturnSchema>) {
@@ -49,7 +50,7 @@ export class ReturnService {
         }
       }
 
-      // 2. Aggregate current request items by orderItemId to handle accidental duplicate payload lines
+      // 2. Validate and aggregate current request items by orderItemId
       const requestItemsMap = new Map<number, { quantity: number; isRestockable: boolean; note?: string }>();
       for (const item of input.items) {
         const existing = requestItemsMap.get(item.orderItemId);
@@ -155,14 +156,25 @@ export class ReturnService {
     });
   }
 
-  async listReturns(storeId: number) {
-    return prisma.returnOrder.findMany({
-      where: { storeId },
-      include: {
-        order: true,
-        items: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+  async listReturns(storeId: number, query?: PaginationQuery) {
+    const page = query?.page || 1;
+    const limit = query?.limit || 20;
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await Promise.all([
+      prisma.returnOrder.findMany({
+        where: { storeId },
+        include: {
+          order: true,
+          items: true,
+        },
+        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.returnOrder.count({ where: { storeId } }),
+    ]);
+
+    return buildPaginationResult(items, total, page, limit);
   }
 }

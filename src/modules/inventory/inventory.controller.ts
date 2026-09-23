@@ -10,7 +10,8 @@ export class InventoryController {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
       const result = await inventoryService.inflow(storeId, userId, req.body);
-      return res.status(200).json({ success: true, message: 'Nhập kho thành công', data: result });
+      const masked = maskSensitiveFields(result, req.user?.role);
+      return res.status(200).json({ success: true, message: 'Nhập hàng vào kho thành công', data: masked });
     } catch (error) {
       next(error);
     }
@@ -21,7 +22,8 @@ export class InventoryController {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
       const result = await inventoryService.outflow(storeId, userId, req.body);
-      return res.status(200).json({ success: true, message: 'Xuất kho thành công', data: result });
+      const masked = maskSensitiveFields(result, req.user?.role);
+      return res.status(200).json({ success: true, message: 'Xuất hàng thủ công thành công', data: masked });
     } catch (error) {
       next(error);
     }
@@ -32,7 +34,8 @@ export class InventoryController {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
       const result = await inventoryService.audit(storeId, userId, req.body);
-      return res.status(200).json({ success: true, message: 'Kiểm kê kho thành công', data: result });
+      const masked = maskSensitiveFields(result, req.user?.role);
+      return res.status(200).json({ success: true, message: 'Kiểm kê kho thành công', data: masked });
     } catch (error) {
       next(error);
     }
@@ -54,10 +57,10 @@ export class InventoryController {
     try {
       const storeId = req.user!.storeId!;
       const stockItemId = req.query.stockItemId ? Number(req.query.stockItemId) : undefined;
-      const limit = req.query.limit ? Number(req.query.limit) : 50;
-      const movements = await inventoryService.getMovements(storeId, stockItemId, limit);
-      const masked = maskSensitiveFields(movements, req.user?.role);
-      return res.status(200).json({ success: true, data: masked });
+      const query = (req as any).validatedQuery || req.query;
+      const result = await inventoryService.getMovements(storeId, stockItemId, query);
+      const maskedItems = maskSensitiveFields(result.items, req.user?.role);
+      return res.status(200).json({ success: true, items: maskedItems, pagination: result.pagination });
     } catch (error) {
       next(error);
     }

@@ -8,9 +8,10 @@ export class ProductController {
   async list(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const products = await productService.listProducts(storeId);
-      const masked = maskSensitiveFields(products, req.user?.role);
-      return res.status(200).json({ success: true, data: masked });
+      const query = (req as any).validatedQuery || req.query;
+      const result = await productService.listProducts(storeId, query);
+      const maskedItems = maskSensitiveFields(result.items, req.user?.role);
+      return res.status(200).json({ success: true, items: maskedItems, pagination: result.pagination });
     } catch (error) {
       next(error);
     }

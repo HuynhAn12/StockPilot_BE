@@ -7,11 +7,11 @@ export class UserController {
   async createStaff(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const staff = await userService.createStaff(storeId, req.body);
+      const user = await userService.createStaff(storeId, req.body);
       return res.status(201).json({
         success: true,
-        message: 'Tạo tài khoản nhân viên kho thành công',
-        data: staff,
+        message: 'Tạo tài khoản nhân viên thành công',
+        data: user,
       });
     } catch (error) {
       next(error);
@@ -21,10 +21,11 @@ export class UserController {
   async listStaff(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const users = await userService.listStoreUsers(storeId);
+      const query = (req as any).validatedQuery || req.query;
+      const result = await userService.listStoreUsers(storeId, query);
       return res.status(200).json({
         success: true,
-        data: users,
+        ...result,
       });
     } catch (error) {
       next(error);

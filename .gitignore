@@ -36,3 +36,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Temporary workspace instruction files
+flow*.md
+*.tmp

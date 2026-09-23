@@ -4,6 +4,7 @@ import { authMiddleware } from '../../common/middleware/auth';
 import { requireRole, requireStoreScope } from '../../common/middleware/rbac';
 import { validate } from '../../common/middleware/validate';
 import { createProductSchema, updateProductSchema } from './product.schema';
+import { paginationQuerySchema } from '../../common/utils/pagination';
 
 export const productRouter = Router();
 const controller = new ProductController();
@@ -11,7 +12,7 @@ const controller = new ProductController();
 productRouter.use(authMiddleware);
 productRouter.use(requireStoreScope);
 
-productRouter.get('/', (req, res, next) => controller.list(req, res, next));
+productRouter.get('/', validate({ query: paginationQuerySchema }), (req, res, next) => controller.list(req, res, next));
 productRouter.get('/:id', (req, res, next) => controller.getById(req, res, next));
 
 // Mutating endpoints require SHOP_OWNER or ADMIN

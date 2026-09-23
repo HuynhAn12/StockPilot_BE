@@ -1,12 +1,17 @@
 import { prisma } from '../../config/db';
 import { hashPassword, comparePassword } from '../../common/utils/password';
-import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../../common/utils/jwt';
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  verifyRefreshToken,
+  hashToken,
+} from '../../common/utils/jwt';
 import { ConflictError, UnauthenticatedError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { registerSchema, loginSchema } from './auth.schema';
 
 export class AuthService {
-  async registerOwner(input: z.infer<typeof registerSchema>) {
+  async registerOwner(input: z.infer<typeof registerSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
     const existingUser = await prisma.user.findUnique({
       where: { email: input.email.toLowerCase().trim() },
     });
@@ -67,6 +72,18 @@ export class AuthService {
 
     const accessToken = generateAccessToken(tokenPayload);
     const refreshToken = generateRefreshToken(tokenPayload);
+    const refreshTokenHash = hashToken(refreshToken);
+
+    // Save session in database
+    await prisma.authSession.create({
+      data: {
+        userId: result.user.id,
+        refreshTokenHash,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        userAgent: meta?.userAgent,
+        ipAddress: meta?.ipAddress,
+      },
+    });
 
     return {
       user: {
@@ -85,7 +102,7 @@ export class AuthService {
     };
   }
 
-  async login(input: z.infer<typeof loginSchema>) {
+  async login(input: z.infer<typeof loginSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
     const user = await prisma.user.findUnique({
       where: { email: input.email.toLowerCase().trim() },
       include: {
@@ -93,7 +110,7 @@ export class AuthService {
       },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || (user.storeId && !user.store?.isActive)) {
       throw new UnauthenticatedError('Tài khoản hoặc mật khẩu không chính xác');
     }
 
@@ -111,6 +128,18 @@ export class AuthService {
 
     const accessToken = generateAccessToken(tokenPayload);
     const refreshToken = generateRefreshToken(tokenPayload);
+    const refreshTokenHash = hashToken(refreshToken);
+
+    // Store new session with token hash
+    await prisma.authSession.create({
+      data: {
+        userId: user.id,
+        refreshTokenHash,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        userAgent: meta?.userAgent,
+        ipAddress: meta?.ipAddress,
+      },
+    });
 
     return {
       user: {
@@ -128,31 +157,98 @@ export class AuthService {
     };
   }
 
-  async refreshToken(token: string) {
+  async refreshToken(token: string, meta?: { userAgent?: string; ipAddress?: string }) {
+    let payload;
     try {
-      const payload = verifyRefreshToken(token);
-      const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
-      });
-
-      if (!user || !user.isActive) {
-        throw new UnauthenticatedError('Tài khoản không tồn tại hoặc đã bị khóa');
-      }
-
-      const tokenPayload = {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-        storeId: user.storeId,
-      };
-
-      return {
-        accessToken: generateAccessToken(tokenPayload),
-        refreshToken: generateRefreshToken(tokenPayload),
-      };
+      payload = verifyRefreshToken(token);
     } catch {
       throw new UnauthenticatedError('Refresh token không hợp lệ hoặc đã hết hạn');
     }
+
+    const tokenHash = hashToken(token);
+    const session = await prisma.authSession.findFirst({
+      where: { refreshTokenHash: tokenHash },
+      include: { user: { include: { store: true } } },
+    });
+
+    // Replay detection: If session doesn't exist or already revoked
+    if (!session) {
+      throw new UnauthenticatedError('Phiên đăng nhập không tồn tại hoặc token không hợp lệ');
+    }
+
+    if (session.revokedAt !== null) {
+      // Token reuse / replay attack detected! Revoke all sessions for this user for security
+      await prisma.authSession.updateMany({
+        where: { userId: session.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      throw new UnauthenticatedError('Phát hiện token đã qua sử dụng. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn');
+    }
+
+    if (session.expiresAt < new Date()) {
+      await prisma.authSession.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      });
+      throw new UnauthenticatedError('Phiên đăng nhập đã hết hạn');
+    }
+
+    const user = session.user;
+    if (!user || !user.isActive || (user.storeId && !user.store?.isActive)) {
+      throw new UnauthenticatedError('Tài khoản không tồn tại hoặc đã bị khóa');
+    }
+
+    const tokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      storeId: user.storeId,
+    };
+
+    const newAccessToken = generateAccessToken(tokenPayload);
+    const newRefreshToken = generateRefreshToken(tokenPayload);
+    const newRefreshTokenHash = hashToken(newRefreshToken);
+
+    // Rotate session: Invalidate old session and create new active session
+    await prisma.$transaction(async (tx) => {
+      await tx.authSession.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      });
+
+      await tx.authSession.create({
+        data: {
+          userId: user.id,
+          refreshTokenHash: newRefreshTokenHash,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          userAgent: meta?.userAgent || session.userAgent,
+          ipAddress: meta?.ipAddress || session.ipAddress,
+        },
+      });
+    });
+
+    return {
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
+  async logout(userId: number, token?: string) {
+    if (token) {
+      const tokenHash = hashToken(token);
+      await prisma.authSession.updateMany({
+        where: { userId, refreshTokenHash: tokenHash, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    } else {
+      // If no token specified, revoke all active sessions for this user
+      await prisma.authSession.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    }
+
+    return { success: true };
   }
 
   async getMe(userId: number) {
@@ -173,7 +269,7 @@ export class AuthService {
       },
     });
 
-    if (!user) {
+    if (!user || !user.isActive) {
       throw new UnauthenticatedError('Không tìm thấy thông tin tài khoản');
     }
 

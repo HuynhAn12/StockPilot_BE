@@ -1,5 +1,7 @@
 import express, { Express } from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { prisma } from './config/db';
 import { requestIdMiddleware } from './common/middleware/request-id';
@@ -19,12 +21,46 @@ import { analyticsRouter } from './modules/analytics/analytics.routes';
 export function createApp(): Express {
   const app = express();
 
-  // Global Middlewares
-  app.use(cors({ origin: env.CORS_ORIGIN }));
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  // Security Headers
+  app.use(helmet());
+
+  // CORS Policy
+  app.use(
+    cors({
+      origin: env.NODE_ENV === 'production' ? env.CORS_ORIGIN : true,
+      credentials: true,
+    })
+  );
+
+  // Body Parsing limits
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+  // Request ID & Sensitive Data Masking
   app.use(requestIdMiddleware);
   app.use(sensitiveFieldsMiddleware);
+
+  // Rate Limiting (Skip in test environment)
+  if (env.NODE_ENV !== 'test') {
+    const generalLimiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 300,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Quá nhiều yêu cầu, vui lòng thử lại sau 15 phút' } },
+    });
+    app.use('/api/', generalLimiter);
+
+    const authLimiter = rateLimit({
+      windowMs: 60 * 1000, // 1 minute
+      max: 10,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { success: false, error: { code: 'AUTH_RATE_LIMIT_EXCEEDED', message: 'Quá nhiều lần thử đăng nhập/làm mới token, vui lòng thử lại sau 1 phút' } },
+    });
+    app.use('/api/v1/auth/login', authLimiter);
+    app.use('/api/v1/auth/refresh', authLimiter);
+  }
 
   // Health check endpoints
   app.get('/api/v1/health', (req, res) => {

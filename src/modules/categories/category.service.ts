@@ -4,16 +4,35 @@ import { z } from 'zod';
 import { createCategorySchema, updateCategorySchema } from './category.schema';
 
 export class CategoryService {
-  async listCategories(storeId: number) {
-    return prisma.category.findMany({
-      where: { storeId },
-      include: {
-        _count: {
-          select: { products: true },
+  async listCategories(storeId: number, query?: any) {
+    const page = Number(query?.page) || 1;
+    const limit = Number(query?.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await Promise.all([
+      prisma.category.findMany({
+        where: { storeId },
+        include: {
+          _count: {
+            select: { products: true },
+          },
         },
+        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.category.count({ where: { storeId } }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
       },
-      orderBy: { createdAt: 'desc' },
-    });
+    };
   }
 
   async getCategoryById(storeId: number, id: number) {

@@ -9,9 +9,10 @@ export class OrderController {
     try {
       const storeId = req.user!.storeId!;
       const status = req.query.status as string;
-      const orders = await orderService.listOrders(storeId, status);
-      const masked = maskSensitiveFields(orders, req.user?.role);
-      return res.status(200).json({ success: true, data: masked });
+      const query = (req as any).validatedQuery || req.query;
+      const result = await orderService.listOrders(storeId, status, query);
+      const maskedItems = maskSensitiveFields(result.items, req.user?.role);
+      return res.status(200).json({ success: true, items: maskedItems, pagination: result.pagination });
     } catch (error) {
       next(error);
     }

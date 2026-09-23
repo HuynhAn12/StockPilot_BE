@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { env } from '../../config/env';
 import { Role } from '@prisma/client';
 
@@ -27,4 +28,8 @@ export function verifyAccessToken(token: string): TokenPayload {
 
 export function verifyRefreshToken(token: string): TokenPayload {
   return jwt.verify(token, env.JWT_REFRESH_SECRET) as TokenPayload;
+}
+
+export function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }

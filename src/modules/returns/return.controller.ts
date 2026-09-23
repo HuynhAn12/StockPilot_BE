@@ -18,8 +18,9 @@ export class ReturnController {
   async list(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const result = await returnService.listReturns(storeId);
-      return res.status(200).json({ success: true, data: result });
+      const query = (req as any).validatedQuery || req.query;
+      const result = await returnService.listReturns(storeId, query);
+      return res.status(200).json({ success: true, ...result });
     } catch (error) {
       next(error);
     }

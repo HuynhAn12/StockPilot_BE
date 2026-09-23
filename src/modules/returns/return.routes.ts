@@ -4,6 +4,7 @@ import { authMiddleware } from '../../common/middleware/auth';
 import { requireStoreScope } from '../../common/middleware/rbac';
 import { validate } from '../../common/middleware/validate';
 import { createReturnSchema } from './return.schema';
+import { paginationQuerySchema } from '../../common/utils/pagination';
 
 export const returnRouter = Router();
 const controller = new ReturnController();
@@ -11,5 +12,5 @@ const controller = new ReturnController();
 returnRouter.use(authMiddleware);
 returnRouter.use(requireStoreScope);
 
-returnRouter.get('/', (req, res, next) => controller.list(req, res, next));
+returnRouter.get('/', validate({ query: paginationQuerySchema }), (req, res, next) => controller.list(req, res, next));
 returnRouter.post('/', validate({ body: createReturnSchema }), (req, res, next) => controller.create(req, res, next));
