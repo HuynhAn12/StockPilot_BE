@@ -1,0 +1,308 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SHOP_OWNER
+  WAREHOUSE_STAFF
+  ADMIN
+}
+
+enum MovementType {
+  INFLOW
+  OUTFLOW
+  AUDIT_ADJUSTMENT
+  ORDER_FULFILL
+  ORDER_CANCEL_RESTOCK
+  RETURN_RESTOCK
+}
+
+enum OrderStatus {
+  DRAFT
+  CONFIRMED
+  FULFILLED
+  CANCELED
+}
+
+enum ReturnStatus {
+  COMPLETED
+}
+
+model Store {
+  id          Int       @id @default(autoincrement())
+  name        String    @db.VarChar(255)
+  code        String    @unique @db.VarChar(50)
+  phone       String?   @db.VarChar(50)
+  address     String?   @db.VarChar(255)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users             User[]
+  warehouses        Warehouse[]
+  categories        Category[]
+  products          Product[]
+  stockItems        StockItem[]
+  inventoryBalances InventoryBalance[]
+  stockMovements    StockMovement[]
+  orders            Order[]
+  orderItems        OrderItem[]
+  returnOrders      ReturnOrder[]
+  returnItems       ReturnItem[]
+
+  @@map("stores")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @db.VarChar(255)
+  fullName     String    @db.VarChar(255)
+  role         Role      @default(SHOP_OWNER)
+  isActive     Boolean   @default(true)
+  storeId      Int?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  store        Store?    @relation(fields: [storeId], references: [id], onDelete: SetNull)
+
+  stockMovements StockMovement[]
+  ordersCreated  Order[]
+  returnsCreated ReturnOrder[]
+
+  @@index([storeId])
+  @@map("users")
+}
+
+model Warehouse {
+  id        Int       @id @default(autoincrement())
+  storeId   Int
+  name      String    @db.VarChar(255)
+  location  String?   @db.VarChar(255)
+  isDefault Boolean   @default(false)
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  balances  InventoryBalance[]
+  movements StockMovement[]
+
+  @@index([storeId])
+  @@map("warehouses")
+}
+
+model Category {
+  id          Int       @id @default(autoincrement())
+  storeId     Int
+  name        String    @db.VarChar(255)
+  code        String    @db.VarChar(50)
+  description String?   @db.Text
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  products    Product[]
+
+  @@unique([storeId, code])
+  @@index([storeId])
+  @@map("categories")
+}
+
+model Product {
+  id          Int       @id @default(autoincrement())
+  storeId     Int
+  categoryId  Int?
+  name        String    @db.VarChar(255)
+  code        String    @db.VarChar(50)
+  description String?   @db.Text
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store       Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  category    Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  stockItems  StockItem[]
+
+  @@unique([storeId, code])
+  @@index([storeId])
+  @@index([categoryId])
+  @@map("products")
+}
+
+model StockItem {
+  id            Int       @id @default(autoincrement())
+  storeId       Int
+  productId     Int
+  sku           String    @db.VarChar(100)
+  name          String    @db.VarChar(255)
+  barcode       String?   @db.VarChar(100)
+  costPrice     Decimal   @default(0.00) @db.Decimal(15, 2)
+  sellingPrice  Decimal   @default(0.00) @db.Decimal(15, 2)
+  minStockLevel Int       @default(0)
+  maxStockLevel Int       @default(1000)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  store         Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product       Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  balances      InventoryBalance[]
+  movements     StockMovement[]
+  orderItems    OrderItem[]
+  returnItems   ReturnItem[]
+
+  @@unique([storeId, sku])
+  @@index([storeId])
+  @@index([productId])
+  @@map("stock_items")
+}
+
+model InventoryBalance {
+  id               Int       @id @default(autoincrement())
+  storeId          Int
+  warehouseId      Int
+  stockItemId      Int
+  quantity         Int       @default(0)
+  reservedQuantity Int       @default(0)
+  updatedAt        DateTime  @updatedAt
+
+  store            Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  warehouse        Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  stockItem        StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, stockItemId])
+  @@index([storeId, stockItemId])
+  @@map("inventory_balances")
+}
+
+model StockMovement {
+  id             Int          @id @default(autoincrement())
+  storeId        Int
+  warehouseId    Int
+  stockItemId    Int
+  type           MovementType
+  delta          Int
+  beforeQuantity Int
+  afterQuantity  Int
+  referenceType  String       @db.VarChar(50)
+  referenceId    String       @db.VarChar(100)
+  idempotencyKey String?      @unique @db.VarChar(150)
+  note           String?      @db.Text
+  createdById    Int?
+  createdAt      DateTime     @default(now())
+
+  store          Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  warehouse      Warehouse    @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  stockItem      StockItem    @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  createdBy      User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([storeId, stockItemId, createdAt])
+  @@index([warehouseId])
+  @@map("stock_movements")
+}
+
+model Order {
+  id              Int         @id @default(autoincrement())
+  storeId         Int
+  orderNumber     String      @db.VarChar(100)
+  status          OrderStatus @default(DRAFT)
+  customerName    String?     @db.VarChar(255)
+  customerPhone   String?     @db.VarChar(50)
+  customerAddress String?     @db.VarChar(255)
+  subtotalAmount  Decimal     @default(0.00) @db.Decimal(15, 2)
+  discountAmount  Decimal     @default(0.00) @db.Decimal(15, 2)
+  taxAmount       Decimal     @default(0.00) @db.Decimal(15, 2)
+  totalAmount     Decimal     @default(0.00) @db.Decimal(15, 2)
+  note            String?     @db.Text
+  confirmedAt     DateTime?
+  fulfilledAt     DateTime?
+  canceledAt      DateTime?
+  cancelReason    String?     @db.Text
+  createdById     Int?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  store           Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdBy       User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items           OrderItem[]
+  returns         ReturnOrder[]
+
+  @@unique([storeId, orderNumber])
+  @@index([storeId, status, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                 Int         @id @default(autoincrement())
+  storeId            Int
+  orderId            Int
+  stockItemId        Int
+  skuSnapshot        String      @db.VarChar(100)
+  nameSnapshot       String      @db.VarChar(255)
+  unitPriceSnapshot  Decimal     @db.Decimal(15, 2)
+  costPriceSnapshot  Decimal     @default(0.00) @db.Decimal(15, 2)
+  quantity           Int
+  subtotal           Decimal     @db.Decimal(15, 2)
+  createdAt          DateTime    @default(now())
+
+  store              Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order              Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  stockItem          StockItem   @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  returnItems        ReturnItem[]
+
+  @@index([storeId, orderId])
+  @@index([stockItemId])
+  @@map("order_items")
+}
+
+model ReturnOrder {
+  id                Int          @id @default(autoincrement())
+  storeId           Int
+  orderId           Int
+  returnNumber      String       @db.VarChar(100)
+  status            ReturnStatus @default(COMPLETED)
+  totalRefundAmount Decimal      @default(0.00) @db.Decimal(15, 2)
+  reason            String?      @db.Text
+  createdById       Int?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  store             Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order             Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdBy         User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items             ReturnItem[]
+
+  @@unique([storeId, returnNumber])
+  @@index([storeId, orderId])
+  @@map("return_orders")
+}
+
+model ReturnItem {
+  id                 Int         @id @default(autoincrement())
+  storeId            Int
+  returnOrderId      Int
+  orderItemId        Int
+  stockItemId        Int
+  quantity           Int
+  refundPrice        Decimal     @db.Decimal(15, 2)
+  isRestockable      Boolean     @default(true)
+  restockWarehouseId Int?
+  note               String?     @db.Text
+  createdAt          DateTime    @default(now())
+
+  store              Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  returnOrder        ReturnOrder @relation(fields: [returnOrderId], references: [id], onDelete: Cascade)
+  orderItem          OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  stockItem          StockItem   @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, returnOrderId])
+  @@index([orderItemId])
+  @@map("return_items")
+}
