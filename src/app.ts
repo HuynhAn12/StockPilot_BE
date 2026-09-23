@@ -44,8 +44,8 @@ export function createApp(): Express {
     try {
       await prisma.$queryRaw`SELECT 1`;
       return res.status(200).json({ status: 'READY', database: 'CONNECTED' });
-    } catch (error: any) {
-      return res.status(503).json({ status: 'UNREADY', database: 'DISCONNECTED', error: error.message });
+    } catch {
+      return res.status(503).json({ status: 'UNREADY', database: 'DISCONNECTED' });
     }
   });
 

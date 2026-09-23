@@ -9,10 +9,10 @@ export function requireRole(...roles: Role[]) {
     }
 
     if (!roles.includes(req.user.role)) {
-      return next(new ForbiddenError('Tài khoản không đủ quyền để thực hiện thao tác này'));
+      return next(new ForbiddenError('Account does not have permission for this operation'));
     }
 
-    next();
+    return next();
   };
 }
 
@@ -21,19 +21,13 @@ export function requireStoreScope(req: Request, res: Response, next: NextFunctio
     return next(new UnauthenticatedError());
   }
 
-  // If ADMIN accesses a store resource, allow passing target storeId via header or query
   if (req.user.role === 'ADMIN') {
-    const storeIdQuery = req.query.storeId ? Number(req.query.storeId) : undefined;
-    const storeIdHeader = req.headers['x-store-id'] ? Number(req.headers['x-store-id']) : undefined;
-
-    if (!req.user.storeId && (storeIdQuery || storeIdHeader)) {
-      req.user.storeId = storeIdQuery || storeIdHeader || null;
-    }
+    return next(new ForbiddenError('Admin must use dedicated admin endpoints and cannot select a store for shop APIs'));
   }
 
   if (!req.user.storeId) {
-    return next(new ForbiddenError('Người dùng chưa được liên kết với bất kỳ cửa hàng nào'));
+    return next(new ForbiddenError('Account is not linked to a store'));
   }
 
-  next();
+  return next();
 }

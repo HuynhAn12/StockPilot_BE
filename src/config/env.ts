@@ -7,10 +7,10 @@ const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     PORT: z.coerce.number().default(5000),
-    DATABASE_URL: z.string().default('mysql://root:password@127.0.0.1:3306/stockpilot_dev'),
-    JWT_SECRET: z.string().default('stockpilot-secret-jwt-key-2026'),
+    DATABASE_URL: z.string().optional(),
+    JWT_SECRET: z.string().optional(),
     JWT_EXPIRES_IN: z.string().default('1d'),
-    JWT_REFRESH_SECRET: z.string().default('stockpilot-secret-refresh-key-2026'),
+    JWT_REFRESH_SECRET: z.string().optional(),
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
   })
@@ -18,15 +18,17 @@ const envSchema = z
     (data) => {
       if (data.NODE_ENV === 'production') {
         return (
-          data.JWT_SECRET !== 'stockpilot-secret-jwt-key-2026' &&
-          data.JWT_REFRESH_SECRET !== 'stockpilot-secret-refresh-key-2026'
+          Boolean(data.DATABASE_URL) &&
+          Boolean(data.JWT_SECRET) &&
+          Boolean(data.JWT_REFRESH_SECRET) &&
+          data.CORS_ORIGIN !== '*'
         );
       }
       return true;
     },
     {
-      message: 'FATAL: Production mode requires custom JWT_SECRET and JWT_REFRESH_SECRET variables.',
-      path: ['JWT_SECRET'],
+      message: 'FATAL: Production mode requires DATABASE_URL, JWT_SECRET, JWT_REFRESH_SECRET, and explicit CORS_ORIGIN.',
+      path: ['NODE_ENV'],
     }
   );
 
@@ -38,4 +40,9 @@ if (!parsedEnv.success) {
   process.exit(1);
 }
 
-export const env = parsedEnv.data;
+export const env = {
+  ...parsedEnv.data,
+  DATABASE_URL: parsedEnv.data.DATABASE_URL || 'mysql://root:password@127.0.0.1:3306/stockpilot_dev',
+  JWT_SECRET: parsedEnv.data.JWT_SECRET || 'stockpilot-secret-jwt-key-2026',
+  JWT_REFRESH_SECRET: parsedEnv.data.JWT_REFRESH_SECRET || 'stockpilot-secret-refresh-key-2026',
+};

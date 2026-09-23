@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:push": "prisma db push",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
     "test:coverage": "jest --coverage --runInBand --detectOpenHandles --forceExit"

@@ -54,9 +54,15 @@ export class ReturnService {
       for (const item of input.items) {
         const existing = requestItemsMap.get(item.orderItemId);
         if (existing) {
+          if (existing.isRestockable !== item.isRestockable) {
+            throw new ValidationError(
+              `Return item ${item.orderItemId} is duplicated with conflicting restock policy; split it into separate return requests`
+            );
+          }
+
           requestItemsMap.set(item.orderItemId, {
             quantity: existing.quantity + item.quantity,
-            isRestockable: existing.isRestockable && item.isRestockable,
+            isRestockable: existing.isRestockable,
             note: [existing.note, item.note].filter(Boolean).join('; '),
           });
         } else {

@@ -90,4 +90,26 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
     expect(prisma.stockMovement.create).not.toHaveBeenCalled();
     expect(result.status).toBe('COMPLETED');
   });
+
+  it('rejects duplicate return payload lines with conflicting restock policy', async () => {
+    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
+    (prisma.order.findFirst as jest.Mock).mockResolvedValue({
+      id: 50,
+      storeId: 1,
+      status: 'FULFILLED',
+      items: [{ id: 1, stockItemId: 10, skuSnapshot: 'SKU-01', quantity: 2, unitPriceSnapshot: 100000 }],
+      returns: [],
+    });
+
+    await expect(
+      returnService.createReturn(1, 100, {
+        orderId: 50,
+        reason: 'Partial return',
+        items: [
+          { orderItemId: 1, quantity: 1, isRestockable: true },
+          { orderItemId: 1, quantity: 1, isRestockable: false },
+        ],
+      })
+    ).rejects.toThrow(ValidationError);
+  });
 });

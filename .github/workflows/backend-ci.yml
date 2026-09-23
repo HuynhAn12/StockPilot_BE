@@ -21,6 +21,13 @@ jobs:
           - 3306:3306
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
 
+    env:
+      NODE_ENV: test
+      DATABASE_URL: mysql://root:password@127.0.0.1:3306/stockpilot_ci
+      JWT_SECRET: ci-test-secret-key-12345
+      JWT_REFRESH_SECRET: ci-test-refresh-secret-key-67890
+      CORS_ORIGIN: http://localhost:3000
+
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -40,13 +47,11 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Apply Database Migrations
+        run: npx prisma migrate deploy
+
       - name: TypeScript Build
         run: npm run build
 
       - name: Run Test Suites
         run: npm test
-        env:
-          NODE_ENV: test
-          DATABASE_URL: mysql://root:password@127.0.0.1:3306/stockpilot_ci
-          JWT_SECRET: ci-test-secret-key-12345
-          JWT_REFRESH_SECRET: ci-test-refresh-secret-key-67890
