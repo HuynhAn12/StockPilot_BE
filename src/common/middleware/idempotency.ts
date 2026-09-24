@@ -43,7 +43,6 @@ export function idempotency(options: IdempotencyOptions) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
 
-    // P0-01: Compute canonical SHA-256 hash including Method, Route Path, Params, Query, and Body
     const canonicalRequestString = [
       req.method.toUpperCase(),
       (req.baseUrl || '') + (req.path || ''),
@@ -60,7 +59,6 @@ export function idempotency(options: IdempotencyOptions) {
     const prisma = req.app.get('prisma') || defaultPrisma;
 
     try {
-      // 1. Check existing idempotency record
       const existing = await prisma.idempotencyRequest.findUnique({
         where: {
           storeId_operation_key: {
@@ -72,7 +70,6 @@ export function idempotency(options: IdempotencyOptions) {
       });
 
       if (existing) {
-        // P0-02: Check if record is expired or stale PROCESSING (> 60s crash window)
         const isExpired = existing.expiresAt <= now;
         const isStaleProcessing =
           existing.status === 'PROCESSING' &&

@@ -493,7 +493,6 @@ export class ImportExportService {
                   );
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
-                // P0-C: REPLACE_STOCK as physical counted quantity with strict deterministic AUDIT_ADJUSTMENT and row locking
                 const targetQty = item.countedQuantity !== undefined ? item.countedQuantity : item.initialQuantity;
                 const lockedBalances: Array<{ id: number; quantity: number }> = await tx.$queryRaw`
                   SELECT id, quantity FROM inventory_balances
