@@ -62,6 +62,20 @@ enum ImportJobItemStatus {
   SKIPPED
 }
 
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum RecommendationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  MODIFIED
+  EXPIRED
+}
+
 enum IdempotencyStatus {
   PROCESSING
   COMPLETED
@@ -89,7 +103,13 @@ model Store {
   orderItems        OrderItem[]
   returnOrders      ReturnOrder[]
   returnItems       ReturnItem[]
-  importJobs        ImportJob[]
+  importJobs              ImportJob[]
+  historicalSales         HistoricalSale[]
+  dailySkuMetrics         DailySkuMetric[]
+  stockPolicies           StockPolicy[]
+  smartAlerts             SmartAlert[]
+  pricingRecommendations  PricingRecommendation[]
+  decisionSnapshots       DecisionSnapshot[]
 
   @@map("stores")
 }
@@ -107,11 +127,12 @@ model User {
 
   store        Store?    @relation(fields: [storeId], references: [id], onDelete: SetNull)
 
-  sessions          AuthSession[]
-  stockMovements    StockMovement[]
-  ordersCreated     Order[]
-  returnsCreated    ReturnOrder[]
-  importJobsCreated ImportJob[]
+  sessions               AuthSession[]
+  stockMovements         StockMovement[]
+  ordersCreated          Order[]
+  returnsCreated         ReturnOrder[]
+  importJobsCreated      ImportJob[]
+  pricingDecided         PricingRecommendation[]
 
   @@index([storeId])
   @@map("users")
@@ -207,12 +228,18 @@ model StockItem {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  store         Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  product       Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
-  balances      InventoryBalance[]
-  movements     StockMovement[]
-  orderItems    OrderItem[]
-  returnItems   ReturnItem[]
+  store                  Store                    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product                Product                  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  balances               InventoryBalance[]
+  movements              StockMovement[]
+  orderItems             OrderItem[]
+  returnItems            ReturnItem[]
+  historicalSales        HistoricalSale[]
+  dailySkuMetrics        DailySkuMetric[]
+  stockPolicies          StockPolicy[]
+  smartAlerts            SmartAlert[]
+  pricingRecommendations PricingRecommendation[]
+  decisionSnapshots      DecisionSnapshot[]
 
   @@unique([storeId, sku])
   @@index([storeId])
@@ -429,19 +456,153 @@ model IdempotencyRequest {
 }
 
 model HistoricalSale {
-  id              Int      @id @default(autoincrement())
+  id              Int        @id @default(autoincrement())
   storeId         Int
   stockItemId     Int?
-  externalSku     String   @db.VarChar(100)
+  externalSku     String     @db.VarChar(100)
   quantity        Int
-  unitPrice       Decimal  @db.Decimal(15, 2)
-  totalAmount     Decimal  @db.Decimal(15, 2)
+  unitPrice       Decimal    @db.Decimal(15, 2)
+  totalAmount     Decimal    @db.Decimal(15, 2)
   soldAt          DateTime
-  source          String   @db.VarChar(50)
-  externalOrderId String?  @db.VarChar(100)
-  createdAt       DateTime @default(now())
+  source          String     @db.VarChar(50)
+  externalOrderId String?    @db.VarChar(100)
+  sourceRowHash   String     @db.VarChar(64)
+  createdAt       DateTime   @default(now())
 
+  store           Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockItem       StockItem? @relation(fields: [stockItemId], references: [id], onDelete: SetNull)
+
+  @@unique([storeId, sourceRowHash])
   @@index([storeId, soldAt])
   @@index([storeId, stockItemId, soldAt])
   @@map("historical_sales")
+}
+
+model DailySkuMetric {
+  id           Int       @id @default(autoincrement())
+  storeId      Int
+  stockItemId  Int
+  metricDate   DateTime  @db.Date
+
+  grossSoldQty Int       @default(0)
+  returnedQty  Int       @default(0)
+  netSoldQty   Int       @default(0)
+
+  grossRevenue Decimal   @default(0.00) @db.Decimal(15, 2)
+  refundAmount Decimal   @default(0.00) @db.Decimal(15, 2)
+  netRevenue   Decimal   @default(0.00) @db.Decimal(15, 2)
+
+  orderCount   Int       @default(0)
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockItem    StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, stockItemId, metricDate])
+  @@index([storeId, metricDate])
+  @@index([storeId, stockItemId, metricDate])
+  @@map("daily_sku_metrics")
+}
+
+model StockPolicy {
+  id                 Int       @id @default(autoincrement())
+  storeId            Int
+  stockItemId        Int
+
+  leadTimeDays       Int       @default(7)
+  safetyDays         Int       @default(3)
+  serviceLevel       Decimal   @default(0.95) @db.Decimal(5, 4)
+
+  targetCoverageDays Int       @default(30)
+  deadStockDays      Int       @default(90)
+
+  minimumMarginPct   Decimal   @default(0.10) @db.Decimal(6, 4)
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  store              Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockItem          StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, stockItemId])
+  @@index([storeId])
+  @@map("stock_policies")
+}
+
+model SmartAlert {
+  id          Int           @id @default(autoincrement())
+  storeId     Int
+  stockItemId Int
+  type        AlertType
+  severity    AlertSeverity
+  status      AlertStatus   @default(OPEN)
+
+  score       Decimal?      @db.Decimal(5, 2)
+  title       String        @db.VarChar(255)
+  message     String        @db.Text
+  reasonJson  Json
+  fingerprint String        @db.VarChar(64)
+
+  openedAt    DateTime      @default(now())
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  store       Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockItem   StockItem     @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, fingerprint])
+  @@index([storeId, status, severity])
+  @@index([storeId, stockItemId])
+  @@map("smart_alerts")
+}
+
+model PricingRecommendation {
+  id               Int                  @id @default(autoincrement())
+  storeId          Int
+  stockItemId      Int
+
+  currentPrice     Decimal              @db.Decimal(15, 2)
+  recommendedPrice Decimal              @db.Decimal(15, 2)
+  discountPct      Decimal              @db.Decimal(5, 2)
+
+  score            Decimal?             @db.Decimal(5, 2)
+  reasonJson       Json
+  status           RecommendationStatus @default(PENDING)
+
+  acceptedPrice    Decimal?             @db.Decimal(15, 2)
+  decidedById      Int?
+  decidedAt        DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  store            Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockItem        StockItem            @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  decidedBy        User?                @relation(fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([storeId, status])
+  @@index([storeId, stockItemId])
+  @@map("pricing_recommendations")
+}
+
+model DecisionSnapshot {
+  id          Int       @id @default(autoincrement())
+  storeId     Int
+  stockItemId Int
+
+  calculatedAt DateTime @default(now())
+  inputJson    Json
+  metricsJson  Json
+  risksJson    Json
+  version      String   @default("DECISION_ENGINE_V1") @db.VarChar(50)
+  createdAt    DateTime @default(now())
+
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockItem    StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, stockItemId, calculatedAt])
+  @@map("decision_snapshots")
 }

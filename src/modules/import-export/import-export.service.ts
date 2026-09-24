@@ -459,9 +459,9 @@ export class ImportExportService {
                   'INFLOW',
                   [{ stockItemId, quantity: item.initialQuantity }]
                 );
-              } else if (existingSku && mode === 'ADJUST_STOCK' && item.initialQuantity !== 0) {
-                // Adjust delta stock (positive: atomicAdd, negative: atomicDeduct)
-                if (item.initialQuantity > 0) {
+              } else if (existingSku && mode === 'ADJUST_STOCK') {
+                const adjQty = item.stockAdjustment !== undefined ? item.stockAdjustment : item.initialQuantity;
+                if (adjQty > 0) {
                   await StockLedgerService.atomicAdd(
                     tx,
                     {
@@ -474,9 +474,9 @@ export class ImportExportService {
                       note: `Điều chỉnh tăng tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
                     },
                     'INFLOW',
-                    [{ stockItemId, quantity: item.initialQuantity }]
+                    [{ stockItemId, quantity: adjQty }]
                   );
-                } else {
+                } else if (adjQty < 0) {
                   await StockLedgerService.atomicDeduct(
                     tx,
                     {
@@ -489,54 +489,54 @@ export class ImportExportService {
                       note: `Điều chỉnh giảm tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
                     },
                     'OUTFLOW',
-                    [{ stockItemId, quantity: Math.abs(item.initialQuantity) }]
+                    [{ stockItemId, quantity: Math.abs(adjQty) }]
                   );
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
-                // Phase 4: REPLACE_STOCK as physical counted quantity with AUDIT_ADJUSTMENT
-                const currentBalance = await tx.inventoryBalance.findUnique({
+                // P0-03: REPLACE_STOCK as physical counted quantity with strict deterministic AUDIT_ADJUSTMENT
+                const targetQty = item.countedQuantity !== undefined ? item.countedQuantity : item.initialQuantity;
+                const balance = await tx.inventoryBalance.upsert({
                   where: {
                     warehouseId_stockItemId: {
                       warehouseId: warehouse.id,
                       stockItemId,
                     },
                   },
+                  create: {
+                    storeId,
+                    warehouseId: warehouse.id,
+                    stockItemId,
+                    quantity: targetQty,
+                    reservedQuantity: 0,
+                  },
+                  update: {},
                 });
 
-                const beforeQty = currentBalance?.quantity || 0;
-                const targetQty = item.initialQuantity;
+                const beforeQty = balance.quantity;
                 const delta = targetQty - beforeQty;
 
-                if (delta > 0) {
-                  await StockLedgerService.atomicAdd(
-                    tx,
-                    {
+                if (delta !== 0) {
+                  await tx.inventoryBalance.update({
+                    where: { id: balance.id },
+                    data: { quantity: targetQty },
+                  });
+
+                  await tx.stockMovement.create({
+                    data: {
                       storeId,
                       warehouseId: warehouse.id,
-                      userId,
+                      stockItemId,
+                      type: 'AUDIT_ADJUSTMENT',
+                      delta,
+                      beforeQuantity: beforeQty,
+                      afterQuantity: targetQty,
                       referenceType: 'IMPORT_AUDIT',
                       referenceId: `JOB-${job.id}`,
                       idempotencyKey: deterministicMovementKey,
                       note: `Kiểm kê thay thế tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
+                      createdById: userId,
                     },
-                    'AUDIT_ADJUSTMENT',
-                    [{ stockItemId, quantity: delta }]
-                  );
-                } else if (delta < 0) {
-                  await StockLedgerService.atomicDeduct(
-                    tx,
-                    {
-                      storeId,
-                      warehouseId: warehouse.id,
-                      userId,
-                      referenceType: 'IMPORT_AUDIT',
-                      referenceId: `JOB-${job.id}`,
-                      idempotencyKey: deterministicMovementKey,
-                      note: `Kiểm kê thay thế tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
-                    },
-                    'AUDIT_ADJUSTMENT',
-                    [{ stockItemId, quantity: Math.abs(delta) }]
-                  );
+                  });
                 }
               }
 

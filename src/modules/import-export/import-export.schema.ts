@@ -19,6 +19,8 @@ export const importItemSchema = z.object({
   costPrice: z.coerce.number().min(0, 'Giá vốn phải lớn hơn hoặc bằng 0').default(0),
   sellingPrice: z.coerce.number().min(0, 'Giá bán phải lớn hơn hoặc bằng 0').default(0),
   initialQuantity: z.coerce.number().int().min(0, 'Số lượng tồn đầu kỳ phải lớn hơn hoặc bằng 0').default(0),
+  stockAdjustment: z.coerce.number().int().optional(),
+  countedQuantity: z.coerce.number().int().min(0, 'Số lượng kiểm kê phải >= 0').optional(),
   minStockLevel: z.coerce.number().int().min(0).default(0),
   maxStockLevel: z.coerce.number().int().min(0).default(1000),
 });
