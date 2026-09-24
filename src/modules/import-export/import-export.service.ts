@@ -822,5 +822,161 @@ export class ImportExportService {
 
     return rows.join('\n');
   }
+
+  /**
+   * Export Decision Engine Reports as CSV
+   */
+  async exportDecisionReportCsv(storeId: number): Promise<string> {
+    const stockItems = await this.prisma.stockItem.findMany({
+      where: { storeId, isActive: true },
+      include: {
+        product: true,
+        balances: true,
+        stockPolicies: true,
+        smartAlerts: {
+          where: { status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
+        },
+        pricingRecommendations: {
+          where: { status: 'PENDING' },
+        },
+      },
+      orderBy: { sku: 'asc' },
+    });
+
+    const headers = [
+      'SKU',
+      'Product Name',
+      'Cost Price',
+      'Selling Price',
+      'On Hand',
+      'Reserved',
+      'Available Stock',
+      'Min Stock Level',
+      'Max Stock Level',
+      'Lead Time (Days)',
+      'Active Alerts Count',
+      'Pending Discount (%)',
+      'Recommended Price',
+    ];
+
+    const rows: string[] = [headers.join(',')];
+
+    for (const s of stockItems) {
+      const onHand = s.balances.reduce((acc, b) => acc + b.quantity, 0);
+      const reserved = s.balances.reduce((acc, b) => acc + b.reservedQuantity, 0);
+      const available = Math.max(0, onHand - reserved);
+      const policy = s.stockPolicies[0];
+      const pendingRec = s.pricingRecommendations[0];
+
+      const row = [
+        sanitizeCsvCell(s.sku),
+        sanitizeCsvCell(s.name),
+        sanitizeCsvCell(s.costPrice),
+        sanitizeCsvCell(s.sellingPrice),
+        sanitizeCsvCell(onHand),
+        sanitizeCsvCell(reserved),
+        sanitizeCsvCell(available),
+        sanitizeCsvCell(s.minStockLevel),
+        sanitizeCsvCell(s.maxStockLevel),
+        sanitizeCsvCell(policy?.leadTimeDays ?? 7),
+        sanitizeCsvCell(s.smartAlerts.length),
+        sanitizeCsvCell(pendingRec?.discountPct ? pendingRec.discountPct.toString() : '0'),
+        sanitizeCsvCell(pendingRec?.recommendedPrice ? pendingRec.recommendedPrice.toString() : s.sellingPrice.toString()),
+      ];
+      rows.push(row.join(','));
+    }
+
+    return rows.join('\n');
+  }
+
+  /**
+   * Export Smart Alerts as CSV
+   */
+  async exportAlertsCsv(storeId: number): Promise<string> {
+    const alerts = await this.prisma.smartAlert.findMany({
+      where: { storeId },
+      include: { stockItem: true },
+      orderBy: [{ severity: 'desc' }, { openedAt: 'desc' }],
+    });
+
+    const headers = [
+      'Alert ID',
+      'SKU',
+      'Product Name',
+      'Type',
+      'Severity',
+      'Status',
+      'Score',
+      'Title',
+      'Message',
+      'Opened At',
+      'Resolved At',
+    ];
+
+    const rows: string[] = [headers.join(',')];
+
+    for (const a of alerts) {
+      const row = [
+        sanitizeCsvCell(a.id),
+        sanitizeCsvCell(a.stockItem.sku),
+        sanitizeCsvCell(a.stockItem.name),
+        sanitizeCsvCell(a.type),
+        sanitizeCsvCell(a.severity),
+        sanitizeCsvCell(a.status),
+        sanitizeCsvCell(a.score ?? ''),
+        sanitizeCsvCell(a.title),
+        sanitizeCsvCell(a.message),
+        sanitizeCsvCell(a.openedAt.toISOString()),
+        sanitizeCsvCell(a.resolvedAt ? a.resolvedAt.toISOString() : ''),
+      ];
+      rows.push(row.join(','));
+    }
+
+    return rows.join('\n');
+  }
+
+  /**
+   * Export Pricing Recommendations as CSV
+   */
+  async exportPricingRecommendationsCsv(storeId: number): Promise<string> {
+    const recs = await this.prisma.pricingRecommendation.findMany({
+      where: { storeId },
+      include: { stockItem: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const headers = [
+      'Recommendation ID',
+      'SKU',
+      'Product Name',
+      'Current Price',
+      'Recommended Price',
+      'Discount (%)',
+      'Status',
+      'Accepted Price',
+      'Created At',
+      'Expires At',
+    ];
+
+    const rows: string[] = [headers.join(',')];
+
+    for (const r of recs) {
+      const row = [
+        sanitizeCsvCell(r.id),
+        sanitizeCsvCell(r.stockItem.sku),
+        sanitizeCsvCell(r.stockItem.name),
+        sanitizeCsvCell(r.currentPrice),
+        sanitizeCsvCell(r.recommendedPrice),
+        sanitizeCsvCell(r.discountPct),
+        sanitizeCsvCell(r.status),
+        sanitizeCsvCell(r.acceptedPrice ?? ''),
+        sanitizeCsvCell(r.createdAt.toISOString()),
+        sanitizeCsvCell(r.expiresAt ? r.expiresAt.toISOString() : ''),
+      ];
+      rows.push(row.join(','));
+    }
+
+    return rows.join('\n');
+  }
 }
 

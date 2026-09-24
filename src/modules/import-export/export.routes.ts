@@ -14,3 +14,6 @@ exportRouter.get('/inventory', (req, res, next) => controller.exportInventory(re
 exportRouter.get('/orders', (req, res, next) => controller.exportOrders(req, res, next));
 exportRouter.get('/sales', (req, res, next) => controller.exportSales(req, res, next));
 exportRouter.get('/returns', (req, res, next) => controller.exportReturns(req, res, next));
+exportRouter.get('/decision-report', (req, res, next) => controller.exportDecisionReport(req, res, next));
+exportRouter.get('/alerts', (req, res, next) => controller.exportAlerts(req, res, next));
+exportRouter.get('/recommendations', (req, res, next) => controller.exportPricingRecommendations(req, res, next));

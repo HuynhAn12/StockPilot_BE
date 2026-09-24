@@ -86,4 +86,40 @@ export class ImportExportController {
       next(error);
     }
   }
+
+  async exportDecisionReport(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const csv = await service.exportDecisionReportCsv(storeId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="decision_report.csv"');
+      return res.status(200).send(csv);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async exportAlerts(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const csv = await service.exportAlertsCsv(storeId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="smart_alerts.csv"');
+      return res.status(200).send(csv);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async exportPricingRecommendations(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const csv = await service.exportPricingRecommendationsCsv(storeId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="pricing_recommendations.csv"');
+      return res.status(200).send(csv);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
