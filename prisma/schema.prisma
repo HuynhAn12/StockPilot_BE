@@ -46,6 +46,14 @@ enum AlertSeverity {
   CRITICAL
 }
 
+enum ImportJobStatus {
+  PREVIEWED
+  COMMITTING
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
 model Store {
   id          Int       @id @default(autoincrement())
   name        String    @db.VarChar(255)
@@ -67,6 +75,7 @@ model Store {
   orderItems        OrderItem[]
   returnOrders      ReturnOrder[]
   returnItems       ReturnItem[]
+  importJobs        ImportJob[]
 
   @@map("stores")
 }
@@ -84,10 +93,11 @@ model User {
 
   store        Store?    @relation(fields: [storeId], references: [id], onDelete: SetNull)
 
-  sessions       AuthSession[]
-  stockMovements StockMovement[]
-  ordersCreated  Order[]
-  returnsCreated ReturnOrder[]
+  sessions          AuthSession[]
+  stockMovements    StockMovement[]
+  ordersCreated     Order[]
+  returnsCreated    ReturnOrder[]
+  importJobsCreated ImportJob[]
 
   @@index([storeId])
   @@map("users")
@@ -281,6 +291,8 @@ model OrderItem {
   unitPriceSnapshot  Decimal     @db.Decimal(15, 2)
   costPriceSnapshot  Decimal     @default(0.00) @db.Decimal(15, 2)
   quantity           Int
+  refundableAmount   Decimal     @default(0.00) @db.Decimal(15, 2)
+  refundedAmount     Decimal     @default(0.00) @db.Decimal(15, 2)
   returnedQuantity   Int         @default(0)
   subtotal           Decimal     @db.Decimal(15, 2)
   createdAt          DateTime    @default(now())
@@ -338,4 +350,29 @@ model ReturnItem {
   @@index([storeId, returnOrderId])
   @@index([orderItemId])
   @@map("return_items")
+}
+
+model ImportJob {
+  id          String          @id @default(uuid())
+  storeId     Int
+  createdById Int?
+  type        String          @db.VarChar(50)
+  payloadHash String          @db.VarChar(64)
+  payloadJson Json
+  status      ImportJobStatus @default(PREVIEWED)
+  totalRows   Int             @default(0)
+  validRows   Int             @default(0)
+  invalidRows Int             @default(0)
+  warningRows Int             @default(0)
+  resultJson  Json?
+  expiresAt   DateTime
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  store       Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdBy   User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, payloadHash])
+  @@map("import_jobs")
 }
