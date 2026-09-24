@@ -1,22 +1,44 @@
 import { z } from 'zod';
 
-export const historicalSaleRowSchema = z.object({
-  externalOrderId: z.string().trim().max(100).optional().nullable(),
-  sku: z.string().trim().min(1, 'SKU không được để trống').max(100),
-  quantity: z.coerce.number().int('Số lượng phải là số nguyên').positive('Số lượng bán phải lớn hơn 0'),
-  unitPrice: z.coerce.number().min(0, 'Đơn giá không được âm'),
-  soldAt: z.coerce.date({ errorMap: () => ({ message: 'Ngày bán soldAt không hợp lệ' }) }),
-  source: z.string().trim().min(1).max(50).default('CSV'),
-});
+const optionalCostSchema = z.coerce.number().min(0, 'Gia von khong duoc am').optional().nullable();
+
+export const historicalSaleRowSchema = z
+  .object({
+    externalOrderId: z.string().trim().max(100).optional().nullable(),
+    sku: z.string().trim().min(1, 'SKU khong duoc de trong').max(100),
+    quantity: z.coerce.number().int('So luong phai la so nguyen').positive('So luong ban phai lon hon 0'),
+    unitPrice: z.coerce.number().min(0, 'Don gia khong duoc am'),
+    costPrice: optionalCostSchema,
+    unitCost: optionalCostSchema,
+    soldAt: z.coerce.date({ errorMap: () => ({ message: 'Ngay ban soldAt khong hop le' }) }),
+    source: z.string().trim().min(1).max(50).default('CSV'),
+  })
+  .superRefine((row, ctx) => {
+    if (row.costPrice !== null && row.costPrice !== undefined && row.unitCost !== null && row.unitCost !== undefined) {
+      const costPrice = Number(row.costPrice);
+      const unitCost = Number(row.unitCost);
+      if (costPrice !== unitCost) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['costPrice'],
+          message: 'costPrice and unitCost must match when both are provided',
+        });
+      }
+    }
+  })
+  .transform(({ costPrice, unitCost, ...row }) => ({
+    ...row,
+    costPriceSnapshot: costPrice ?? unitCost ?? null,
+  }));
 
 export type HistoricalSaleRowInput = z.infer<typeof historicalSaleRowSchema>;
 
 export const historicalSalesPreviewSchema = z.object({
-  rows: z.array(historicalSaleRowSchema).min(1, 'Danh sách dữ liệu bán hàng không được rỗng').max(5000, 'Tối đa 5,000 dòng mỗi lần import'),
+  rows: z.array(historicalSaleRowSchema).min(1, 'Danh sach du lieu ban hang khong duoc rong').max(5000, 'Toi da 5,000 dong moi lan import'),
 });
 
 export const historicalSalesCommitSchema = z.object({
-  jobId: z.string().uuid('Mã Job không hợp lệ'),
+  jobId: z.string().uuid('Ma Job khong hop le'),
 });
 
 export const historicalSalesListQuerySchema = z.object({

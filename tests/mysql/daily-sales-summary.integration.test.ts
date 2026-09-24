@@ -292,4 +292,69 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     expect(Number(day4Summary.cogs)).toBe(0);
     expect(Number(day4Summary.grossProfit)).toBe(-100000);
   });
+
+  it('Real MySQL: Vietnam business-day rebuild includes sales from previous UTC calendar date', async () => {
+    process.env.APP_TIMEZONE = 'Asia/Ho_Chi_Minh';
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const businessDate = new Date('2026-09-25T00:00:00.000Z');
+    const firstHourVietnamBusinessDay = new Date('2026-09-24T17:30:00.000Z');
+
+    const product = await prisma.product.create({
+      data: {
+        storeId,
+        name: `Timezone Product ${suffix}`,
+        code: `TZ_PRD_${suffix}`,
+      },
+    });
+
+    const timezoneStockItem = await prisma.stockItem.create({
+      data: {
+        storeId,
+        productId: product.id,
+        sku: `SKU-TZ-${suffix}`,
+        name: `Timezone StockItem ${suffix}`,
+        costPrice: 40000,
+        sellingPrice: 100000,
+      },
+    });
+
+    await prisma.inventoryBalance.create({
+      data: {
+        storeId,
+        warehouseId,
+        stockItemId: timezoneStockItem.id,
+        quantity: 10,
+      },
+    });
+
+    const draftOrder = await orderService.createDraftOrder(storeId, userId, {
+      items: [{ stockItemId: timezoneStockItem.id, quantity: 1 }],
+      discountAmount: 0,
+      taxAmount: 0,
+    });
+    await orderService.confirmOrder(storeId, userId, draftOrder.id);
+    const fulfilledOrder = await orderService.fulfillOrder(storeId, draftOrder.id);
+
+    await prisma.order.update({
+      where: { id: fulfilledOrder.id },
+      data: { fulfilledAt: firstHourVietnamBusinessDay },
+    });
+
+    await summaryService.rebuildDailySalesSummary(storeId, businessDate, businessDate, [timezoneStockItem.id]);
+
+    const summary = await prisma.dailySalesSummary.findUniqueOrThrow({
+      where: {
+        storeId_stockItemId_summaryDate: {
+          storeId,
+          stockItemId: timezoneStockItem.id,
+          summaryDate: new Date('2026-09-25T00:00:00.000Z'),
+        },
+      },
+    });
+
+    expect(summary.grossSoldQty).toBe(1);
+    expect(summary.netSoldQty).toBe(1);
+    expect(Number(summary.cogs)).toBe(40000);
+    expect(summary.historicalCostMissingQty).toBe(0);
+  });
 });

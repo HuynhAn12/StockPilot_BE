@@ -3,6 +3,15 @@ import { z } from 'zod';
 
 dotenv.config();
 
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -13,6 +22,9 @@ const envSchema = z
     JWT_REFRESH_SECRET: z.string().optional(),
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
+    APP_TIMEZONE: z.string().default('Asia/Ho_Chi_Minh').refine(isValidTimeZone, {
+      message: 'APP_TIMEZONE must be a valid IANA timezone name',
+    }),
   })
   .refine(
     (data) => {

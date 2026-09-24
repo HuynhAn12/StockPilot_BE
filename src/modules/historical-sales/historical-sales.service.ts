@@ -64,6 +64,7 @@ export class HistoricalSalesService {
       quantity: number;
       unitPrice: number;
       totalAmount: number;
+      costPriceSnapshot: number | null;
       soldAt: Date;
       source: string;
       sourceRowHash: string;
@@ -107,7 +108,7 @@ export class HistoricalSalesService {
       const hash = rowHashes[i];
       const rowNumber = i + 1;
       const matched = skuMap.get(row.sku.trim().toLowerCase());
-      const totalAmount = Number(row.quantity) * Number(row.unitPrice);
+      const totalAmount = new Prisma.Decimal(row.unitPrice).mul(row.quantity).toNumber();
 
       let status: 'VALID' | 'WARNING' | 'DUPLICATE' | 'INVALID' = 'VALID';
       let message: string | undefined;
@@ -138,6 +139,7 @@ export class HistoricalSalesService {
         quantity: row.quantity,
         unitPrice: row.unitPrice,
         totalAmount,
+        costPriceSnapshot: row.costPriceSnapshot,
         soldAt: new Date(row.soldAt),
         source: row.source || 'CSV',
         sourceRowHash: hash,
@@ -175,6 +177,7 @@ export class HistoricalSalesService {
               quantity: item.quantity,
               unitPrice: item.unitPrice,
               totalAmount: item.totalAmount,
+              costPriceSnapshot: item.costPriceSnapshot,
               soldAt: item.soldAt.toISOString(),
               source: item.source,
             },
@@ -249,6 +252,7 @@ export class HistoricalSalesService {
           quantity: number;
           unitPrice: number;
           totalAmount: number;
+          costPriceSnapshot?: number | null;
           soldAt: string;
           source: string;
         };
@@ -260,6 +264,10 @@ export class HistoricalSalesService {
           quantity: data.quantity,
           unitPrice: new Prisma.Decimal(data.unitPrice),
           totalAmount: new Prisma.Decimal(data.totalAmount),
+          costPriceSnapshot:
+            data.costPriceSnapshot === null || data.costPriceSnapshot === undefined
+              ? null
+              : new Prisma.Decimal(data.costPriceSnapshot),
           soldAt: new Date(data.soldAt),
           source: data.source,
           externalOrderId: data.externalOrderId || null,

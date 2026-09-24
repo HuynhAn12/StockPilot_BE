@@ -1,5 +1,12 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
+import {
+  addBusinessDays,
+  businessDateKeyToDate,
+  businessDateRangeFromDates,
+  canonicalDateToBusinessDateKey,
+  toBusinessDateKey,
+} from '../../common/utils/business-date';
 
 export interface DailySalesSummaryAggregateRow {
   summaryDate: string; // YYYY-MM-DD
@@ -11,6 +18,7 @@ export interface DailySalesSummaryAggregateRow {
   netRevenue: number;
   cogs: number;
   grossProfit: number;
+  historicalCostMissingQty?: number;
   orderCount: number;
 }
 
@@ -27,18 +35,16 @@ export class DailySalesSummaryService {
     toDate: Date,
     stockItemIds?: number[]
   ): Promise<{ processedCount: number; updatedDays: number }> {
-    const start = new Date(fromDate);
-    start.setUTCHours(0, 0, 0, 0);
-
-    const end = new Date(toDate);
-    end.setUTCHours(23, 59, 59, 999);
+    const { fromKey, toKey, startUtc, endUtc } = businessDateRangeFromDates(fromDate, toDate);
+    const summaryStart = businessDateKeyToDate(fromKey);
+    const summaryEnd = businessDateKeyToDate(toKey);
 
     return this.prisma.$transaction(async (tx) => {
       const scopedSummaryWhere = {
         storeId,
         summaryDate: {
-          gte: start,
-          lte: end,
+          gte: summaryStart,
+          lte: summaryEnd,
         },
         ...(stockItemIds && stockItemIds.length > 0 ? { stockItemId: { in: stockItemIds } } : {}),
       };
@@ -55,7 +61,6 @@ export class DailySalesSummaryService {
         },
         select: {
           id: true,
-          costPrice: true,
         },
       });
 
@@ -64,10 +69,6 @@ export class DailySalesSummaryService {
       }
 
       const itemIds = stockItems.map((item) => item.id);
-      const itemCostMap = new Map<number, Prisma.Decimal>();
-      for (const item of stockItems) {
-        itemCostMap.set(item.id, new Prisma.Decimal(item.costPrice));
-      }
 
       // 2. Fetch fulfilled OrderItems within range
       const orderItems = await tx.orderItem.findMany({
@@ -77,8 +78,8 @@ export class DailySalesSummaryService {
         order: {
           status: 'FULFILLED',
           fulfilledAt: {
-            gte: start,
-            lte: end,
+            gte: startUtc,
+            lt: endUtc,
           },
         },
       },
@@ -102,14 +103,15 @@ export class DailySalesSummaryService {
         storeId,
         stockItemId: { in: itemIds },
         soldAt: {
-          gte: start,
-          lte: end,
+          gte: startUtc,
+          lt: endUtc,
         },
       },
       select: {
         stockItemId: true,
         quantity: true,
         totalAmount: true,
+        costPriceSnapshot: true,
         soldAt: true,
         externalOrderId: true,
       },
@@ -123,8 +125,8 @@ export class DailySalesSummaryService {
           returnOrder: {
             status: 'COMPLETED',
             createdAt: {
-              gte: start,
-              lte: end,
+              gte: startUtc,
+              lt: endUtc,
             },
           },
         },
@@ -157,12 +159,13 @@ export class DailySalesSummaryService {
           grossRevenue: Prisma.Decimal;
           refundAmount: Prisma.Decimal;
           cogs: Prisma.Decimal;
+          historicalCostMissingQty: number;
           orderIds: Set<string>;
         }
       >();
 
       const getKey = (stockItemId: number, date: Date) => {
-        const d = date.toISOString().split('T')[0];
+        const d = toBusinessDateKey(date);
         return `${stockItemId}_${d}`;
       };
 
@@ -170,7 +173,7 @@ export class DailySalesSummaryService {
         const key = getKey(stockItemId, date);
         let entry = map.get(key);
         if (!entry) {
-          const dateOnly = new Date(date.toISOString().split('T')[0] + 'T00:00:00.000Z');
+          const dateOnly = businessDateKeyToDate(toBusinessDateKey(date));
           entry = {
             stockItemId,
             summaryDate: dateOnly,
@@ -179,6 +182,7 @@ export class DailySalesSummaryService {
             grossRevenue: new Prisma.Decimal(0),
             refundAmount: new Prisma.Decimal(0),
             cogs: new Prisma.Decimal(0),
+            historicalCostMissingQty: 0,
             orderIds: new Set(),
           };
           map.set(key, entry);
@@ -188,12 +192,11 @@ export class DailySalesSummaryService {
 
       // Accumulate OrderItems
       for (const oi of orderItems) {
-        const date = oi.order.fulfilledAt || start;
+        const date = oi.order.fulfilledAt || startUtc;
         const entry = getOrCreate(oi.stockItemId, date);
         entry.grossSoldQty += oi.quantity;
         entry.grossRevenue = entry.grossRevenue.plus(new Prisma.Decimal(oi.refundableAmount));
-        const snapshotCost = new Prisma.Decimal(oi.costPriceSnapshot);
-        const itemCost = snapshotCost.gt(0) ? snapshotCost : (itemCostMap.get(oi.stockItemId) ?? new Prisma.Decimal(0));
+        const itemCost = new Prisma.Decimal(oi.costPriceSnapshot);
         entry.cogs = entry.cogs.plus(itemCost.mul(oi.quantity));
         entry.orderIds.add(`ORD_${oi.order.id}`);
       }
@@ -204,8 +207,11 @@ export class DailySalesSummaryService {
         const entry = getOrCreate(hs.stockItemId, hs.soldAt);
         entry.grossSoldQty += hs.quantity;
         entry.grossRevenue = entry.grossRevenue.plus(new Prisma.Decimal(hs.totalAmount));
-        const fallbackCost = itemCostMap.get(hs.stockItemId) ?? new Prisma.Decimal(0);
-        entry.cogs = entry.cogs.plus(fallbackCost.mul(hs.quantity));
+        if (hs.costPriceSnapshot == null) {
+          entry.historicalCostMissingQty += hs.quantity;
+        } else {
+          entry.cogs = entry.cogs.plus(new Prisma.Decimal(hs.costPriceSnapshot).mul(hs.quantity));
+        }
         entry.orderIds.add(`HS_${hs.externalOrderId || hs.soldAt.toISOString()}`);
       }
 
@@ -221,10 +227,9 @@ export class DailySalesSummaryService {
         // - Non-restockable return: do not reverse COGS in this MVP
         // - Return-only days: allow daily COGS to become negative (no clamping to zero)
         if (ri.isRestockable) {
-          const snapshotCost = ri.orderItem?.costPriceSnapshot
+          const unitCost = ri.orderItem
             ? new Prisma.Decimal(ri.orderItem.costPriceSnapshot)
-            : (itemCostMap.get(ri.stockItemId) ?? new Prisma.Decimal(0));
-          const unitCost = snapshotCost.gt(0) ? snapshotCost : (itemCostMap.get(ri.stockItemId) ?? new Prisma.Decimal(0));
+            : new Prisma.Decimal(0);
           const returnCogs = unitCost.mul(ri.quantity);
           entry.cogs = entry.cogs.minus(returnCogs);
         }
@@ -256,6 +261,7 @@ export class DailySalesSummaryService {
             netRevenue,
             cogs: entry.cogs,
             grossProfit,
+            historicalCostMissingQty: entry.historicalCostMissingQty,
             orderCount: entry.orderIds.size,
           },
           create: {
@@ -270,6 +276,7 @@ export class DailySalesSummaryService {
             netRevenue,
             cogs: entry.cogs,
             grossProfit,
+            historicalCostMissingQty: entry.historicalCostMissingQty,
             orderCount: entry.orderIds.size,
           },
         });
@@ -293,10 +300,11 @@ export class DailySalesSummaryService {
     days: number
   ): Promise<DailySalesSummaryAggregateRow[]> {
     const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+    const todayKey = toBusinessDateKey(today);
 
-    const fromDate = new Date(today);
-    fromDate.setUTCDate(today.getUTCDate() - (days - 1));
+    const fromKey = addBusinessDays(todayKey, -(days - 1));
+    const fromDate = businessDateKeyToDate(fromKey);
+    const todayDate = businessDateKeyToDate(todayKey);
 
     const summaries = await this.prisma.dailySalesSummary.findMany({
       where: {
@@ -304,7 +312,7 @@ export class DailySalesSummaryService {
         stockItemId,
         summaryDate: {
           gte: fromDate,
-          lte: today,
+          lte: todayDate,
         },
       },
       orderBy: { summaryDate: 'asc' },
@@ -312,7 +320,7 @@ export class DailySalesSummaryService {
 
     const summaryMap = new Map<string, (typeof summaries)[0]>();
     for (const s of summaries) {
-      const dStr = s.summaryDate.toISOString().split('T')[0];
+      const dStr = canonicalDateToBusinessDateKey(s.summaryDate);
       summaryMap.set(dStr, s);
     }
 
@@ -320,7 +328,7 @@ export class DailySalesSummaryService {
     for (let i = 0; i < days; i++) {
       const curDate = new Date(fromDate);
       curDate.setUTCDate(fromDate.getUTCDate() + i);
-      const dStr = curDate.toISOString().split('T')[0];
+      const dStr = canonicalDateToBusinessDateKey(curDate);
 
       const existing = summaryMap.get(dStr);
       if (existing) {
@@ -334,6 +342,7 @@ export class DailySalesSummaryService {
           netRevenue: Number(existing.netRevenue),
           cogs: Number(existing.cogs),
           grossProfit: Number(existing.grossProfit),
+          historicalCostMissingQty: existing.historicalCostMissingQty,
           orderCount: existing.orderCount,
         });
       } else {
@@ -347,6 +356,7 @@ export class DailySalesSummaryService {
           netRevenue: 0,
           cogs: 0,
           grossProfit: 0,
+          historicalCostMissingQty: 0,
           orderCount: 0,
         });
       }

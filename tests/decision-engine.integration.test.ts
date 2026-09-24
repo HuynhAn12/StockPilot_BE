@@ -5,6 +5,7 @@ import { AlertService } from '../src/modules/alerts/alert.service';
 import { PricingService } from '../src/modules/pricing/pricing.service';
 import { AssistantService } from '../src/modules/assistant/assistant.service';
 import { EngineConfigService } from '../src/modules/decision-engine/engine-config.service';
+import { historicalSaleRowSchema } from '../src/modules/historical-sales/historical-sales.schema';
 import { prisma } from '../src/config/db';
 
 jest.mock('../src/config/db', () => ({
@@ -44,6 +45,37 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       expect(hash1).toHaveLength(64);
     });
 
+    it('keeps sourceRowHash identity unchanged when historical cost changes', () => {
+      const noCostHash = HistoricalSalesService.computeRowHash(1, 'CSV', 'ORD-100', 'SKU-A', new Date('2026-06-01T10:00:00.000Z'), 1, 100000);
+      const withCostHash = HistoricalSalesService.computeRowHash(1, 'CSV', 'ORD-100', 'SKU-A', new Date('2026-06-01T10:00:00.000Z'), 1, 100000);
+
+      expect(noCostHash).toBe(withCostHash);
+    });
+
+    it('normalizes historical cost aliases and rejects conflicting values', () => {
+      const accepted = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: 50000,
+        unitCost: 50000,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      const conflict = historicalSaleRowSchema.safeParse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: 50000,
+        unitCost: 60000,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+
+      expect(accepted.costPriceSnapshot).toBe(50000);
+      expect(conflict.success).toBe(false);
+    });
+
     it('previews historical sales identifying matched SKUs, unmatched SKUs, and duplicates', async () => {
       (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([
         { id: 10, sku: 'SKU-A', name: 'Sản phẩm A' },
@@ -52,13 +84,63 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       (prisma.importJob.create as jest.Mock).mockResolvedValue({ id: 'job-hs-001', totalRows: 2 });
 
       const preview = await historicalSalesService.previewHistoricalSales(1, 100, [
-        { sku: 'SKU-A', quantity: 5, unitPrice: 100000, soldAt: new Date('2026-05-01'), source: 'CSV', externalOrderId: 'ORD-1' },
-        { sku: 'SKU-UNMATCHED', quantity: 2, unitPrice: 50000, soldAt: new Date('2026-05-02'), source: 'CSV', externalOrderId: 'ORD-2' },
+        { sku: 'SKU-A', quantity: 5, unitPrice: 100000, costPriceSnapshot: null, soldAt: new Date('2026-05-01'), source: 'CSV', externalOrderId: 'ORD-1' },
+        { sku: 'SKU-UNMATCHED', quantity: 2, unitPrice: 50000, costPriceSnapshot: null, soldAt: new Date('2026-05-02'), source: 'CSV', externalOrderId: 'ORD-2' },
       ]);
 
       expect(preview.jobId).toBe('job-hs-001');
       expect(preview.validRows).toBe(1);
       expect(preview.warningRows).toBe(1);
+    });
+
+    it('carries normalized historical cost from preview resultJson to commit', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([
+        { id: 10, sku: 'SKU-A', name: 'Product A' },
+      ]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.importJob.create as jest.Mock).mockImplementation(async (args) => ({
+        id: 'job-hs-cost',
+        totalRows: args.data.totalRows,
+      }));
+
+      const normalizedRow = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 2,
+        unitPrice: 100000,
+        costPrice: 60000,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+        externalOrderId: 'ORD-COST',
+      });
+
+      await historicalSalesService.previewHistoricalSales(1, 100, [normalizedRow]);
+
+      const createdJob = (prisma.importJob.create as jest.Mock).mock.calls[0][0];
+      expect(createdJob.data.items.create[0].resultJson.costPriceSnapshot).toBe(60000);
+
+      (prisma.importJob.findUnique as jest.Mock).mockResolvedValue({
+        id: 'job-hs-cost',
+        storeId: 1,
+        status: 'PREVIEWED',
+        expiresAt: new Date(Date.now() + 100000),
+        items: [
+          {
+            rowNumber: 1,
+            stockItemId: 10,
+            sku: 'SKU-A',
+            status: 'PENDING',
+            resultJson: createdJob.data.items.create[0].resultJson,
+          },
+        ],
+      });
+      (prisma.historicalSale.createMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.importJobItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      (prisma.importJob.update as jest.Mock).mockResolvedValue({});
+
+      await historicalSalesService.commitHistoricalSales(1, 100, 'job-hs-cost');
+
+      const persisted = (prisma.historicalSale.createMany as jest.Mock).mock.calls[0][0].data[0];
+      expect(Number(persisted.costPriceSnapshot)).toBe(60000);
     });
 
     it('blocks historical sales that overlap the native fulfilled sales period', async () => {
@@ -72,7 +154,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       (prisma.importJob.create as jest.Mock).mockResolvedValue({ id: 'job-hs-overlap', totalRows: 1 });
 
       const preview = await historicalSalesService.previewHistoricalSales(1, 100, [
-        { sku: 'SKU-A', quantity: 1, unitPrice: 100000, soldAt: new Date('2026-05-10T00:00:00.000Z'), source: 'CSV', externalOrderId: 'OVERLAP-1' },
+        { sku: 'SKU-A', quantity: 1, unitPrice: 100000, costPriceSnapshot: null, soldAt: new Date('2026-05-10T00:00:00.000Z'), source: 'CSV', externalOrderId: 'OVERLAP-1' },
       ]);
 
       expect(preview.validRows).toBe(0);
@@ -133,7 +215,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         { stockItemId: 10, quantity: 4, refundableAmount: 360000, costPriceSnapshot: 50000, order: { id: 1, fulfilledAt: new Date('2026-03-01T10:00:00Z') } },
       ]);
       (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([
-        { stockItemId: 10, quantity: 6, totalAmount: 600000, soldAt: new Date('2026-03-01T15:00:00Z'), externalOrderId: 'H1' },
+        { stockItemId: 10, quantity: 6, totalAmount: 600000, costPriceSnapshot: 50000, soldAt: new Date('2026-03-01T15:00:00Z'), externalOrderId: 'H1' },
       ]);
       (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
         { stockItemId: 10, quantity: 2, refundPrice: 100000, returnOrder: { createdAt: new Date('2026-03-01T16:00:00Z') } },
@@ -152,6 +234,66 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
           }),
         })
       );
+    });
+
+    it('Test X: treats native zero costPriceSnapshot as valid COGS instead of falling back to current StockItem cost', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([
+        { stockItemId: 10, quantity: 1, refundableAmount: 100000, costPriceSnapshot: 0, order: { id: 1, fulfilledAt: new Date('2026-03-08T10:00:00Z') } },
+      ]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-08'), new Date('2026-03-08'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      expect(Number(createPayload.cogs)).toBe(0);
+      expect(Number(createPayload.grossProfit)).toBe(100000);
+    });
+
+    it('Test Y: treats zero costPriceSnapshot as valid for restockable return COGS reversal', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
+        {
+          stockItemId: 10,
+          quantity: 1,
+          refundPrice: 100000,
+          isRestockable: true,
+          orderItem: { costPriceSnapshot: 0 },
+          returnOrder: { createdAt: new Date('2026-03-09T10:00:00Z') },
+        },
+      ]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-09'), new Date('2026-03-09'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      expect(Number(createPayload.cogs)).toBe(0);
+      expect(Number(createPayload.grossProfit)).toBe(-100000);
+    });
+
+    it('Test Z: uses historical cost when known and marks missing historical cost explicitly', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 95000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([
+        { stockItemId: 10, quantity: 2, totalAmount: 200000, costPriceSnapshot: 60000, soldAt: new Date('2026-03-10T10:00:00Z'), externalOrderId: 'KNOWN' },
+        { stockItemId: 10, quantity: 2, totalAmount: 200000, costPriceSnapshot: null, soldAt: new Date('2026-03-10T11:00:00Z'), externalOrderId: 'MISSING' },
+      ]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-10'), new Date('2026-03-10'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      expect(Number(createPayload.cogs)).toBe(120000);
+      expect(createPayload.historicalCostMissingQty).toBe(2);
+      expect(Number(createPayload.cogs)).not.toBe(310000);
     });
 
     it('Test S: treats ReturnItem.refundPrice as total line refund, not per-unit refund', async () => {
