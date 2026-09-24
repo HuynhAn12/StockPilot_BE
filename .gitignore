@@ -41,3 +41,4 @@ Thumbs.db
 flow*.md
 STOCKPILOT_*.md
 *.tmp
+prisma/*.sql
