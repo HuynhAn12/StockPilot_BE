@@ -102,32 +102,16 @@ export class InventoryService {
           update: {},
         });
 
-        // Use row-level locking to prevent race conditions during physical count adjustments
-        let beforeQuantity = 0;
-        try {
-          const lockedRows = await (tx as any).$queryRaw<Array<{ id: number; quantity: number }>>`
-            SELECT id, quantity
-            FROM inventory_balances
-            WHERE warehouseId = ${warehouse.id}
-              AND stockItemId = ${stockItem.id}
-            FOR UPDATE
-          `;
-          if (lockedRows && lockedRows.length > 0) {
-            beforeQuantity = Number(lockedRows[0].quantity);
-          }
-        } catch {
-          // Fallback if raw query is unavailable or in mock test environment
-          const balance = await tx.inventoryBalance.findUnique({
-            where: {
-              warehouseId_stockItemId: {
-                warehouseId: warehouse.id,
-                stockItemId: stockItem.id,
-              },
-            },
-          });
-          beforeQuantity = balance ? balance.quantity : 0;
-        }
+        // Use row-level locking strictly to prevent race conditions during physical count adjustments
+        const lockedRows = await (tx as any).$queryRaw<Array<{ id: number; quantity: number }>>`
+          SELECT id, quantity
+          FROM inventory_balances
+          WHERE warehouseId = ${warehouse.id}
+            AND stockItemId = ${stockItem.id}
+          FOR UPDATE
+        `;
 
+        const beforeQuantity = (lockedRows && lockedRows.length > 0) ? Number(lockedRows[0].quantity) : 0;
         const afterQuantity = item.countedQuantity;
         const delta = afterQuantity - beforeQuantity;
 
@@ -164,22 +148,46 @@ export class InventoryService {
     });
   }
 
-  async getBalances(storeId: number, warehouseId?: number) {
-    return prisma.inventoryBalance.findMany({
-      where: {
-        storeId,
-        ...(warehouseId ? { warehouseId } : {}),
-      },
-      include: {
-        warehouse: true,
-        stockItem: {
-          include: {
-            product: true,
+  async getBalances(storeId: number, warehouseId?: number, query?: any) {
+    const page = Number(query?.page) || 1;
+    const limit = Number(query?.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    const where: any = { storeId };
+    if (warehouseId || query?.warehouseId) {
+      where.warehouseId = Number(warehouseId || query.warehouseId);
+    }
+    if (query?.stockItemId) {
+      where.stockItemId = Number(query.stockItemId);
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.inventoryBalance.findMany({
+        where,
+        include: {
+          warehouse: true,
+          stockItem: {
+            include: {
+              product: true,
+            },
           },
         },
+        orderBy: { stockItemId: 'asc' },
+        skip,
+        take: limit,
+      }),
+      prisma.inventoryBalance.count({ where }),
+    ]);
+
+    return {
+      items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
       },
-      orderBy: { stockItemId: 'asc' },
-    });
+    };
   }
 
   async getMovements(storeId: number, stockItemId?: number, query?: any) {
@@ -187,10 +195,22 @@ export class InventoryService {
     const limit = Number(query?.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const where = {
-      storeId,
-      ...(stockItemId ? { stockItemId } : {}),
-    };
+    const where: any = { storeId };
+
+    const targetStockItemId = stockItemId || (query?.stockItemId ? Number(query.stockItemId) : undefined);
+    if (targetStockItemId) {
+      where.stockItemId = targetStockItemId;
+    }
+
+    if (query?.warehouseId) {
+      where.warehouseId = Number(query.warehouseId);
+    }
+
+    if (query?.type) {
+      where.type = query.type;
+    }
+
+    const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
 
     const [items, total] = await Promise.all([
       prisma.stockMovement.findMany({
@@ -202,7 +222,7 @@ export class InventoryService {
             select: { id: true, fullName: true, email: true },
           },
         },
-        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        orderBy: { createdAt: sortOrder },
         skip,
         take: limit,
       }),

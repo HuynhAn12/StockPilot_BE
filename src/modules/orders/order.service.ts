@@ -246,10 +246,25 @@ export class OrderService {
     const limit = Number(query?.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const where = {
+    const where: any = {
       storeId,
       ...(status ? { status: status as any } : {}),
     };
+
+    if (query?.from || query?.to) {
+      where.createdAt = {};
+      if (query.from) {
+        where.createdAt.gte = new Date(query.from);
+      }
+      if (query.to) {
+        where.createdAt.lte = new Date(query.to);
+      }
+    }
+
+    const sortField = ['createdAt', 'totalAmount', 'orderNumber'].includes(query?.sort)
+      ? query.sort
+      : 'createdAt';
+    const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
 
     const [items, total] = await Promise.all([
       prisma.order.findMany({
@@ -258,7 +273,7 @@ export class OrderService {
           items: true,
           returns: true,
         },
-        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        orderBy: { [sortField]: sortOrder },
         skip,
         take: limit,
       }),

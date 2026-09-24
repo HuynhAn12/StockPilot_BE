@@ -103,7 +103,16 @@ export class ReturnService {
           );
         }
 
-        const itemRefundPrice = new Prisma.Decimal(orderItem.unitPriceSnapshot).mul(reqItem.quantity);
+        // Calculate net refund proportional to order discount/tax to prevent over-refunding
+        const orderSubtotal = new Prisma.Decimal(order.subtotalAmount ?? order.totalAmount ?? 0);
+        const orderTotal = new Prisma.Decimal(order.totalAmount ?? order.subtotalAmount ?? 0);
+        const netRatio = orderSubtotal.gt(0) ? orderTotal.div(orderSubtotal) : new Prisma.Decimal(1);
+
+        const itemRefundPrice = new Prisma.Decimal(orderItem.unitPriceSnapshot || 0)
+          .mul(reqItem.quantity)
+          .mul(netRatio)
+          .toDecimalPlaces(2);
+
         totalRefundAmount = totalRefundAmount.plus(itemRefundPrice);
 
         returnItemsData.push({

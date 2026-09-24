@@ -45,9 +45,10 @@ export class InventoryController {
     try {
       const storeId = req.user!.storeId!;
       const warehouseId = req.query.warehouseId ? Number(req.query.warehouseId) : undefined;
-      const balances = await inventoryService.getBalances(storeId, warehouseId);
-      const masked = maskSensitiveFields(balances, req.user?.role);
-      return res.status(200).json({ success: true, data: masked });
+      const query = (req as any).validatedQuery || req.query;
+      const result = await inventoryService.getBalances(storeId, warehouseId, query);
+      const maskedItems = maskSensitiveFields(result.items, req.user?.role);
+      return res.status(200).json({ success: true, items: maskedItems, pagination: result.pagination });
     } catch (error) {
       next(error);
     }

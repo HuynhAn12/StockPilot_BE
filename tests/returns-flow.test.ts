@@ -71,6 +71,8 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
       storeId: 1,
       orderNumber: 'ORD-50',
       status: 'FULFILLED',
+      subtotalAmount: 200000,
+      totalAmount: 200000,
       items: [{ id: 1, stockItemId: 10, skuSnapshot: 'SKU-01', quantity: 2, unitPriceSnapshot: 100000 }],
       returns: [],
     });

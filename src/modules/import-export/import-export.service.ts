@@ -5,18 +5,37 @@ import { toDecimal } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { NotFoundError } from '../../common/errors/app-error';
 
-export function sanitizeCsvCell(value: any): string {
-  if (value === null || value === undefined) return '';
-  const str = String(value);
-  // Guard against CSV / Excel formula injection (CWE-1236)
-  if (/^[=+\-@]/.test(str)) {
-    return `'${str}`;
+export interface ImportIssue {
+  row: number;
+  sku: string;
+  field: string;
+  severity: 'ERROR' | 'WARNING';
+  message: string;
+}
+
+export function sanitizeCsvCell(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
   }
-  // Escape quotes if needed
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-    return `"${str.replace(/"/g, '""')}"`;
+
+  let safe = String(value);
+
+  // Neutralize formula injection (CWE-1236) first
+  if (/^[\t\r ]*[=+\-@]/.test(safe)) {
+    safe = `'${safe}`;
   }
-  return str;
+
+  // Then CSV-escape the final value if it contains special delimiters
+  if (
+    safe.includes(',') ||
+    safe.includes('"') ||
+    safe.includes('\n') ||
+    safe.includes('\r')
+  ) {
+    safe = `"${safe.replace(/"/g, '""')}"`;
+  }
+
+  return safe;
 }
 
 export class ImportExportService {
@@ -25,10 +44,12 @@ export class ImportExportService {
    */
   async previewImport(storeId: number, items: z.infer<typeof importItemSchema>[]) {
     const totalRows = items.length;
-    const errors: Array<{ row: number; sku: string; field: string; message: string }> = [];
+    const issues: ImportIssue[] = [];
     const validItems: typeof items = [];
 
     const seenSkusInPayload = new Set<string>();
+    const invalidRowIndices = new Set<number>();
+    const warningRowIndices = new Set<number>();
 
     for (let index = 0; index < items.length; index++) {
       const item = items[index];
@@ -38,25 +59,29 @@ export class ImportExportService {
       // 1. Check duplicate SKU within payload
       const normalizedSku = item.sku.trim().toUpperCase();
       if (seenSkusInPayload.has(normalizedSku)) {
-        errors.push({
+        issues.push({
           row: rowNumber,
           sku: item.sku,
           field: 'sku',
+          severity: 'ERROR',
           message: `Mã SKU ${item.sku} bị trùng lặp trong danh sách tải lên`,
         });
         hasError = true;
+        invalidRowIndices.add(rowNumber);
       } else {
         seenSkusInPayload.add(normalizedSku);
       }
 
-      // 2. Validate price relationship
+      // 2. Validate price relationship (Warning)
       if (item.sellingPrice < item.costPrice) {
-        errors.push({
+        issues.push({
           row: rowNumber,
           sku: item.sku,
           field: 'sellingPrice',
+          severity: 'WARNING',
           message: `Cảnh báo: Giá bán (${item.sellingPrice}) nhỏ hơn giá vốn (${item.costPrice})`,
         });
+        warningRowIndices.add(rowNumber);
       }
 
       if (!hasError) {
@@ -82,9 +107,10 @@ export class ImportExportService {
 
     return {
       totalRows,
-      validRows: validItems.length,
-      invalidRows: errors.length,
-      errors,
+      validRows: totalRows - invalidRowIndices.size,
+      invalidRows: invalidRowIndices.size,
+      warningRows: warningRowIndices.size,
+      issues,
       previewItems,
     };
   }

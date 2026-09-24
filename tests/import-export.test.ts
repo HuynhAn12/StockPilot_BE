@@ -82,7 +82,7 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
       expect(result.totalRows).toBe(3);
       expect(result.invalidRows).toBe(1);
       expect(result.validRows).toBe(2);
-      expect(result.errors[0].message).toContain('bị trùng lặp');
+      expect(result.issues[0].message).toContain('bị trùng lặp');
       expect(result.previewItems[2].isExistingInDb).toBe(true);
     });
   });
