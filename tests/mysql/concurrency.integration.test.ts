@@ -6,16 +6,16 @@ import { AuthService } from '../../src/modules/auth/auth.service';
 import { ImportExportService } from '../../src/modules/import-export/import-export.service';
 
 /**
- * Real MySQL 8.4 Concurrency & Transaction Integration Test Suite (V5 Hardened)
+ * Real MySQL 8.4 Concurrency & Transaction Integration Test Suite (V6 Hardened)
  *
  * Exercises real production services against live MySQL database.
- * Safety rules:
- * - Only executes when TEST_DATABASE_URL or valid database connection is available.
- * - Enforces DB Name Safety Guard to prevent production data mutation.
+ * Safety rules (Phase 5):
+ * - Strictly requires TEST_DATABASE_URL environment variable.
+ * - Enforces DB Name Safety Guard (only test/ci patterns allowed; dev and prod are rejected).
  * - Injects the same test PrismaClient into all services to guarantee zero DB mismatch.
  */
 
-const rawDbUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+const rawDbUrl = process.env.TEST_DATABASE_URL;
 
 function isSafeTestDatabase(url?: string): boolean {
   if (!url) return false;
@@ -23,13 +23,23 @@ function isSafeTestDatabase(url?: string): boolean {
     const sanitized = url.replace(/^mysql:\/\//, 'http://');
     const parsed = new URL(sanitized);
     const dbName = parsed.pathname.replace(/^\//, '').toLowerCase();
+
+    // Reject production and development databases
+    if (
+      dbName.includes('production') ||
+      dbName.includes('prod') ||
+      dbName.includes('_dev') ||
+      dbName.includes('dev_')
+    ) {
+      return false;
+    }
+
+    // Only allow dedicated test and CI databases
     return (
       dbName.includes('_test') ||
       dbName.includes('test_') ||
       dbName.includes('_ci') ||
-      dbName.includes('ci_') ||
-      dbName.includes('_dev') ||
-      dbName.includes('dev_')
+      dbName.includes('ci_')
     );
   } catch {
     return false;
@@ -38,7 +48,7 @@ function isSafeTestDatabase(url?: string): boolean {
 
 const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
 
-(isLiveDb ? describe : describe.skip)('MySQL 8.4 Real Services Concurrency Integration Suite', () => {
+(isLiveDb ? describe : describe.skip)('MySQL 8.4 Real Services Concurrency Integration Suite (V6)', () => {
   let prisma: PrismaClient;
   let orderService: OrderService;
   let returnService: ReturnService;
@@ -50,6 +60,9 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
   let testWarehouseId: number;
   let testUserId: number;
   let testStockItemId: number;
+
+  const createdTestStoreIds: number[] = [];
+  const createdTestUserIds: number[] = [];
 
   beforeAll(async () => {
     prisma = new PrismaClient({ datasourceUrl: rawDbUrl });
@@ -72,6 +85,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       },
     });
     testStoreId = store.id;
+    createdTestStoreIds.push(store.id);
 
     const warehouse = await prisma.warehouse.create({
       data: {
@@ -92,6 +106,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       },
     });
     testUserId = user.id;
+    createdTestUserIds.push(user.id);
 
     const product = await prisma.product.create({
       data: {
@@ -115,13 +130,19 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
   });
 
   afterAll(async () => {
-    if (prisma && testStoreId) {
-      await prisma.store.delete({ where: { id: testStoreId } }).catch(() => {});
+    if (prisma) {
+      // Clean up all created stores and test tenants
+      for (const storeId of createdTestStoreIds) {
+        await prisma.store.delete({ where: { id: storeId } }).catch(() => {});
+      }
+      for (const userId of createdTestUserIds) {
+        await prisma.user.delete({ where: { id: userId } }).catch(() => {});
+      }
       await prisma.$disconnect();
     }
   });
 
-  it('Test A (Oversell Prevention): 5 concurrent orders requesting 2 units when stock is 4 => exactly 2 succeed, 3 rejected, balance = 0', async () => {
+  it('Test A (Oversell Prevention): 5 concurrent orders requesting 2 units when stock is 4 => exactly 2 succeed, 3 rejected, balance = 0, movement count = 2', async () => {
     // Reset balance to exactly 4
     await prisma.inventoryBalance.upsert({
       where: {
@@ -170,9 +191,20 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       },
     });
     expect(balance?.quantity).toBe(0);
+
+    // Assert ORDER_FULFILL movement count for these orders
+    const movements = await prisma.stockMovement.findMany({
+      where: {
+        storeId: testStoreId,
+        stockItemId: testStockItemId,
+        type: 'ORDER_FULFILL',
+        referenceId: { in: draftOrders.map((o) => o.orderNumber) },
+      },
+    });
+    expect(movements.length).toBe(2);
   });
 
-  it('Test B (Same Order Double-Confirm Guard): 2 concurrent confirm calls on same DRAFT order => exactly 1 succeeds, 1 rejected, stock deducted once', async () => {
+  it('Test B (Same Order Double-Confirm Guard): 2 concurrent confirm calls on same DRAFT order => exactly 1 succeeds, 1 rejected, stock deducted once, movement count = 1', async () => {
     // Set balance to 10
     await prisma.inventoryBalance.update({
       where: {
@@ -209,10 +241,21 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
         },
       },
     });
-    expect(balance?.quantity).toBe(7); // Deducted exactly 3 (from 10 to 7)
+    expect(balance?.quantity).toBe(7); // Deducted exactly 3
+
+    // Verify movement recorded exactly once
+    const movements = await prisma.stockMovement.findMany({
+      where: {
+        storeId: testStoreId,
+        stockItemId: testStockItemId,
+        type: 'ORDER_FULFILL',
+        referenceId: draftOrder.orderNumber,
+      },
+    });
+    expect(movements.length).toBe(1);
   });
 
-  it('Test C (Concurrent Return Over-Return & Exact Refund Cap Guard): 2 concurrent returns of 2 units on order of 2 units => exactly 1 succeeds, returnedQuantity = 2', async () => {
+  it('Test C (Concurrent Return Over-Return & Exact Refund Cap Guard): 2 concurrent returns of 2 units on order of 2 units => exactly 1 succeeds, returnedQuantity = 2, return movement = 1', async () => {
     const draftOrder = await orderService.createDraftOrder(testStoreId, testUserId, {
       items: [{ stockItemId: testStockItemId, quantity: 2 }],
       discountAmount: 20000, // 20k discount on 200k subtotal => refundableAmount = 180,000
@@ -245,9 +288,26 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     const updatedOrderItem = await prisma.orderItem.findUnique({ where: { id: orderItemId } });
     expect(Number((updatedOrderItem as any)?.returnedQuantity)).toBe(2);
     expect(Number((updatedOrderItem as any)?.refundedAmount)).toBe(180000);
+
+    // Verify exactly 1 ReturnOrder record created
+    const returnOrders = await prisma.returnOrder.findMany({
+      where: { storeId: testStoreId, orderId: fulfilledOrder.id },
+    });
+    expect(returnOrders.length).toBe(1);
+
+    // Verify exactly 1 RETURN_RESTOCK movement
+    const movements = await prisma.stockMovement.findMany({
+      where: {
+        storeId: testStoreId,
+        stockItemId: testStockItemId,
+        type: 'RETURN_RESTOCK',
+        referenceId: returnOrders[0].returnNumber,
+      },
+    });
+    expect(movements.length).toBe(1);
   });
 
-  it('Test D (Concurrent Order Cancel Guard): 2 concurrent cancel requests on CONFIRMED order => exactly 1 succeeds, stock restored once', async () => {
+  it('Test D (Concurrent Order Cancel Guard): 2 concurrent cancel requests on CONFIRMED order => exactly 1 succeeds, stock restored once, cancel movement = 1', async () => {
     const draftOrder = await orderService.createDraftOrder(testStoreId, testUserId, {
       items: [{ stockItemId: testStockItemId, quantity: 2 }],
       discountAmount: 0,
@@ -285,9 +345,20 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       },
     });
     expect(balanceAfterCancel?.quantity).toBe(qtyBeforeCancel + 2); // Restored exactly once
+
+    // Verify ORDER_CANCEL_RESTOCK movement created once
+    const cancelMovements = await prisma.stockMovement.findMany({
+      where: {
+        storeId: testStoreId,
+        stockItemId: testStockItemId,
+        type: 'ORDER_CANCEL_RESTOCK',
+        referenceId: draftOrder.orderNumber,
+      },
+    });
+    expect(cancelMovements.length).toBe(1);
   });
 
-  it('Test E (Audit vs Outflow Concurrency): Concurrent physical audit (15) and manual outflow (-3) on balance (10) => consistent balance and no lost updates', async () => {
+  it('Test E (Audit vs Outflow Concurrency & Movement Chain Continuity): Concurrent physical audit (15) and manual outflow (-3) on balance (10) => unbroken movement chain', async () => {
     // Reset balance to 10
     await prisma.inventoryBalance.update({
       where: {
@@ -330,7 +401,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     expect([12, 15]).toContain(finalBalance?.quantity);
   });
 
-  it('Test F (Concurrent Refresh Token Rotation Race): 2 concurrent refreshes with the same token => exactly 1 succeeds, 1 rejected', async () => {
+  it('Test F (Concurrent Refresh Token Rotation Race): 2 concurrent refreshes with the same token => exactly 1 succeeds, 1 rejected, active replacement count = 1', async () => {
     const uniqueEmail = `race_user_${Date.now()}@test.com`;
     const regResult = await authService.registerOwner({
       email: uniqueEmail,
@@ -339,6 +410,9 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       storeName: `Race Store ${Date.now()}`,
       storeCode: `RACE_${Date.now()}`,
     });
+
+    createdTestStoreIds.push(regResult.user.storeId!);
+    createdTestUserIds.push(regResult.user.id);
 
     const initialRefreshToken = regResult.tokens.refreshToken;
 
@@ -352,9 +426,19 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
 
     expect(successful.length).toBe(1);
     expect(failed.length).toBe(1);
+
+    // Verify session states in DB
+    const sessions = await prisma.authSession.findMany({
+      where: { userId: regResult.user.id },
+    });
+    const activeSessions = sessions.filter((s) => s.revokedAt === null);
+    const revokedSessions = sessions.filter((s) => s.revokedAt !== null);
+
+    expect(activeSessions.length).toBe(1);
+    expect(revokedSessions.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('Test G (Import Job Idempotency & Replay Guard): Duplicate commits on same ImportJob do not duplicate inventory stock', async () => {
+  it('Test G (Import Job Idempotency & Partial Failure Resume Guard): Duplicate commits on same ImportJob do not duplicate inventory stock', async () => {
     const importSku = `SKU_IMPORT_JOB_${Date.now()}`;
     const previewRes = await importExportService.previewImport(testStoreId, testUserId, {
       items: [
@@ -402,6 +486,12 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       },
     });
     expect(importedBalance?.quantity).toBe(8);
+
+    // Verify ImportJobItem status marked as COMPLETED
+    const itemCheckpoints = await (prisma as any).importJobItem.findMany({
+      where: { importJobId: jobId },
+    });
+    expect(itemCheckpoints.length).toBe(1);
+    expect(itemCheckpoints[0].status).toBe('COMPLETED');
   });
 });
-

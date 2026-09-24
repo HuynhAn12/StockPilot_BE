@@ -1,4 +1,5 @@
-import { ImportExportService, sanitizeCsvCell } from '../src/modules/import-export/import-export.service';
+import crypto from 'crypto';
+import { ImportExportService, sanitizeCsvCell, canonicalJsonStringify } from '../src/modules/import-export/import-export.service';
 import { prisma } from '../src/config/db';
 
 jest.mock('../src/config/db', () => ({
@@ -8,6 +9,7 @@ jest.mock('../src/config/db', () => ({
     product: { upsert: jest.fn(), findMany: jest.fn() },
     stockItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findFirst: jest.fn() },
     importJob: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
+    importJobItem: { createMany: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     inventoryBalance: { upsert: jest.fn(), findMany: jest.fn() },
     stockMovement: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
@@ -41,6 +43,7 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
     it('Detects duplicate SKUs within the upload batch and creates PREVIEWED ImportJob', async () => {
       (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ sku: 'SKU-EXISTING' }]);
       (prisma as any).importJob.create.mockResolvedValue({ id: 'job_test_123', status: 'PREVIEWED' });
+      (prisma as any).importJobItem.createMany.mockResolvedValue({ count: 3 });
 
       const result = await service.previewImport(1, 100, {
         items: [
@@ -95,29 +98,58 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
 
   describe('Step 2: Batch Commit Execution via Job ID', () => {
     it('Processes import items in transactions and marks ImportJob as COMPLETED', async () => {
+      const testItems = [
+        {
+          categoryName: 'Điện tử',
+          categoryCode: 'DT',
+          productName: 'Tai nghe Bluetooth',
+          productCode: 'TN-BT',
+          sku: 'SKU-TN01',
+          costPrice: 150000,
+          sellingPrice: 300000,
+          initialQuantity: 50,
+          minStockLevel: 10,
+          maxStockLevel: 200,
+        },
+      ];
+
+      const payloadJson = {
+        items: testItems.map((i) => ({
+          ...i,
+          sku: i.sku.trim(),
+          productCode: i.productCode.trim(),
+          categoryCode: i.categoryCode.trim(),
+        })),
+        mode: 'CREATE_ONLY',
+        warehouseId: null,
+      };
+
+      const payloadHash = crypto
+        .createHash('sha256')
+        .update(canonicalJsonStringify(payloadJson))
+        .digest('hex');
+
       (prisma as any).importJob.findFirst.mockResolvedValue({
         id: 'job_test_123',
         storeId: 1,
         status: 'PREVIEWED',
+        invalidRows: 0,
+        payloadHash,
         expiresAt: new Date(Date.now() + 60000),
-        payloadJson: {
-          items: [
-            {
-              categoryName: 'Điện tử',
-              categoryCode: 'DT',
-              productName: 'Tai nghe Bluetooth',
-              productCode: 'TN-BT',
-              sku: 'SKU-TN01',
-              costPrice: 150000,
-              sellingPrice: 300000,
-              initialQuantity: 50,
-              minStockLevel: 10,
-              maxStockLevel: 200,
-            },
-          ],
-          mode: 'CREATE_ONLY',
-        },
+        payloadJson,
       });
+
+      (prisma as any).importJobItem.findMany.mockResolvedValue([
+        {
+          id: 1,
+          importJobId: 'job_test_123',
+          rowNumber: 1,
+          sku: 'SKU-TN01',
+          status: 'PENDING',
+          resultJson: testItems[0],
+        },
+      ]);
+      (prisma as any).importJobItem.update.mockResolvedValue({});
 
       (prisma as any).importJob.updateMany.mockResolvedValue({ count: 1 });
       (prisma as any).importJob.update.mockResolvedValue({ id: 'job_test_123', status: 'COMPLETED' });

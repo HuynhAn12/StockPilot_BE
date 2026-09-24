@@ -54,6 +54,20 @@ enum ImportJobStatus {
   EXPIRED
 }
 
+enum ImportJobItemStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Store {
   id          Int       @id @default(autoincrement())
   name        String    @db.VarChar(255)
@@ -371,8 +385,63 @@ model ImportJob {
 
   store       Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
   createdBy   User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items       ImportJobItem[]
 
   @@index([storeId, createdAt])
   @@index([storeId, payloadHash])
   @@map("import_jobs")
+}
+
+model ImportJobItem {
+  id          Int                 @id @default(autoincrement())
+  importJobId String
+  rowNumber   Int
+  stockItemId Int?
+  sku         String              @db.VarChar(100)
+  status      ImportJobItemStatus @default(PENDING)
+  resultJson  Json?
+  errorJson   Json?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  importJob   ImportJob           @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  @@unique([importJobId, rowNumber])
+  @@index([importJobId, status])
+  @@map("import_job_items")
+}
+
+model IdempotencyRequest {
+  id           String            @id @default(uuid())
+  storeId      Int
+  operation    String            @db.VarChar(100)
+  key          String            @db.VarChar(150)
+  requestHash  String            @db.VarChar(64)
+  status       IdempotencyStatus
+  statusCode   Int?
+  responseJson Json?
+  expiresAt    DateTime
+  createdAt    DateTime          @default(now())
+
+  @@unique([storeId, operation, key])
+  @@index([storeId, expiresAt])
+  @@map("idempotency_requests")
+}
+
+model HistoricalSale {
+  id              Int      @id @default(autoincrement())
+  storeId         Int
+  stockItemId     Int?
+  externalSku     String   @db.VarChar(100)
+  quantity        Int
+  unitPrice       Decimal  @db.Decimal(15, 2)
+  totalAmount     Decimal  @db.Decimal(15, 2)
+  soldAt          DateTime
+  source          String   @db.VarChar(50)
+  externalOrderId String?  @db.VarChar(100)
+  createdAt       DateTime @default(now())
+
+  @@index([storeId, soldAt])
+  @@index([storeId, stockItemId, soldAt])
+  @@map("historical_sales")
 }

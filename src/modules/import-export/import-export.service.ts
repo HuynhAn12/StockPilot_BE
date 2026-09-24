@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, ImportJobItemStatus } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { z } from 'zod';
 import {
@@ -18,6 +18,17 @@ export interface ImportIssue {
   field: string;
   severity: 'ERROR' | 'WARNING';
   message: string;
+}
+
+export function canonicalJsonStringify(obj: any): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(canonicalJsonStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJsonStringify(obj[k])).join(',') + '}';
 }
 
 export function sanitizeCsvCell(value: unknown): string {
@@ -142,33 +153,32 @@ export class ImportExportService {
     const invalidRowsCount = invalidRowIndices.size;
     const warningRowsCount = warningRowIndices.size;
 
-    // 4. Compute SHA-256 payload hash and create persistent ImportJob
-    const canonicalPayload = JSON.stringify({
-      storeId,
-      mode,
-      warehouseId: input.warehouseId,
+    // 4. Compute canonical SHA-256 payload hash
+    const payloadJsonToSave = {
       items: items.map((i) => ({
         ...i,
         sku: i.sku.trim(),
         productCode: i.productCode.trim(),
         categoryCode: i.categoryCode.trim(),
       })),
-    });
+      mode: mode || 'CREATE_ONLY',
+      warehouseId: input.warehouseId ?? null,
+    };
 
-    const payloadHash = crypto.createHash('sha256').update(canonicalPayload).digest('hex');
+    const payloadHash = crypto
+      .createHash('sha256')
+      .update(canonicalJsonStringify(payloadJsonToSave))
+      .digest('hex');
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours TTL
 
+    // 5. Create persistent ImportJob & ImportJobItem rows
     const job = await this.prisma.importJob.create({
       data: {
         storeId,
         createdById: userId,
         type: 'PRODUCT_BULK_IMPORT',
         payloadHash,
-        payloadJson: {
-          items,
-          mode,
-          warehouseId: input.warehouseId,
-        },
+        payloadJson: payloadJsonToSave as any,
         status: 'PREVIEWED',
         totalRows,
         validRows: validRowsCount,
@@ -177,6 +187,21 @@ export class ImportExportService {
         expiresAt,
       },
     });
+
+    // Create item checkpoints for resilient chunked processing & idempotency
+    const jobItemsData = items.map((item, idx) => ({
+      importJobId: job.id,
+      rowNumber: idx + 1,
+      sku: item.sku.trim(),
+      status: 'PENDING' as ImportJobItemStatus,
+      resultJson: item as any,
+    }));
+
+    if (jobItemsData.length > 0) {
+      await (this.prisma as any).importJobItem.createMany({
+        data: jobItemsData,
+      });
+    }
 
     return {
       jobId: job.id,
@@ -193,7 +218,7 @@ export class ImportExportService {
   }
 
   /**
-   * Step 2: Idempotent Batch commit bound by ImportJob
+   * Step 2: Idempotent Batch commit bound strictly by ImportJob (Phase 2 & 3 & 4)
    */
   async commitImport(storeId: number, userId: number, input: z.infer<typeof importCommitSchema>) {
     const job = await this.prisma.importJob.findFirst({
@@ -202,6 +227,11 @@ export class ImportExportService {
 
     if (!job) {
       throw new NotFoundError('Mã phiên import (jobId) không tồn tại hoặc không thuộc cửa hàng này');
+    }
+
+    // Phase 3.4: Guard against committing invalid import jobs
+    if (job.invalidRows > 0) {
+      throw new ValidationError(`Import job chứa ${job.invalidRows} dòng lỗi và không thể commit`);
     }
 
     // Idempotent Replay Protection: If already completed, return stored result without re-mutating stock
@@ -219,6 +249,34 @@ export class ImportExportService {
         data: { status: 'EXPIRED' },
       });
       throw new ValidationError('Phiên xem trước (preview) đã hết hạn. Vui lòng tạo preview mới');
+    }
+
+    // Phase 3.3: Verify payload integrity against SHA-256 hash using canonical stringify
+    const calculatedHash = crypto
+      .createHash('sha256')
+      .update(canonicalJsonStringify(job.payloadJson))
+      .digest('hex');
+
+    if (calculatedHash !== job.payloadHash) {
+      throw new ConflictError('IMPORT_PAYLOAD_TAMPERED: Dữ liệu payload của phiên import đã bị thay đổi bất hợp lệ');
+    }
+
+    const jobData = job.payloadJson as {
+      items: z.infer<typeof importItemSchema>[];
+      mode?: ImportMode;
+      warehouseId?: number | null;
+    };
+
+    // Phase 3.2: Lock execution parameters from preview payload only
+    const mode: ImportMode = jobData.mode || 'CREATE_ONLY';
+    const targetWarehouseId = jobData.warehouseId;
+
+    const warehouse = targetWarehouseId
+      ? await this.prisma.warehouse.findFirst({ where: { id: targetWarehouseId, storeId, isActive: true } })
+      : await this.prisma.warehouse.findFirst({ where: { storeId, isDefault: true, isActive: true } });
+
+    if (!warehouse) {
+      throw new NotFoundError('Không tìm thấy kho hàng hợp lệ để thực hiện ghi nhận tồn kho');
     }
 
     // Atomic Status Transition: PREVIEWED / FAILED -> COMMITTING
@@ -242,155 +300,267 @@ export class ImportExportService {
     }
 
     try {
-      const jobData = job.payloadJson as {
-        items: z.infer<typeof importItemSchema>[];
-        mode?: ImportMode;
-        warehouseId?: number;
-      };
+      // Phase 2: Load pending or failed rows for checkpoint resumption
+      const pendingItems: any[] = await (this.prisma as any).importJobItem.findMany({
+        where: {
+          importJobId: job.id,
+          status: { in: ['PENDING', 'FAILED'] },
+        },
+        orderBy: { rowNumber: 'asc' },
+      });
 
-      const items = jobData.items;
-      const mode = input.mode || jobData.mode || 'CREATE_ONLY';
-      const targetWarehouseId = input.warehouseId || jobData.warehouseId;
-
-      const warehouse = targetWarehouseId
-        ? await this.prisma.warehouse.findFirst({ where: { id: targetWarehouseId, storeId, isActive: true } })
-        : await this.prisma.warehouse.findFirst({ where: { storeId, isDefault: true, isActive: true } });
-
-      if (!warehouse) {
-        throw new NotFoundError('Không tìm thấy kho hàng hợp lệ để thực hiện ghi nhận tồn kho');
-      }
+      // Fallback if importJobItems were not generated in legacy jobs
+      const itemsToProcess = pendingItems.length > 0
+        ? pendingItems
+        : jobData.items.map((item, idx) => ({
+            id: undefined,
+            rowNumber: idx + 1,
+            sku: item.sku.trim(),
+            resultJson: item,
+            status: 'PENDING',
+          }));
 
       const chunkSize = 100;
       let createdProducts = 0;
       let createdSkus = 0;
       let updatedSkus = 0;
       let skippedSkus = 0;
+      let failedRowsCount = 0;
 
-      for (let i = 0; i < items.length; i += chunkSize) {
-        const chunk = items.slice(i, i + chunkSize);
+      for (let i = 0; i < itemsToProcess.length; i += chunkSize) {
+        const chunk = itemsToProcess.slice(i, i + chunkSize);
 
         await this.prisma.$transaction(async (tx) => {
-          for (const item of chunk) {
-            // Check existing SKU
-            const existingSku = await tx.stockItem.findUnique({
-              where: {
-                storeId_sku: {
-                  storeId,
-                  sku: item.sku.trim(),
-                },
-              },
-            });
+          for (const itemRecord of chunk) {
+            const item: z.infer<typeof importItemSchema> = itemRecord.resultJson;
+            const rowNumber = itemRecord.rowNumber;
 
-            if (existingSku && mode === 'CREATE_ONLY') {
-              skippedSkus++;
-              continue;
+            // Mark item as PROCESSING
+            if (itemRecord.id) {
+              await (tx as any).importJobItem.update({
+                where: { id: itemRecord.id },
+                data: { status: 'PROCESSING' },
+              });
             }
 
-            // 1. Upsert Category
-            const category = await tx.category.upsert({
-              where: {
-                storeId_code: {
+            try {
+              // Check existing SKU
+              const existingSku = await tx.stockItem.findUnique({
+                where: {
+                  storeId_sku: {
+                    storeId,
+                    sku: item.sku.trim(),
+                  },
+                },
+              });
+
+              if (existingSku && mode === 'CREATE_ONLY') {
+                skippedSkus++;
+                if (itemRecord.id) {
+                  await (tx as any).importJobItem.update({
+                    where: { id: itemRecord.id },
+                    data: { status: 'SKIPPED' },
+                  });
+                }
+                continue;
+              }
+
+              // 1. Upsert Category
+              const category = await tx.category.upsert({
+                where: {
+                  storeId_code: {
+                    storeId,
+                    code: item.categoryCode.trim().toUpperCase(),
+                  },
+                },
+                create: {
                   storeId,
+                  name: item.categoryName.trim(),
                   code: item.categoryCode.trim().toUpperCase(),
                 },
-              },
-              create: {
-                storeId,
-                name: item.categoryName.trim(),
-                code: item.categoryCode.trim().toUpperCase(),
-              },
-              update: {
-                name: item.categoryName.trim(),
-              },
-            });
+                update: {
+                  name: item.categoryName.trim(),
+                },
+              });
 
-            // 2. Upsert Product
-            const product = await tx.product.upsert({
-              where: {
-                storeId_code: {
+              // 2. Upsert Product
+              const product = await tx.product.upsert({
+                where: {
+                  storeId_code: {
+                    storeId,
+                    code: item.productCode.trim().toUpperCase(),
+                  },
+                },
+                create: {
                   storeId,
+                  categoryId: category.id,
+                  name: item.productName.trim(),
                   code: item.productCode.trim().toUpperCase(),
                 },
-              },
-              create: {
-                storeId,
-                categoryId: category.id,
-                name: item.productName.trim(),
-                code: item.productCode.trim().toUpperCase(),
-              },
-              update: {
-                name: item.productName.trim(),
-                categoryId: category.id,
-              },
-            });
-            createdProducts++;
-
-            // 3. Upsert StockItem
-            let stockItemId: number;
-
-            if (existingSku) {
-              const updated = await tx.stockItem.update({
-                where: { id: existingSku.id },
-                data: {
+                update: {
                   name: item.productName.trim(),
-                  barcode: item.barcode || existingSku.barcode,
-                  costPrice: toDecimal(item.costPrice),
-                  sellingPrice: toDecimal(item.sellingPrice),
-                  minStockLevel: item.minStockLevel,
-                  maxStockLevel: item.maxStockLevel,
+                  categoryId: category.id,
                 },
               });
-              stockItemId = updated.id;
-              updatedSkus++;
-            } else {
-              const created = await tx.stockItem.create({
-                data: {
-                  storeId,
-                  productId: product.id,
-                  sku: item.sku.trim(),
-                  name: item.productName.trim(),
-                  barcode: item.barcode,
-                  costPrice: toDecimal(item.costPrice),
-                  sellingPrice: toDecimal(item.sellingPrice),
-                  minStockLevel: item.minStockLevel,
-                  maxStockLevel: item.maxStockLevel,
-                },
-              });
-              stockItemId = created.id;
-              createdSkus++;
-            }
+              createdProducts++;
 
-            // 4. Handle Stock Inventory according to Mode
-            if (!existingSku && item.initialQuantity > 0) {
-              // Brand new SKU initial stock inflow
-              await StockLedgerService.atomicAdd(
-                tx,
-                {
-                  storeId,
-                  warehouseId: warehouse.id,
-                  userId,
-                  referenceType: 'IMPORT',
-                  referenceId: `JOB-${job.id}`,
-                  note: `Nhập tồn kho ban đầu từ file bulk import (Job #${job.id})`,
-                },
-                'INFLOW',
-                [{ stockItemId, quantity: item.initialQuantity }]
-              );
-            } else if (existingSku && mode === 'ADJUST_STOCK' && item.initialQuantity > 0) {
-              // Adjust delta stock
-              await StockLedgerService.atomicAdd(
-                tx,
-                {
-                  storeId,
-                  warehouseId: warehouse.id,
-                  userId,
-                  referenceType: 'IMPORT_ADJUST',
-                  referenceId: `JOB-${job.id}`,
-                  note: `Điều chỉnh tăng tồn kho từ bulk import (Job #${job.id})`,
-                },
-                'INFLOW',
-                [{ stockItemId, quantity: item.initialQuantity }]
-              );
+              // 3. Upsert StockItem
+              let stockItemId: number;
+
+              if (existingSku) {
+                const updated = await tx.stockItem.update({
+                  where: { id: existingSku.id },
+                  data: {
+                    name: item.productName.trim(),
+                    barcode: item.barcode || existingSku.barcode,
+                    costPrice: toDecimal(item.costPrice),
+                    sellingPrice: toDecimal(item.sellingPrice),
+                    minStockLevel: item.minStockLevel,
+                    maxStockLevel: item.maxStockLevel,
+                  },
+                });
+                stockItemId = updated.id;
+                updatedSkus++;
+              } else {
+                const created = await tx.stockItem.create({
+                  data: {
+                    storeId,
+                    productId: product.id,
+                    sku: item.sku.trim(),
+                    name: item.productName.trim(),
+                    barcode: item.barcode,
+                    costPrice: toDecimal(item.costPrice),
+                    sellingPrice: toDecimal(item.sellingPrice),
+                    minStockLevel: item.minStockLevel,
+                    maxStockLevel: item.maxStockLevel,
+                  },
+                });
+                stockItemId = created.id;
+                createdSkus++;
+              }
+
+              // 4. Handle Stock Inventory according to Mode with Deterministic Idempotency Key
+              const deterministicMovementKey = `IMPORT:${job.id}:${rowNumber}:${stockItemId}`;
+
+              if (!existingSku && item.initialQuantity > 0) {
+                // Brand new SKU initial stock inflow
+                await StockLedgerService.atomicAdd(
+                  tx,
+                  {
+                    storeId,
+                    warehouseId: warehouse.id,
+                    userId,
+                    referenceType: 'IMPORT',
+                    referenceId: `JOB-${job.id}`,
+                    idempotencyKey: deterministicMovementKey,
+                    note: `Nhập tồn kho ban đầu từ file bulk import (Job #${job.id}, dòng #${rowNumber})`,
+                  },
+                  'INFLOW',
+                  [{ stockItemId, quantity: item.initialQuantity }]
+                );
+              } else if (existingSku && mode === 'ADJUST_STOCK' && item.initialQuantity !== 0) {
+                // Adjust delta stock (positive: atomicAdd, negative: atomicDeduct)
+                if (item.initialQuantity > 0) {
+                  await StockLedgerService.atomicAdd(
+                    tx,
+                    {
+                      storeId,
+                      warehouseId: warehouse.id,
+                      userId,
+                      referenceType: 'IMPORT_ADJUST',
+                      referenceId: `JOB-${job.id}`,
+                      idempotencyKey: deterministicMovementKey,
+                      note: `Điều chỉnh tăng tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
+                    },
+                    'INFLOW',
+                    [{ stockItemId, quantity: item.initialQuantity }]
+                  );
+                } else {
+                  await StockLedgerService.atomicDeduct(
+                    tx,
+                    {
+                      storeId,
+                      warehouseId: warehouse.id,
+                      userId,
+                      referenceType: 'IMPORT_ADJUST',
+                      referenceId: `JOB-${job.id}`,
+                      idempotencyKey: deterministicMovementKey,
+                      note: `Điều chỉnh giảm tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
+                    },
+                    'OUTFLOW',
+                    [{ stockItemId, quantity: Math.abs(item.initialQuantity) }]
+                  );
+                }
+              } else if (existingSku && mode === 'REPLACE_STOCK') {
+                // Phase 4: REPLACE_STOCK as physical counted quantity with AUDIT_ADJUSTMENT
+                const currentBalance = await tx.inventoryBalance.findUnique({
+                  where: {
+                    warehouseId_stockItemId: {
+                      warehouseId: warehouse.id,
+                      stockItemId,
+                    },
+                  },
+                });
+
+                const beforeQty = currentBalance?.quantity || 0;
+                const targetQty = item.initialQuantity;
+                const delta = targetQty - beforeQty;
+
+                if (delta > 0) {
+                  await StockLedgerService.atomicAdd(
+                    tx,
+                    {
+                      storeId,
+                      warehouseId: warehouse.id,
+                      userId,
+                      referenceType: 'IMPORT_AUDIT',
+                      referenceId: `JOB-${job.id}`,
+                      idempotencyKey: deterministicMovementKey,
+                      note: `Kiểm kê thay thế tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
+                    },
+                    'AUDIT_ADJUSTMENT',
+                    [{ stockItemId, quantity: delta }]
+                  );
+                } else if (delta < 0) {
+                  await StockLedgerService.atomicDeduct(
+                    tx,
+                    {
+                      storeId,
+                      warehouseId: warehouse.id,
+                      userId,
+                      referenceType: 'IMPORT_AUDIT',
+                      referenceId: `JOB-${job.id}`,
+                      idempotencyKey: deterministicMovementKey,
+                      note: `Kiểm kê thay thế tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
+                    },
+                    'AUDIT_ADJUSTMENT',
+                    [{ stockItemId, quantity: Math.abs(delta) }]
+                  );
+                }
+              }
+
+              // Mark item as COMPLETED
+              if (itemRecord.id) {
+                await (tx as any).importJobItem.update({
+                  where: { id: itemRecord.id },
+                  data: {
+                    status: 'COMPLETED',
+                    stockItemId,
+                  },
+                });
+              }
+            } catch (err: any) {
+              failedRowsCount++;
+              if (itemRecord.id) {
+                await (tx as any).importJobItem.update({
+                  where: { id: itemRecord.id },
+                  data: {
+                    status: 'FAILED',
+                    errorJson: { message: err.message || 'Row processing error' },
+                  },
+                });
+              }
+              throw err;
             }
           }
         });
@@ -398,13 +568,14 @@ export class ImportExportService {
 
       const result = {
         success: true,
-        message: `Đã import thành công ${items.length} mục hàng`,
+        message: `Đã import thành công ${jobData.items.length} mục hàng`,
         jobId: job.id,
         summary: {
-          totalProcessed: items.length,
+          totalProcessed: jobData.items.length,
           createdSkus,
           updatedSkus,
           skippedSkus,
+          failedRowsCount,
           mode,
         },
       };
@@ -524,6 +695,126 @@ export class ImportExportService {
         sanitizeCsvCell(available),
         ...(isStaff ? [] : [sanitizeCsvCell(b.stockItem.costPrice)]),
         sanitizeCsvCell(b.stockItem.sellingPrice),
+      ];
+      rows.push(row.join(','));
+    }
+
+    return rows.join('\n');
+  }
+
+  /**
+   * Export Orders as CSV
+   */
+  async exportOrdersCsv(storeId: number): Promise<string> {
+    const orders = await this.prisma.order.findMany({
+      where: { storeId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const headers = [
+      'Order Number',
+      'Status',
+      'Customer Name',
+      'Customer Phone',
+      'Subtotal Amount',
+      'Discount Amount',
+      'Tax Amount',
+      'Total Amount',
+      'Created At',
+    ];
+
+    const rows: string[] = [headers.join(',')];
+
+    for (const o of orders) {
+      const row = [
+        sanitizeCsvCell(o.orderNumber),
+        sanitizeCsvCell(o.status),
+        sanitizeCsvCell(o.customerName || ''),
+        sanitizeCsvCell(o.customerPhone || ''),
+        sanitizeCsvCell(o.subtotalAmount),
+        sanitizeCsvCell(o.discountAmount),
+        sanitizeCsvCell(o.taxAmount),
+        sanitizeCsvCell(o.totalAmount),
+        sanitizeCsvCell(o.createdAt.toISOString()),
+      ];
+      rows.push(row.join(','));
+    }
+
+    return rows.join('\n');
+  }
+
+  /**
+   * Export Sales as CSV
+   */
+  async exportSalesCsv(storeId: number): Promise<string> {
+    const orderItems = await this.prisma.orderItem.findMany({
+      where: {
+        storeId,
+        order: { status: { in: ['CONFIRMED', 'FULFILLED'] } },
+      },
+      include: {
+        order: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const headers = [
+      'Order Number',
+      'SKU',
+      'Product Name',
+      'Quantity',
+      'Unit Price',
+      'Subtotal',
+      'Sold At',
+    ];
+
+    const rows: string[] = [headers.join(',')];
+
+    for (const oi of orderItems) {
+      const row = [
+        sanitizeCsvCell(oi.order.orderNumber),
+        sanitizeCsvCell(oi.skuSnapshot),
+        sanitizeCsvCell(oi.nameSnapshot),
+        sanitizeCsvCell(oi.quantity),
+        sanitizeCsvCell(oi.unitPriceSnapshot),
+        sanitizeCsvCell(oi.subtotal),
+        sanitizeCsvCell(oi.createdAt.toISOString()),
+      ];
+      rows.push(row.join(','));
+    }
+
+    return rows.join('\n');
+  }
+
+  /**
+   * Export Returns as CSV
+   */
+  async exportReturnsCsv(storeId: number): Promise<string> {
+    const returns = await this.prisma.returnOrder.findMany({
+      where: { storeId },
+      include: { order: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const headers = [
+      'Return Number',
+      'Order Number',
+      'Status',
+      'Total Refund Amount',
+      'Reason',
+      'Created At',
+    ];
+
+    const rows: string[] = [headers.join(',')];
+
+    for (const r of returns) {
+      const row = [
+        sanitizeCsvCell(r.returnNumber),
+        sanitizeCsvCell(r.order.orderNumber),
+        sanitizeCsvCell(r.status),
+        sanitizeCsvCell(r.totalRefundAmount),
+        sanitizeCsvCell(r.reason || ''),
+        sanitizeCsvCell(r.createdAt.toISOString()),
       ];
       rows.push(row.join(','));
     }

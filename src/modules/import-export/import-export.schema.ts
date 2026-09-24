@@ -31,8 +31,6 @@ export const importPreviewSchema = z.object({
 
 export const importCommitSchema = z.object({
   jobId: z.string().min(1, 'Mã jobId của bản xem trước (preview) là bắt buộc để commit an toàn'),
-  mode: importModeSchema.optional(),
-  warehouseId: z.coerce.number().int().positive().optional(),
 });
 
 

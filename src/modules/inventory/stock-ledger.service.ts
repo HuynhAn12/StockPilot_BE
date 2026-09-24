@@ -17,6 +17,7 @@ export interface StockChangeContext {
   userId: number;
   referenceType: string;
   referenceId: string;
+  idempotencyKey?: string;
   note?: string;
 }
 
@@ -115,6 +116,7 @@ export class StockLedgerService {
           afterQuantity,
           referenceType: context.referenceType,
           referenceId: context.referenceId,
+          idempotencyKey: context.idempotencyKey,
           note: context.note || `Xuất kho: ${movementType}`,
           createdById: context.userId,
         },
@@ -183,6 +185,7 @@ export class StockLedgerService {
           afterQuantity,
           referenceType: context.referenceType,
           referenceId: context.referenceId,
+          idempotencyKey: context.idempotencyKey,
           note: context.note || `Nhập kho: ${movementType}`,
           createdById: context.userId,
         },

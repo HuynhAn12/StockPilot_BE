@@ -50,4 +50,40 @@ export class ImportExportController {
       next(error);
     }
   }
+
+  async exportOrders(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const csv = await service.exportOrdersCsv(storeId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
+      return res.status(200).send(csv);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async exportSales(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const csv = await service.exportSalesCsv(storeId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="sales.csv"');
+      return res.status(200).send(csv);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async exportReturns(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const csv = await service.exportReturnsCsv(storeId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="returns.csv"');
+      return res.status(200).send(csv);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
