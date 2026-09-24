@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import { PrismaClient, ImportJobItemStatus } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+export type ImportJobItemStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 import { prisma as defaultPrisma } from '../../config/db';
 import { z } from 'zod';
 import {
