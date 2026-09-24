@@ -27,17 +27,28 @@ export class HistoricalSalesService {
   async previewHistoricalSales(storeId: number, userId: number, rows: HistoricalSaleRowInput[]) {
     // 1. Fetch existing StockItems for this store to map SKU -> stockItemId
     const skus = Array.from(new Set(rows.map((r) => r.sku.trim())));
-    const existingStockItems = await this.prisma.stockItem.findMany({
-      where: {
-        storeId,
-        sku: { in: skus },
-      },
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-      },
-    });
+    const [existingStockItems, firstNativeFulfilledSale] = await Promise.all([
+      this.prisma.stockItem.findMany({
+        where: {
+          storeId,
+          sku: { in: skus },
+        },
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+        },
+      }),
+      this.prisma.order.findFirst({
+        where: {
+          storeId,
+          status: 'FULFILLED',
+          fulfilledAt: { not: null },
+        },
+        orderBy: { fulfilledAt: 'asc' },
+        select: { fulfilledAt: true },
+      }),
+    ]);
 
     const skuMap = new Map<string, { id: number; name: string }>();
     for (const item of existingStockItems) {
@@ -88,7 +99,8 @@ export class HistoricalSalesService {
     let validCount = 0;
     let warningCount = 0;
     let duplicateCount = 0;
-    const invalidCount = 0;
+    let invalidCount = 0;
+    const nativeCutoff = firstNativeFulfilledSale?.fulfilledAt ?? null;
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -100,7 +112,11 @@ export class HistoricalSalesService {
       let status: 'VALID' | 'WARNING' | 'DUPLICATE' | 'INVALID' = 'VALID';
       let message: string | undefined;
 
-      if (existingHashSet.has(hash) || seenHashesInFile.has(hash)) {
+      if (nativeCutoff && new Date(row.soldAt) >= nativeCutoff) {
+        status = 'INVALID';
+        message = `HISTORICAL_SALE_OVERLAPS_NATIVE_PERIOD: Historical sales must be before first native fulfilled sale (${nativeCutoff.toISOString()})`;
+        invalidCount++;
+      } else if (existingHashSet.has(hash) || seenHashesInFile.has(hash)) {
         status = 'DUPLICATE';
         message = 'Dòng này đã tồn tại trong lịch sử bán hàng hoặc bị trùng lặp trong file';
         duplicateCount++;

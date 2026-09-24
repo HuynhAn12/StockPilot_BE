@@ -11,11 +11,12 @@ jest.mock('../src/config/db', () => ({
   prisma: {
     stockItem: { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
     historicalSale: { findMany: jest.fn(), findFirst: jest.fn(), createMany: jest.fn(), count: jest.fn() },
+    order: { findFirst: jest.fn() },
     importJob: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
     importJobItem: { updateMany: jest.fn() },
     orderItem: { findMany: jest.fn(), findFirst: jest.fn() },
     returnItem: { findMany: jest.fn() },
-    dailySalesSummary: { findMany: jest.fn(), upsert: jest.fn() },
+    dailySalesSummary: { deleteMany: jest.fn(), findMany: jest.fn(), upsert: jest.fn() },
     engineConfig: { findUnique: jest.fn(), upsert: jest.fn() },
     alert: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn(), count: jest.fn() },
     pricingRecommendation: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findMany: jest.fn(), count: jest.fn() },
@@ -58,6 +59,26 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       expect(preview.jobId).toBe('job-hs-001');
       expect(preview.validRows).toBe(1);
       expect(preview.warningRows).toBe(1);
+    });
+
+    it('blocks historical sales that overlap the native fulfilled sales period', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([
+        { id: 10, sku: 'SKU-A', name: 'Product A' },
+      ]);
+      (prisma.order.findFirst as jest.Mock).mockResolvedValue({
+        fulfilledAt: new Date('2026-05-10T00:00:00.000Z'),
+      });
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.importJob.create as jest.Mock).mockResolvedValue({ id: 'job-hs-overlap', totalRows: 1 });
+
+      const preview = await historicalSalesService.previewHistoricalSales(1, 100, [
+        { sku: 'SKU-A', quantity: 1, unitPrice: 100000, soldAt: new Date('2026-05-10T00:00:00.000Z'), source: 'CSV', externalOrderId: 'OVERLAP-1' },
+      ]);
+
+      expect(preview.validRows).toBe(0);
+      expect(preview.invalidRows).toBe(1);
+      expect(preview.previewSample[0].status).toBe('INVALID');
+      expect(preview.previewSample[0].message).toContain('HISTORICAL_SALE_OVERLAPS_NATIVE_PERIOD');
     });
 
     it('commits historical sales and marks job COMPLETED without mutating inventory balances', async () => {
@@ -109,7 +130,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
     it('rebuilds daily sales summaries aggregating fulfilled orders and historical sales minus returns with COGS', async () => {
       (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
       (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([
-        { stockItemId: 10, quantity: 4, subtotal: 400000, costPriceSnapshot: 50000, order: { id: 1, fulfilledAt: new Date('2026-03-01T10:00:00Z') } },
+        { stockItemId: 10, quantity: 4, refundableAmount: 360000, costPriceSnapshot: 50000, order: { id: 1, fulfilledAt: new Date('2026-03-01T10:00:00Z') } },
       ]);
       (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([
         { stockItemId: 10, quantity: 6, totalAmount: 600000, soldAt: new Date('2026-03-01T15:00:00Z'), externalOrderId: 'H1' },
@@ -117,6 +138,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
         { stockItemId: 10, quantity: 2, refundPrice: 100000, returnOrder: { createdAt: new Date('2026-03-01T16:00:00Z') } },
       ]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
       (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
 
       const result = await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-01'), new Date('2026-03-01'));
@@ -130,6 +152,84 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
           }),
         })
       );
+    });
+
+    it('Test S: treats ReturnItem.refundPrice as total line refund, not per-unit refund', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
+        { stockItemId: 10, quantity: 2, refundPrice: 180000, returnOrder: { createdAt: new Date('2026-03-02T16:00:00Z') } },
+      ]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-02'), new Date('2026-03-02'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      expect(Number(createPayload.refundAmount)).toBe(180000);
+      expect(Number(createPayload.refundAmount)).not.toBe(360000);
+    });
+
+    it('Test T: uses refundableAmount so fulfilled order revenue reconciles to Order.totalAmount', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([
+        { id: 10, costPrice: 30000 },
+        { id: 11, costPrice: 20000 },
+      ]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([
+        { stockItemId: 10, quantity: 1, refundableAmount: 26666.67, costPriceSnapshot: 30000, order: { id: 1, fulfilledAt: new Date('2026-03-03T10:00:00Z') } },
+        { stockItemId: 11, quantity: 2, refundableAmount: 53333.33, costPriceSnapshot: 20000, order: { id: 1, fulfilledAt: new Date('2026-03-03T10:00:00Z') } },
+      ]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-03'), new Date('2026-03-03'));
+      const revenueSum = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls
+        .map((call) => Number(call[0].create.grossRevenue))
+        .reduce((sum, value) => sum + value, 0);
+
+      expect(revenueSum).toBeCloseTo(80000, 2);
+      expect(revenueSum).not.toBeCloseTo(100000, 2);
+    });
+
+    it('Test U: preserves negative net quantity and revenue on return-only days', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
+        { stockItemId: 10, quantity: 1, refundPrice: 100000, returnOrder: { createdAt: new Date('2026-03-04T16:00:00Z') } },
+      ]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-04'), new Date('2026-03-04'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      expect(createPayload.netSoldQty).toBe(-1);
+      expect(Number(createPayload.netRevenue)).toBe(-100000);
+    });
+
+    it('deletes scoped summaries before recomputing so stale rows are removed', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      const result = await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-05'), new Date('2026-03-05'), [10]);
+
+      expect(result.processedCount).toBe(0);
+      expect(prisma.dailySalesSummary.deleteMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            storeId: 1,
+            stockItemId: { in: [10] },
+          }),
+        })
+      );
+      expect(prisma.dailySalesSummary.upsert).not.toHaveBeenCalled();
     });
 
     it('runs end-to-end analyzeSku producing demand, ROP, safetyStock, and persists snapshot', async () => {

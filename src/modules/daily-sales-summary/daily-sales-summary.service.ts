@@ -33,30 +33,44 @@ export class DailySalesSummaryService {
     const end = new Date(toDate);
     end.setUTCHours(23, 59, 59, 999);
 
-    // 1. Fetch relevant StockItems
-    const stockItems = await this.prisma.stockItem.findMany({
-      where: {
+    return this.prisma.$transaction(async (tx) => {
+      const scopedSummaryWhere = {
         storeId,
-        ...(stockItemIds && stockItemIds.length > 0 ? { id: { in: stockItemIds } } : {}),
-      },
-      select: {
-        id: true,
-        costPrice: true,
-      },
-    });
+        summaryDate: {
+          gte: start,
+          lte: end,
+        },
+        ...(stockItemIds && stockItemIds.length > 0 ? { stockItemId: { in: stockItemIds } } : {}),
+      };
 
-    if (stockItems.length === 0) {
-      return { processedCount: 0, updatedDays: 0 };
-    }
+      await tx.dailySalesSummary.deleteMany({
+        where: scopedSummaryWhere,
+      });
 
-    const itemIds = stockItems.map((item) => item.id);
-    const itemCostMap = new Map<number, number>();
-    for (const item of stockItems) {
-      itemCostMap.set(item.id, Number(item.costPrice));
-    }
+      // 1. Fetch relevant StockItems
+      const stockItems = await tx.stockItem.findMany({
+        where: {
+          storeId,
+          ...(stockItemIds && stockItemIds.length > 0 ? { id: { in: stockItemIds } } : {}),
+        },
+        select: {
+          id: true,
+          costPrice: true,
+        },
+      });
 
-    // 2. Fetch fulfilled OrderItems within range
-    const orderItems = await this.prisma.orderItem.findMany({
+      if (stockItems.length === 0) {
+        return { processedCount: 0, updatedDays: 0 };
+      }
+
+      const itemIds = stockItems.map((item) => item.id);
+      const itemCostMap = new Map<number, Prisma.Decimal>();
+      for (const item of stockItems) {
+        itemCostMap.set(item.id, new Prisma.Decimal(item.costPrice));
+      }
+
+      // 2. Fetch fulfilled OrderItems within range
+      const orderItems = await tx.orderItem.findMany({
       where: {
         storeId,
         stockItemId: { in: itemIds },
@@ -71,7 +85,7 @@ export class DailySalesSummaryService {
       select: {
         stockItemId: true,
         quantity: true,
-        subtotal: true,
+        refundableAmount: true,
         costPriceSnapshot: true,
         order: {
           select: {
@@ -82,8 +96,8 @@ export class DailySalesSummaryService {
       },
     });
 
-    // 3. Fetch HistoricalSales within range
-    const historicalSales = await this.prisma.historicalSale.findMany({
+      // 3. Fetch HistoricalSales within range
+      const historicalSales = await tx.historicalSale.findMany({
       where: {
         storeId,
         stockItemId: { in: itemIds },
@@ -101,8 +115,8 @@ export class DailySalesSummaryService {
       },
     });
 
-    // 4. Fetch ReturnItems within range
-    const returnItems = await this.prisma.returnItem.findMany({
+      // 4. Fetch ReturnItems within range
+      const returnItems = await tx.returnItem.findMany({
       where: {
         storeId,
         stockItemId: { in: itemIds },
@@ -134,9 +148,9 @@ export class DailySalesSummaryService {
         summaryDate: Date;
         grossSoldQty: number;
         returnQty: number;
-        grossRevenue: number;
-        refundAmount: number;
-        cogs: number;
+        grossRevenue: Prisma.Decimal;
+        refundAmount: Prisma.Decimal;
+        cogs: Prisma.Decimal;
         orderIds: Set<string>;
       }
     >();
@@ -156,9 +170,9 @@ export class DailySalesSummaryService {
           summaryDate: dateOnly,
           grossSoldQty: 0,
           returnQty: 0,
-          grossRevenue: 0,
-          refundAmount: 0,
-          cogs: 0,
+          grossRevenue: new Prisma.Decimal(0),
+          refundAmount: new Prisma.Decimal(0),
+          cogs: new Prisma.Decimal(0),
           orderIds: new Set(),
         };
         map.set(key, entry);
@@ -166,89 +180,90 @@ export class DailySalesSummaryService {
       return entry;
     };
 
-    // Accumulate OrderItems
-    for (const oi of orderItems) {
-      const date = oi.order.fulfilledAt || start;
-      const entry = getOrCreate(oi.stockItemId, date);
-      entry.grossSoldQty += oi.quantity;
-      entry.grossRevenue += Number(oi.subtotal);
-      const itemCost = Number(oi.costPriceSnapshot) > 0 ? Number(oi.costPriceSnapshot) : (itemCostMap.get(oi.stockItemId) ?? 0);
-      entry.cogs += oi.quantity * itemCost;
-      entry.orderIds.add(`ORD_${oi.order.id}`);
-    }
+      // Accumulate OrderItems
+      for (const oi of orderItems) {
+        const date = oi.order.fulfilledAt || start;
+        const entry = getOrCreate(oi.stockItemId, date);
+        entry.grossSoldQty += oi.quantity;
+        entry.grossRevenue = entry.grossRevenue.plus(new Prisma.Decimal(oi.refundableAmount));
+        const snapshotCost = new Prisma.Decimal(oi.costPriceSnapshot);
+        const itemCost = snapshotCost.gt(0) ? snapshotCost : (itemCostMap.get(oi.stockItemId) ?? new Prisma.Decimal(0));
+        entry.cogs = entry.cogs.plus(itemCost.mul(oi.quantity));
+        entry.orderIds.add(`ORD_${oi.order.id}`);
+      }
 
-    // Accumulate HistoricalSales
-    for (const hs of historicalSales) {
-      if (!hs.stockItemId) continue;
-      const entry = getOrCreate(hs.stockItemId, hs.soldAt);
-      entry.grossSoldQty += hs.quantity;
-      entry.grossRevenue += Number(hs.totalAmount);
-      const fallbackCost = itemCostMap.get(hs.stockItemId) ?? 0;
-      entry.cogs += hs.quantity * fallbackCost;
-      entry.orderIds.add(`HS_${hs.externalOrderId || hs.soldAt.toISOString()}`);
-    }
+      // Accumulate HistoricalSales
+      for (const hs of historicalSales) {
+        if (!hs.stockItemId) continue;
+        const entry = getOrCreate(hs.stockItemId, hs.soldAt);
+        entry.grossSoldQty += hs.quantity;
+        entry.grossRevenue = entry.grossRevenue.plus(new Prisma.Decimal(hs.totalAmount));
+        const fallbackCost = itemCostMap.get(hs.stockItemId) ?? new Prisma.Decimal(0);
+        entry.cogs = entry.cogs.plus(fallbackCost.mul(hs.quantity));
+        entry.orderIds.add(`HS_${hs.externalOrderId || hs.soldAt.toISOString()}`);
+      }
 
-    // Accumulate ReturnItems
-    for (const ri of returnItems) {
-      const date = ri.returnOrder.createdAt;
-      const entry = getOrCreate(ri.stockItemId, date);
-      entry.returnQty += ri.quantity;
-      const itemRefund = Number(ri.refundPrice) * ri.quantity;
-      entry.refundAmount += itemRefund;
-      const itemCost = itemCostMap.get(ri.stockItemId) ?? 0;
-      entry.cogs = Math.max(0, entry.cogs - ri.quantity * itemCost);
-    }
+      // Accumulate ReturnItems
+      for (const ri of returnItems) {
+        const date = ri.returnOrder.createdAt;
+        const entry = getOrCreate(ri.stockItemId, date);
+        entry.returnQty += ri.quantity;
+        entry.refundAmount = entry.refundAmount.plus(new Prisma.Decimal(ri.refundPrice));
+        const itemCost = itemCostMap.get(ri.stockItemId) ?? new Prisma.Decimal(0);
+        entry.cogs = Prisma.Decimal.max(0, entry.cogs.minus(itemCost.mul(ri.quantity)));
+      }
 
-    // Upsert into DailySalesSummary
-    let processedCount = 0;
-    const entries = Array.from(map.values());
+      // Upsert into DailySalesSummary
+      let processedCount = 0;
+      const entries = Array.from(map.values());
 
-    for (const entry of entries) {
-      const netSoldQty = Math.max(0, entry.grossSoldQty - entry.returnQty);
-      const netRevenue = Math.max(0, entry.grossRevenue - entry.refundAmount);
-      const grossProfit = Number((netRevenue - entry.cogs).toFixed(2));
+      for (const entry of entries) {
+        const netSoldQty = entry.grossSoldQty - entry.returnQty;
+        const netRevenue = entry.grossRevenue.minus(entry.refundAmount);
+        const grossProfit = netRevenue.minus(entry.cogs).toDecimalPlaces(2);
 
-      await this.prisma.dailySalesSummary.upsert({
-        where: {
-          storeId_stockItemId_summaryDate: {
+        await tx.dailySalesSummary.upsert({
+          where: {
+            storeId_stockItemId_summaryDate: {
+              storeId,
+              stockItemId: entry.stockItemId,
+              summaryDate: entry.summaryDate,
+            },
+          },
+          update: {
+            grossSoldQty: entry.grossSoldQty,
+            returnQty: entry.returnQty,
+            netSoldQty,
+            grossRevenue: entry.grossRevenue,
+            refundAmount: entry.refundAmount,
+            netRevenue,
+            cogs: entry.cogs,
+            grossProfit,
+            orderCount: entry.orderIds.size,
+          },
+          create: {
             storeId,
             stockItemId: entry.stockItemId,
             summaryDate: entry.summaryDate,
+            grossSoldQty: entry.grossSoldQty,
+            returnQty: entry.returnQty,
+            netSoldQty,
+            grossRevenue: entry.grossRevenue,
+            refundAmount: entry.refundAmount,
+            netRevenue,
+            cogs: entry.cogs,
+            grossProfit,
+            orderCount: entry.orderIds.size,
           },
-        },
-        update: {
-          grossSoldQty: entry.grossSoldQty,
-          returnQty: entry.returnQty,
-          netSoldQty,
-          grossRevenue: new Prisma.Decimal(entry.grossRevenue),
-          refundAmount: new Prisma.Decimal(entry.refundAmount),
-          netRevenue: new Prisma.Decimal(netRevenue),
-          cogs: new Prisma.Decimal(entry.cogs),
-          grossProfit: new Prisma.Decimal(grossProfit),
-          orderCount: entry.orderIds.size,
-        },
-        create: {
-          storeId,
-          stockItemId: entry.stockItemId,
-          summaryDate: entry.summaryDate,
-          grossSoldQty: entry.grossSoldQty,
-          returnQty: entry.returnQty,
-          netSoldQty,
-          grossRevenue: new Prisma.Decimal(entry.grossRevenue),
-          refundAmount: new Prisma.Decimal(entry.refundAmount),
-          netRevenue: new Prisma.Decimal(netRevenue),
-          cogs: new Prisma.Decimal(entry.cogs),
-          grossProfit: new Prisma.Decimal(grossProfit),
-          orderCount: entry.orderIds.size,
-        },
-      });
-      processedCount++;
-    }
+        });
+        processedCount++;
+      }
 
-    return {
-      processedCount,
-      updatedDays: entries.length,
-    };
+      return {
+        processedCount,
+        updatedDays: entries.length,
+      };
+    });
   }
 
   /**
