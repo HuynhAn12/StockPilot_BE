@@ -194,12 +194,19 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       expect(revenueSum).not.toBeCloseTo(100000, 2);
     });
 
-    it('Test U: preserves negative net quantity and revenue on return-only days', async () => {
-      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
+    it('Test U: preserves negative net quantity, negative COGS, and negative profit on return-only days', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 60000 }]);
       (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
       (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
       (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
-        { stockItemId: 10, quantity: 1, refundPrice: 100000, returnOrder: { createdAt: new Date('2026-03-04T16:00:00Z') } },
+        {
+          stockItemId: 10,
+          quantity: 1,
+          refundPrice: 100000,
+          isRestockable: true,
+          orderItem: { costPriceSnapshot: 60000 },
+          returnOrder: { createdAt: new Date('2026-03-04T16:00:00Z') },
+        },
       ]);
       (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
       (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
@@ -209,6 +216,61 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
 
       expect(createPayload.netSoldQty).toBe(-1);
       expect(Number(createPayload.netRevenue)).toBe(-100000);
+      expect(Number(createPayload.cogs)).toBe(-60000);
+      expect(Number(createPayload.grossProfit)).toBe(-40000);
+    });
+
+    it('Test V: restockable return reverses COGS using original sale-time cost snapshot even if StockItem costPrice changed later', async () => {
+      // Current StockItem costPrice is 95,000 (e.g. price increased later)
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 95000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      // OrderItem was sold when costPrice was 60,000
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
+        {
+          stockItemId: 10,
+          quantity: 2,
+          refundPrice: 200000,
+          isRestockable: true,
+          orderItem: { costPriceSnapshot: 60000 },
+          returnOrder: { createdAt: new Date('2026-03-06T10:00:00Z') },
+        },
+      ]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-06'), new Date('2026-03-06'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      // Reversed COGS should be 2 * 60,000 = 120,000 (not 2 * 95,000 = 190,000)
+      expect(Number(createPayload.cogs)).toBe(-120000);
+      expect(Number(createPayload.grossProfit)).toBe(-80000); // -200,000 - (-120,000)
+    });
+
+    it('Test W: non-restockable return does not reverse COGS in DailySalesSummary', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 60000 }]);
+      (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
+        {
+          stockItemId: 10,
+          quantity: 1,
+          refundPrice: 100000,
+          isRestockable: false, // Damaged/cannot restock
+          orderItem: { costPriceSnapshot: 60000 },
+          returnOrder: { createdAt: new Date('2026-03-07T12:00:00Z') },
+        },
+      ]);
+      (prisma.dailySalesSummary.deleteMany as jest.Mock).mockResolvedValue({ count: 0 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-07'), new Date('2026-03-07'));
+      const createPayload = (prisma.dailySalesSummary.upsert as jest.Mock).mock.calls[0][0].create;
+
+      expect(Number(createPayload.refundAmount)).toBe(100000);
+      expect(Number(createPayload.netRevenue)).toBe(-100000);
+      expect(Number(createPayload.cogs)).toBe(0); // COGS not reversed
+      expect(Number(createPayload.grossProfit)).toBe(-100000);
     });
 
     it('deletes scoped summaries before recomputing so stale rows are removed', async () => {

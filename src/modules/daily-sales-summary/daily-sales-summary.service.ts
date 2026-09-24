@@ -117,68 +117,74 @@ export class DailySalesSummaryService {
 
       // 4. Fetch ReturnItems within range
       const returnItems = await tx.returnItem.findMany({
-      where: {
-        storeId,
-        stockItemId: { in: itemIds },
-        returnOrder: {
-          status: 'COMPLETED',
-          createdAt: {
-            gte: start,
-            lte: end,
+        where: {
+          storeId,
+          stockItemId: { in: itemIds },
+          returnOrder: {
+            status: 'COMPLETED',
+            createdAt: {
+              gte: start,
+              lte: end,
+            },
           },
         },
-      },
-      select: {
-        stockItemId: true,
-        quantity: true,
-        refundPrice: true,
-        returnOrder: {
-          select: {
-            createdAt: true,
+        select: {
+          stockItemId: true,
+          quantity: true,
+          refundPrice: true,
+          isRestockable: true,
+          orderItem: {
+            select: {
+              costPriceSnapshot: true,
+            },
+          },
+          returnOrder: {
+            select: {
+              createdAt: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    // Accumulator map: Key = `${stockItemId}_${dateString}`
-    const map = new Map<
-      string,
-      {
-        stockItemId: number;
-        summaryDate: Date;
-        grossSoldQty: number;
-        returnQty: number;
-        grossRevenue: Prisma.Decimal;
-        refundAmount: Prisma.Decimal;
-        cogs: Prisma.Decimal;
-        orderIds: Set<string>;
-      }
-    >();
+      // Accumulator map: Key = `${stockItemId}_${dateString}`
+      const map = new Map<
+        string,
+        {
+          stockItemId: number;
+          summaryDate: Date;
+          grossSoldQty: number;
+          returnQty: number;
+          grossRevenue: Prisma.Decimal;
+          refundAmount: Prisma.Decimal;
+          cogs: Prisma.Decimal;
+          orderIds: Set<string>;
+        }
+      >();
 
-    const getKey = (stockItemId: number, date: Date) => {
-      const d = date.toISOString().split('T')[0];
-      return `${stockItemId}_${d}`;
-    };
+      const getKey = (stockItemId: number, date: Date) => {
+        const d = date.toISOString().split('T')[0];
+        return `${stockItemId}_${d}`;
+      };
 
-    const getOrCreate = (stockItemId: number, date: Date) => {
-      const key = getKey(stockItemId, date);
-      let entry = map.get(key);
-      if (!entry) {
-        const dateOnly = new Date(date.toISOString().split('T')[0] + 'T00:00:00.000Z');
-        entry = {
-          stockItemId,
-          summaryDate: dateOnly,
-          grossSoldQty: 0,
-          returnQty: 0,
-          grossRevenue: new Prisma.Decimal(0),
-          refundAmount: new Prisma.Decimal(0),
-          cogs: new Prisma.Decimal(0),
-          orderIds: new Set(),
-        };
-        map.set(key, entry);
-      }
-      return entry;
-    };
+      const getOrCreate = (stockItemId: number, date: Date) => {
+        const key = getKey(stockItemId, date);
+        let entry = map.get(key);
+        if (!entry) {
+          const dateOnly = new Date(date.toISOString().split('T')[0] + 'T00:00:00.000Z');
+          entry = {
+            stockItemId,
+            summaryDate: dateOnly,
+            grossSoldQty: 0,
+            returnQty: 0,
+            grossRevenue: new Prisma.Decimal(0),
+            refundAmount: new Prisma.Decimal(0),
+            cogs: new Prisma.Decimal(0),
+            orderIds: new Set(),
+          };
+          map.set(key, entry);
+        }
+        return entry;
+      };
 
       // Accumulate OrderItems
       for (const oi of orderItems) {
@@ -209,8 +215,19 @@ export class DailySalesSummaryService {
         const entry = getOrCreate(ri.stockItemId, date);
         entry.returnQty += ri.quantity;
         entry.refundAmount = entry.refundAmount.plus(new Prisma.Decimal(ri.refundPrice));
-        const itemCost = itemCostMap.get(ri.stockItemId) ?? new Prisma.Decimal(0);
-        entry.cogs = Prisma.Decimal.max(0, entry.cogs.minus(itemCost.mul(ri.quantity)));
+
+        // Return COGS Accounting Policy:
+        // - Restockable return: reverse COGS using original sale-time cost snapshot (orderItem.costPriceSnapshot)
+        // - Non-restockable return: do not reverse COGS in this MVP
+        // - Return-only days: allow daily COGS to become negative (no clamping to zero)
+        if (ri.isRestockable) {
+          const snapshotCost = ri.orderItem?.costPriceSnapshot
+            ? new Prisma.Decimal(ri.orderItem.costPriceSnapshot)
+            : (itemCostMap.get(ri.stockItemId) ?? new Prisma.Decimal(0));
+          const unitCost = snapshotCost.gt(0) ? snapshotCost : (itemCostMap.get(ri.stockItemId) ?? new Prisma.Decimal(0));
+          const returnCogs = unitCost.mul(ri.quantity);
+          entry.cogs = entry.cogs.minus(returnCogs);
+        }
       }
 
       // Upsert into DailySalesSummary
