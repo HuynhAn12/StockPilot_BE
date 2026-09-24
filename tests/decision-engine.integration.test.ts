@@ -1,10 +1,10 @@
 import { HistoricalSalesService } from '../src/modules/historical-sales/historical-sales.service';
-import { DailyMetricsService } from '../src/modules/daily-metrics/daily-metrics.service';
+import { DailySalesSummaryService } from '../src/modules/daily-sales-summary/daily-sales-summary.service';
 import { DecisionEngineService } from '../src/modules/decision-engine/decision-engine.service';
 import { AlertService } from '../src/modules/alerts/alert.service';
 import { PricingService } from '../src/modules/pricing/pricing.service';
 import { AssistantService } from '../src/modules/assistant/assistant.service';
-import { PolicyService } from '../src/modules/decision-engine/policy.service';
+import { EngineConfigService } from '../src/modules/decision-engine/engine-config.service';
 import { prisma } from '../src/config/db';
 
 jest.mock('../src/config/db', () => ({
@@ -15,10 +15,11 @@ jest.mock('../src/config/db', () => ({
     importJobItem: { updateMany: jest.fn() },
     orderItem: { findMany: jest.fn(), findFirst: jest.fn() },
     returnItem: { findMany: jest.fn() },
-    dailySkuMetric: { findMany: jest.fn(), upsert: jest.fn() },
-    stockPolicy: { findUnique: jest.fn(), upsert: jest.fn() },
-    smartAlert: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+    dailySalesSummary: { findMany: jest.fn(), upsert: jest.fn() },
+    engineConfig: { findUnique: jest.fn(), upsert: jest.fn() },
+    alert: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findMany: jest.fn(), count: jest.fn() },
     pricingRecommendation: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+    priceHistory: { create: jest.fn(), findMany: jest.fn() },
     decisionSnapshot: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
   },
@@ -56,7 +57,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
 
       expect(preview.jobId).toBe('job-hs-001');
       expect(preview.validRows).toBe(1);
-      expect(preview.warningRows).toBe(1); // Unmatched SKU warning
+      expect(preview.warningRows).toBe(1);
     });
 
     it('commits historical sales and marks job COMPLETED without mutating inventory balances', async () => {
@@ -99,16 +100,16 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
     });
   });
 
-  describe('DailyMetricsService & DecisionEngineService', () => {
-    const dailyMetricsService = new DailyMetricsService(prisma as any);
-    const policyService = new PolicyService(prisma as any);
+  describe('DailySalesSummaryService & DecisionEngineService', () => {
+    const dailySalesSummaryService = new DailySalesSummaryService(prisma as any);
+    const engineConfigService = new EngineConfigService(prisma as any);
     const alertService = new AlertService(prisma as any);
     const pricingService = new PricingService(prisma as any);
 
-    it('rebuilds daily metrics aggregating fulfilled orders and historical sales minus returns', async () => {
-      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10 }]);
+    it('rebuilds daily sales summaries aggregating fulfilled orders and historical sales minus returns with COGS', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ id: 10, costPrice: 50000 }]);
       (prisma.orderItem.findMany as jest.Mock).mockResolvedValue([
-        { stockItemId: 10, quantity: 4, subtotal: 400000, order: { id: 1, fulfilledAt: new Date('2026-03-01T10:00:00Z') } },
+        { stockItemId: 10, quantity: 4, subtotal: 400000, costPriceSnapshot: 50000, order: { id: 1, fulfilledAt: new Date('2026-03-01T10:00:00Z') } },
       ]);
       (prisma.historicalSale.findMany as jest.Mock).mockResolvedValue([
         { stockItemId: 10, quantity: 6, totalAmount: 600000, soldAt: new Date('2026-03-01T15:00:00Z'), externalOrderId: 'H1' },
@@ -116,15 +117,15 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       (prisma.returnItem.findMany as jest.Mock).mockResolvedValue([
         { stockItemId: 10, quantity: 2, refundPrice: 100000, returnOrder: { createdAt: new Date('2026-03-01T16:00:00Z') } },
       ]);
-      (prisma.dailySkuMetric.upsert as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.dailySalesSummary.upsert as jest.Mock).mockResolvedValue({ id: 1 });
 
-      const result = await dailyMetricsService.rebuildDailyMetrics(1, new Date('2026-03-01'), new Date('2026-03-01'));
+      const result = await dailySalesSummaryService.rebuildDailySalesSummary(1, new Date('2026-03-01'), new Date('2026-03-01'));
       expect(result.processedCount).toBe(1);
-      expect(prisma.dailySkuMetric.upsert).toHaveBeenCalledWith(
+      expect(prisma.dailySalesSummary.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           create: expect.objectContaining({
             grossSoldQty: 10, // 4 from Order + 6 from HistoricalSale
-            returnedQty: 2,
+            returnQty: 2,
             netSoldQty: 8, // 10 - 2
           }),
         })
@@ -134,8 +135,9 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
     it('runs end-to-end analyzeSku producing demand, ROP, safetyStock, and persists snapshot', async () => {
       const decisionEngineService = new DecisionEngineService(
         prisma as any,
-        dailyMetricsService,
-        policyService,
+        dailySalesSummaryService,
+        engineConfigService,
+        undefined as any,
         undefined as any,
         undefined as any,
         alertService,
@@ -155,13 +157,13 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         balances: [{ quantity: 15, reservedQuantity: 5 }], // available = 10
       });
 
-      (prisma.dailySkuMetric.findMany as jest.Mock).mockResolvedValue([
-        { metricDate: new Date('2026-09-20'), grossSoldQty: 3, returnedQty: 0, netSoldQty: 3, grossRevenue: 300000, refundAmount: 0, netRevenue: 300000, orderCount: 1 },
+      (prisma.dailySalesSummary.findMany as jest.Mock).mockResolvedValue([
+        { summaryDate: new Date('2026-09-20'), grossSoldQty: 3, returnQty: 0, netSoldQty: 3, grossRevenue: 300000, refundAmount: 0, netRevenue: 300000, cogs: 150000, grossProfit: 150000, orderCount: 1 },
       ]);
 
-      (prisma.stockPolicy.findUnique as jest.Mock).mockResolvedValue(null); // use default policy
-      (prisma.smartAlert.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.smartAlert.create as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null); // use default config
+      (prisma.alert.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.alert.create as jest.Mock).mockResolvedValue({ id: 1 });
       (prisma.pricingRecommendation.findFirst as jest.Mock).mockResolvedValue(null);
       (prisma.decisionSnapshot.create as jest.Mock).mockResolvedValue({ id: 1 });
 
@@ -170,8 +172,8 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       expect(analysis.stockItemId).toBe(10);
       expect(analysis.sku).toBe('SKU-A');
       expect(analysis.inventory.available).toBe(10);
-      expect(analysis.policy.source).toBe('DEFAULT');
-      expect(analysis.metrics.reorderPoint).toBeGreaterThanOrEqual(1);
+      expect(analysis.engineConfig.source).toBe('DEFAULT');
+      expect(analysis.coverage.reorderPoint).toBeGreaterThanOrEqual(1);
       expect(prisma.decisionSnapshot.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -188,7 +190,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
     const pricingService = new PricingService(prisma as any);
     const alertService = new AlertService(prisma as any);
 
-    it('generates pricing recommendation with strict price floor clamp', async () => {
+    it('generates pricing recommendation with strict gross margin price floor clamp', async () => {
       (prisma.pricingRecommendation.findFirst as jest.Mock).mockResolvedValue(null);
       (prisma.pricingRecommendation.create as jest.Mock).mockResolvedValue({ id: 99, status: 'PENDING' });
 
@@ -197,14 +199,19 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         stockItemId: 10,
         sellingPrice: 200000,
         costPrice: 100000,
-        minimumMarginPct: 0.20, // Floor = 120,000 VND
+        minimumMarginPct: 0.20, // Floor = 125,000 VND
+        maxMarkdownPct: 0.30,
+        maxMarkupPct: 0.20,
         daysSinceLastSale: 120, // 15% markdown
-        daysOfInventory: 40,
+        daysOfCover: 40,
         overstockScore: 60,
+        stockoutScore: 0,
         trend: 'DOWN', // +3% markdown => 18% total => 164,000 VND
+        confidenceScore: 80,
       });
 
       expect(rec).not.toBeNull();
+      expect(rec.action).toBe('DECREASE');
       expect(prisma.pricingRecommendation.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -216,16 +223,19 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       );
     });
 
-    it('accepts pricing recommendation and updates stockItem selling price', async () => {
+    it('accepts pricing recommendation, updates stockItem selling price and records PriceHistory', async () => {
       (prisma.pricingRecommendation.findUnique as jest.Mock).mockResolvedValue({
         id: 99,
         storeId: 1,
         stockItemId: 10,
+        action: 'DECREASE',
         recommendedPrice: 164000,
         status: 'PENDING',
+        stockItem: { sellingPrice: 200000 },
       });
       (prisma.pricingRecommendation.update as jest.Mock).mockResolvedValue({ id: 99, status: 'ACCEPTED' });
       (prisma.stockItem.update as jest.Mock).mockResolvedValue({ id: 10, sellingPrice: 164000 });
+      (prisma.priceHistory.create as jest.Mock).mockResolvedValue({ id: 1 });
 
       const accepted = await pricingService.acceptRecommendation(1, 100, 99, true);
       expect(accepted.status).toBe('ACCEPTED');
@@ -235,20 +245,31 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
           data: { sellingPrice: 164000 },
         })
       );
+      expect(prisma.priceHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            storeId: 1,
+            stockItemId: 10,
+            source: 'RECOMMENDATION_ACCEPT',
+            recommendationId: 99,
+            changedById: 100,
+          }),
+        })
+      );
     });
 
-    it('acknowledges and resolves smart alerts', async () => {
-      (prisma.smartAlert.findUnique as jest.Mock).mockResolvedValue({
+    it('acknowledges and resolves alerts', async () => {
+      (prisma.alert.findUnique as jest.Mock).mockResolvedValue({
         id: 5,
         storeId: 1,
         status: 'OPEN',
       });
-      (prisma.smartAlert.update as jest.Mock).mockResolvedValue({ id: 5, status: 'ACKNOWLEDGED' });
+      (prisma.alert.update as jest.Mock).mockResolvedValue({ id: 5, status: 'ACKNOWLEDGED' });
 
       const ack = await alertService.acknowledgeAlert(1, 5);
       expect(ack.status).toBe('ACKNOWLEDGED');
 
-      (prisma.smartAlert.update as jest.Mock).mockResolvedValue({ id: 5, status: 'RESOLVED' });
+      (prisma.alert.update as jest.Mock).mockResolvedValue({ id: 5, status: 'RESOLVED' });
       const resolved = await alertService.resolveAlert(1, 5);
       expect(resolved.status).toBe('RESOLVED');
     });
@@ -271,10 +292,10 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         balances: [{ quantity: 0, reservedQuantity: 0 }], // available = 0
       });
 
-      (prisma.dailySkuMetric.findMany as jest.Mock).mockResolvedValue([]);
-      (prisma.stockPolicy.findUnique as jest.Mock).mockResolvedValue(null);
-      (prisma.smartAlert.findMany as jest.Mock).mockResolvedValue([
-        { type: 'STOCKOUT', severity: 'CRITICAL', title: 'Hết hàng', message: 'Hết hàng', score: 100 },
+      (prisma.dailySalesSummary.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.alert.findMany as jest.Mock).mockResolvedValue([
+        { type: 'STOCKOUT', severity: 'CRITICAL', title: 'Hết hàng', message: 'Hết hàng', riskScore: 100, confidence: 100 },
       ]);
       (prisma.pricingRecommendation.findFirst as jest.Mock).mockResolvedValue(null);
       (prisma.decisionSnapshot.create as jest.Mock).mockResolvedValue({ id: 1 });

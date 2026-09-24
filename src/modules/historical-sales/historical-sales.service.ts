@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
-import { NotFoundError, ValidationError, ConflictError } from '../../common/errors/app-error';
+import { NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { HistoricalSaleRowInput } from './historical-sales.schema';
 
 export class HistoricalSalesService {
@@ -88,7 +88,7 @@ export class HistoricalSalesService {
     let validCount = 0;
     let warningCount = 0;
     let duplicateCount = 0;
-    let invalidCount = 0;
+    const invalidCount = 0;
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];

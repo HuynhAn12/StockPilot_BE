@@ -1,10 +1,11 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError } from '../../common/errors/app-error';
-import { DailyMetricsService } from '../daily-metrics/daily-metrics.service';
-import { PolicyService, ResolvedStockPolicy } from './policy.service';
-import { DemandService, DemandMetricsResult } from './demand.service';
-import { RiskService, SafetyStockResult } from './risk.service';
+import { DailySalesSummaryService } from '../daily-sales-summary/daily-sales-summary.service';
+import { EngineConfigService, ResolvedEngineConfig } from './engine-config.service';
+import { DemandMetricsService, DemandMetricsResult } from './demand-metrics.service';
+import { RiskEvaluator, SafetyStockResult } from './risk-evaluator';
+import { PricingEvaluator, PricingEvaluationResult } from './pricing-evaluator';
 import { AlertService } from '../alerts/alert.service';
 import { PricingService } from '../pricing/pricing.service';
 
@@ -13,10 +14,6 @@ export interface SkuDecisionAnalysisResult {
   sku: string;
   productName: string;
   categoryName?: string | null;
-  pricing: {
-    costPrice: number;
-    sellingPrice: number;
-  };
   inventory: {
     onHand: number;
     reserved: number;
@@ -25,19 +22,19 @@ export interface SkuDecisionAnalysisResult {
     maxStockLevel: number;
   };
   demand: DemandMetricsResult;
-  policy: ResolvedStockPolicy;
-  metrics: {
+  coverage: {
     safetyStock: number;
     safetyStockMethod: string;
     reorderPoint: number;
-    daysOfInventory: number | null;
+    daysOfCover: number | null;
   };
-  risks: {
-    stockoutScore: number;
+  risk: {
+    stockout: number;
     stockoutSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-    overstockScore: number;
+    overstock: number;
     overstockSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-    isDeadStock: boolean;
+    slowMoving: boolean;
+    deadStock: boolean;
     deadStockSeverity: 'NONE' | 'WARNING' | 'CRITICAL';
     daysSinceLastSale: number | null;
     deadStockCostValue: number;
@@ -48,16 +45,31 @@ export interface SkuDecisionAnalysisResult {
       zScore: number;
     };
   };
+  confidence: {
+    score: number;
+    level: 'LOW' | 'MEDIUM' | 'HIGH';
+  };
+  pricing: {
+    costPrice: number;
+    sellingPrice: number;
+    minimumPrice: number;
+    expectedMarginPct: number;
+  };
+  pricingEvaluation: PricingEvaluationResult;
+  engineConfig: ResolvedEngineConfig;
+  engineVersion: string;
+  factors: Array<{ code: string; label: string; impact: string; value?: unknown }>;
   calculatedAt: string;
 }
 
 export class DecisionEngineService {
   constructor(
     private readonly prisma: PrismaClient = defaultPrisma,
-    private readonly dailyMetricsService: DailyMetricsService = new DailyMetricsService(prisma),
-    private readonly policyService: PolicyService = new PolicyService(prisma),
-    private readonly demandService: DemandService = new DemandService(),
-    private readonly riskService: RiskService = new RiskService(),
+    private readonly dailySalesSummaryService: DailySalesSummaryService = new DailySalesSummaryService(prisma),
+    private readonly engineConfigService: EngineConfigService = new EngineConfigService(prisma),
+    private readonly demandMetricsService: DemandMetricsService = new DemandMetricsService(),
+    private readonly riskEvaluator: RiskEvaluator = new RiskEvaluator(),
+    private readonly pricingEvaluator: PricingEvaluator = new PricingEvaluator(),
     private readonly alertService: AlertService = new AlertService(prisma),
     private readonly pricingService: PricingService = new PricingService(prisma)
   ) {}
@@ -85,11 +97,11 @@ export class DecisionEngineService {
     const reserved = stockItem.balances.reduce((acc, b) => acc + b.reservedQuantity, 0);
     const available = Math.max(0, onHand - reserved);
 
-    // 2. Extract 90-day time series from DailySkuMetric
-    const series90 = await this.dailyMetricsService.getDailySeries(storeId, stockItemId, 90);
+    // 2. Extract 90-day time series from DailySalesSummary
+    const series90 = await this.dailySalesSummaryService.getDailySeries(storeId, stockItemId, 90);
 
     // 3. Compute Demand Metrics
-    const demand = this.demandService.calculateDemandMetrics(series90);
+    const demand = this.demandMetricsService.calculateDemandMetrics(series90);
 
     // 4. Compute Days Since Last Sale
     let daysSinceLastSale: number | null = null;
@@ -99,7 +111,7 @@ export class DecisionEngineService {
     // Search backwards in series90 for last sale
     for (let i = series90.length - 1; i >= 0; i--) {
       if (series90[i].netSoldQty > 0) {
-        const lastSaleDate = new Date(series90[i].metricDate + 'T00:00:00.000Z');
+        const lastSaleDate = new Date(series90[i].summaryDate + 'T00:00:00.000Z');
         const diffDays = Math.floor((today.getTime() - lastSaleDate.getTime()) / (1000 * 60 * 60 * 24));
         daysSinceLastSale = Math.max(0, diffDays);
         break;
@@ -138,63 +150,77 @@ export class DecisionEngineService {
       }
     }
 
-    // 5. Get Inventory Policy
-    const policy = await this.policyService.getPolicy(storeId, stockItemId);
+    // 5. Get Engine Config
+    const config = await this.engineConfigService.getConfig(storeId);
 
-    // 6. Compute Safety Stock and Reorder Point
-    const hasSufficientHistory = demand.daysWithSales90 >= 5 || demand.totalSold90 > 0;
-    const safetyStockResult: SafetyStockResult = this.riskService.calculateSafetyStock({
+    // 6. Compute Confidence
+    const confidence = this.riskEvaluator.calculateConfidence(
+      series90.length,
+      config.minimumHistoryDays,
+      demand.daysWithSales90
+    );
+
+    // 7. Compute Safety Stock, Reorder Point, Days of Cover
+    const hasSufficientHistory = confidence.level !== 'LOW' && (demand.daysWithSales90 >= 5 || demand.totalSold90 > 0);
+    const safetyStockResult: SafetyStockResult = this.riskEvaluator.calculateSafetyStock({
       stdDev30: demand.stdDev30,
-      leadTimeDays: policy.leadTimeDays,
-      serviceLevel: policy.serviceLevel,
+      leadTimeDays: config.leadTimeDays,
+      serviceLevel: config.serviceLevel,
       avg30: demand.avg30,
-      safetyDays: policy.safetyDays,
+      safetyDays: config.safetyDays,
       hasSufficientHistory,
     });
 
-    const reorderPoint = this.riskService.calculateReorderPoint(
+    const reorderPoint = this.riskEvaluator.calculateReorderPoint(
       demand.avg30,
-      policy.leadTimeDays,
+      config.leadTimeDays,
       safetyStockResult.safetyStock
     );
 
-    const daysOfInventory = this.riskService.calculateDaysOfInventory(available, demand.avg30);
+    const daysOfCover = this.riskEvaluator.calculateDaysOfCover(available, demand.avg30);
 
-    // 7. Compute Risk Scores
-    const stockoutRisk = this.riskService.calculateStockoutRisk({
+    // 8. Compute Risk Scores
+    const stockoutRisk = this.riskEvaluator.calculateStockoutRisk({
       availableStock: available,
       reorderPoint,
-      daysOfInventory,
-      leadTimeDays: policy.leadTimeDays,
-      safetyDays: policy.safetyDays,
+      daysOfCover,
+      leadTimeDays: config.leadTimeDays,
+      safetyDays: config.safetyDays,
       trendRatio: demand.trendRatio,
+      lowThreshold: config.lowRiskThreshold,
+      highThreshold: config.highRiskThreshold,
+      criticalThreshold: config.criticalRiskThreshold,
     });
 
-    const overstockRisk = this.riskService.calculateOverstockRisk({
+    const overstockRisk = this.riskEvaluator.calculateOverstockRisk({
       availableStock: available,
       maxStockLevel: stockItem.maxStockLevel,
-      daysOfInventory,
-      targetCoverageDays: policy.targetCoverageDays,
+      daysOfCover,
+      targetCoverageDays: config.targetCoverageDays,
       trendRatio: demand.trendRatio,
+      lowThreshold: config.lowRiskThreshold,
+      highThreshold: config.highRiskThreshold,
+      criticalThreshold: config.criticalRiskThreshold,
     });
 
-    const deadStockResult = this.riskService.evaluateDeadStock({
+    const deadStockResult = this.riskEvaluator.evaluateSlowAndDeadStock({
       availableStock: available,
       daysSinceLastSale,
-      configuredDeadStockDays: policy.deadStockDays,
+      slowMovingDays: config.slowMovingDays,
+      deadStockDays: config.deadStockDays,
       costPrice: Number(stockItem.costPrice),
       sellingPrice: Number(stockItem.sellingPrice),
     });
 
     // Unusual demand (using recent 3 days vs 30-day baseline)
     const recent3Series = series90.slice(Math.max(0, series90.length - 3));
-    const unusualDemand = this.riskService.detectUnusualDemand(
+    const unusualDemand = this.riskEvaluator.detectUnusualDemand(
       recent3Series,
       demand.avg30,
       demand.stdDev30
     );
 
-    // 8. Sync Smart Alerts
+    // 9. Sync Alerts
     await this.alertService.syncAlertsForSku({
       storeId,
       stockItemId,
@@ -205,36 +231,45 @@ export class DecisionEngineService {
       stockoutScore: stockoutRisk.score,
       stockoutSeverity: stockoutRisk.severity,
       overstockScore: overstockRisk.score,
+      overstockSeverity: overstockRisk.severity,
+      isSlowMoving: deadStockResult.isSlowMoving,
       isDeadStock: deadStockResult.isDeadStock,
       deadStockSeverity: deadStockResult.severity,
       daysSinceLastSale,
+      confidenceScore: confidence.score,
+      engineVersion: config.engineVersion,
       unusualDemand,
     });
 
-    // 9. Sync Pricing Recommendations
-    await this.pricingService.evaluatePricingRecommendation({
+    // 10. Sync Pricing Recommendations
+    const pricingEval = await this.pricingService.evaluatePricingRecommendation({
       storeId,
       stockItemId,
       sellingPrice: Number(stockItem.sellingPrice),
       costPrice: Number(stockItem.costPrice),
-      minimumMarginPct: policy.minimumMarginPct,
+      minimumMarginPct: config.minimumMarginPct,
+      maxMarkdownPct: config.maxMarkdownPct,
+      maxMarkupPct: config.maxMarkupPct,
       daysSinceLastSale,
-      daysOfInventory,
+      daysOfCover,
       overstockScore: overstockRisk.score,
+      stockoutScore: stockoutRisk.score,
       trend: demand.trend,
+      confidenceScore: confidence.score,
+      engineVersion: config.engineVersion,
     });
 
     const calculatedAt = new Date().toISOString();
+    const minimumPrice = PricingEvaluator.calculateMinimumPrice(Number(stockItem.costPrice), config.minimumMarginPct);
+    const expectedMarginPct = Number(
+      (((Number(stockItem.sellingPrice) - Number(stockItem.costPrice)) / Math.max(1, Number(stockItem.sellingPrice))) * 100).toFixed(1)
+    );
 
     const result: SkuDecisionAnalysisResult = {
       stockItemId,
       sku: stockItem.sku,
       productName: stockItem.name,
       categoryName: stockItem.product.category?.name || null,
-      pricing: {
-        costPrice: Number(stockItem.costPrice),
-        sellingPrice: Number(stockItem.sellingPrice),
-      },
       inventory: {
         onHand,
         reserved,
@@ -243,29 +278,40 @@ export class DecisionEngineService {
         maxStockLevel: stockItem.maxStockLevel,
       },
       demand,
-      policy,
-      metrics: {
+      coverage: {
         safetyStock: safetyStockResult.safetyStock,
         safetyStockMethod: safetyStockResult.method,
         reorderPoint,
-        daysOfInventory,
+        daysOfCover,
       },
-      risks: {
-        stockoutScore: stockoutRisk.score,
+      risk: {
+        stockout: stockoutRisk.score,
         stockoutSeverity: stockoutRisk.severity,
-        overstockScore: overstockRisk.score,
+        overstock: overstockRisk.score,
         overstockSeverity: overstockRisk.severity,
-        isDeadStock: deadStockResult.isDeadStock,
+        slowMoving: deadStockResult.isSlowMoving,
+        deadStock: deadStockResult.isDeadStock,
         deadStockSeverity: deadStockResult.severity,
         daysSinceLastSale,
         deadStockCostValue: deadStockResult.costValue,
         deadStockRetailValue: deadStockResult.retailValue,
         unusualDemand,
       },
+      confidence,
+      pricing: {
+        costPrice: Number(stockItem.costPrice),
+        sellingPrice: Number(stockItem.sellingPrice),
+        minimumPrice,
+        expectedMarginPct,
+      },
+      pricingEvaluation: pricingEval,
+      engineConfig: config,
+      engineVersion: config.engineVersion,
+      factors: pricingEval.factors,
       calculatedAt,
     };
 
-    // 10. Persist Decision Snapshot
+    // 11. Persist Decision Snapshot
     await this.prisma.decisionSnapshot.create({
       data: {
         storeId,
@@ -274,14 +320,15 @@ export class DecisionEngineService {
         inputJson: {
           pricing: result.pricing,
           inventory: result.inventory,
-          policy: result.policy as unknown as Prisma.InputJsonObject,
+          config: result.engineConfig as unknown as Prisma.InputJsonObject,
         } as Prisma.InputJsonObject,
         metricsJson: {
           demand: result.demand as unknown as Prisma.InputJsonObject,
-          metrics: result.metrics,
+          coverage: result.coverage,
+          confidence: result.confidence,
         } as Prisma.InputJsonObject,
-        risksJson: result.risks as unknown as Prisma.InputJsonObject,
-        version: 'DECISION_ENGINE_V1',
+        risksJson: result.risk as unknown as Prisma.InputJsonObject,
+        version: config.engineVersion,
       },
     });
 
@@ -323,27 +370,27 @@ export class DecisionEngineService {
     let totalDeadStockRetailValue = 0;
 
     for (const a of analyses) {
-      if (a.risks.stockoutScore >= 50 || a.inventory.available <= 0) {
+      if (a.risk.stockout >= 50 || a.inventory.available <= 0) {
         stockoutRiskCount++;
       }
-      if (a.risks.overstockScore >= 50) {
+      if (a.risk.overstock >= 50) {
         overstockRiskCount++;
       }
-      if (a.risks.isDeadStock) {
+      if (a.risk.deadStock) {
         deadStockCount++;
-        totalDeadStockCostValue += a.risks.deadStockCostValue;
-        totalDeadStockRetailValue += a.risks.deadStockRetailValue;
+        totalDeadStockCostValue += a.risk.deadStockCostValue;
+        totalDeadStockRetailValue += a.risk.deadStockRetailValue;
       }
     }
 
     // Filter list by requested riskFilter
     let filtered = analyses;
     if (query.riskFilter === 'STOCKOUT') {
-      filtered = analyses.filter((a) => a.risks.stockoutScore >= 50 || a.inventory.available <= 0);
+      filtered = analyses.filter((a) => a.risk.stockout >= 50 || a.inventory.available <= 0);
     } else if (query.riskFilter === 'OVERSTOCK') {
-      filtered = analyses.filter((a) => a.risks.overstockScore >= 50);
+      filtered = analyses.filter((a) => a.risk.overstock >= 50);
     } else if (query.riskFilter === 'DEAD_STOCK') {
-      filtered = analyses.filter((a) => a.risks.isDeadStock);
+      filtered = analyses.filter((a) => a.risk.deadStock);
     }
 
     // Pagination
@@ -371,15 +418,15 @@ export class DecisionEngineService {
   }
 
   /**
-   * Batch recalculates daily metrics and all SKUs for a store.
+   * Batch recalculates daily sales summaries and all SKUs for a store.
    */
   async recalculateStore(storeId: number) {
     const today = new Date();
     const fromDate = new Date();
     fromDate.setUTCDate(today.getUTCDate() - 90);
 
-    // 1. Rebuild daily metrics
-    const metricsResult = await this.dailyMetricsService.rebuildDailyMetrics(storeId, fromDate, today);
+    // 1. Rebuild daily sales summaries
+    const summaryResult = await this.dailySalesSummaryService.rebuildDailySalesSummary(storeId, fromDate, today);
 
     // 2. Fetch active StockItems
     const stockItems = await this.prisma.stockItem.findMany({
@@ -401,7 +448,7 @@ export class DecisionEngineService {
 
     return {
       storeId,
-      metricsUpdatedDays: metricsResult.updatedDays,
+      summariesUpdatedDays: summaryResult.updatedDays,
       totalSkus: stockItems.length,
       successCount,
       failureCount,

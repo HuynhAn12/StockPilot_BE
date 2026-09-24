@@ -1,16 +1,16 @@
 import { Request, Response, NextFunction } from 'express';
 import { DecisionEngineService } from './decision-engine.service';
-import { PolicyService } from './policy.service';
+import { EngineConfigService } from './engine-config.service';
 import {
   decisionSkuParamsSchema,
   decisionOverviewQuerySchema,
-  updatePolicySchema,
+  updateEngineConfigSchema,
 } from './decision-engine.schema';
 
 export class DecisionEngineController {
   constructor(
     private readonly service: DecisionEngineService = new DecisionEngineService(),
-    private readonly policyService: PolicyService = new PolicyService()
+    private readonly configService: EngineConfigService = new EngineConfigService()
   ) {}
 
   analyzeSku = async (req: Request, res: Response, next: NextFunction) => {
@@ -59,28 +59,26 @@ export class DecisionEngineController {
     }
   };
 
-  getPolicy = async (req: Request, res: Response, next: NextFunction) => {
+  getConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
-      const { stockItemId } = decisionSkuParamsSchema.parse(req.params);
 
-      const policy = await this.policyService.getPolicy(storeId, stockItemId);
+      const config = await this.configService.getConfig(storeId);
       return res.status(200).json({
         success: true,
-        data: policy,
+        data: config,
       });
     } catch (error) {
       next(error);
     }
   };
 
-  updatePolicy = async (req: Request, res: Response, next: NextFunction) => {
+  updateConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
-      const { stockItemId } = decisionSkuParamsSchema.parse(req.params);
-      const data = updatePolicySchema.parse(req.body);
+      const data = updateEngineConfigSchema.parse(req.body);
 
-      const updated = await this.policyService.upsertPolicy(storeId, stockItemId, data);
+      const updated = await this.configService.upsertConfig(storeId, data);
       return res.status(200).json({
         success: true,
         data: updated,

@@ -1,4 +1,4 @@
-import { DailyMetricAggregateRow } from '../daily-metrics/daily-metrics.service';
+import { DailySalesSummaryAggregateRow } from '../daily-sales-summary/daily-sales-summary.service';
 
 export interface SafetyStockResult {
   safetyStock: number;
@@ -6,17 +6,21 @@ export interface SafetyStockResult {
   zScore: number;
 }
 
-export interface RiskScoresResult {
+export interface RiskEvaluationResult {
   stockoutScore: number;
   stockoutSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   overstockScore: number;
   overstockSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  isSlowMoving: boolean;
   isDeadStock: boolean;
   deadStockSeverity: 'NONE' | 'WARNING' | 'CRITICAL';
-  deadStockDays: number;
   daysSinceLastSale: number | null;
   deadStockCostValue: number;
   deadStockRetailValue: number;
+  confidence: {
+    score: number;
+    level: 'LOW' | 'MEDIUM' | 'HIGH';
+  };
   unusualDemand: {
     isAnomaly: boolean;
     type: 'NONE' | 'CRITICAL_SPIKE' | 'HIGH_SPIKE' | 'DEMAND_DROP' | 'NEW_DEMAND_SPIKE';
@@ -24,10 +28,7 @@ export interface RiskScoresResult {
   };
 }
 
-export class RiskService {
-  /**
-   * Resolves standard Z-score corresponding to target service level.
-   */
+export class RiskEvaluator {
   public static getZScoreForServiceLevel(serviceLevel: number): number {
     if (serviceLevel >= 0.99) return 2.326;
     if (serviceLevel >= 0.975) return 1.96;
@@ -37,9 +38,7 @@ export class RiskService {
   }
 
   /**
-   * Computes Safety Stock.
-   * Uses statistical formula: Z * stdDev * sqrt(leadTime) if sufficient history exists and stdDev > 0.
-   * Otherwise falls back to ADD_30 * safetyDays.
+   * Calculates Safety Stock.
    */
   calculateSafetyStock(params: {
     stdDev30: number;
@@ -50,7 +49,7 @@ export class RiskService {
     hasSufficientHistory: boolean;
   }): SafetyStockResult {
     const { stdDev30, leadTimeDays, serviceLevel, avg30, safetyDays, hasSufficientHistory } = params;
-    const zScore = RiskService.getZScoreForServiceLevel(serviceLevel);
+    const zScore = RiskEvaluator.getZScoreForServiceLevel(serviceLevel);
 
     if (hasSufficientHistory && stdDev30 > 0) {
       const calculated = Math.ceil(zScore * stdDev30 * Math.sqrt(Math.max(1, leadTimeDays)));
@@ -70,34 +69,58 @@ export class RiskService {
   }
 
   /**
-   * Computes Reorder Point (ROP).
-   * ROP = ceil((ADD_30 * LeadTimeDays) + SafetyStock)
+   * Calculates Reorder Point (ROP = ceil((ADD_30 * LeadTime) + SafetyStock)).
    */
   calculateReorderPoint(avg30: number, leadTimeDays: number, safetyStock: number): number {
     return Math.ceil(avg30 * Math.max(1, leadTimeDays) + safetyStock);
   }
 
   /**
-   * Computes Days of Inventory (DOI).
-   * DOI = AvailableStock / ADD_30
+   * Calculates Days of Inventory Coverage (DaysOfCover = AvailableStock / ADD_30).
    */
-  calculateDaysOfInventory(availableStock: number, avg30: number): number | null {
+  calculateDaysOfCover(availableStock: number, avg30: number): number | null {
     if (avg30 <= 0) return null;
     return Number((availableStock / avg30).toFixed(1));
   }
 
   /**
-   * Computes Stockout Risk (0 - 100).
+   * Calculates deterministic Decision Confidence based on history depth and quality.
+   */
+  calculateConfidence(historyDays: number, minimumHistoryDays: number, daysWithSales: number): {
+    score: number;
+    level: 'LOW' | 'MEDIUM' | 'HIGH';
+  } {
+    const coverage = Math.min(1.0, Math.max(0, historyDays / Math.max(1, minimumHistoryDays)));
+    let rawScore = Math.round(coverage * 80);
+    if (daysWithSales >= 5) {
+      rawScore += 20;
+    } else {
+      rawScore += daysWithSales * 4;
+    }
+    const score = Math.min(100, Math.max(0, rawScore));
+
+    let level: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
+    if (score >= 75) level = 'HIGH';
+    else if (score >= 40) level = 'MEDIUM';
+
+    return { score, level };
+  }
+
+  /**
+   * Calculates Stockout Risk (0 - 100).
    */
   calculateStockoutRisk(params: {
     availableStock: number;
     reorderPoint: number;
-    daysOfInventory: number | null;
+    daysOfCover: number | null;
     leadTimeDays: number;
     safetyDays: number;
     trendRatio: number;
+    lowThreshold: number;
+    highThreshold: number;
+    criticalThreshold: number;
   }): { score: number; severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' } {
-    const { availableStock, reorderPoint, daysOfInventory, leadTimeDays, safetyDays, trendRatio } = params;
+    const { availableStock, reorderPoint, daysOfCover, leadTimeDays, safetyDays, trendRatio, highThreshold, criticalThreshold, lowThreshold } = params;
 
     if (availableStock <= 0) {
       return { score: 100, severity: 'CRITICAL' };
@@ -105,36 +128,39 @@ export class RiskService {
 
     const shortageRatio = Math.max(0, reorderPoint - availableStock) / Math.max(reorderPoint, 1);
     const requiredCoverage = Math.max(1, leadTimeDays + safetyDays);
-    const coverageRisk = daysOfInventory !== null ? Math.max(0, 1 - daysOfInventory / requiredCoverage) : 0;
+    const coverageRisk = daysOfCover !== null ? Math.max(0, 1 - daysOfCover / requiredCoverage) : 0;
     const trendRisk = Math.min(Math.max((trendRatio - 1.0) / 1.0, 0), 1);
 
     const weightedScore = Math.round(100 * (0.5 * shortageRatio + 0.35 * coverageRisk + 0.15 * trendRisk));
     const score = Math.min(100, Math.max(0, weightedScore));
 
     let severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
-    if (score >= 75) severity = 'CRITICAL';
-    else if (score >= 50) severity = 'HIGH';
-    else if (score >= 25) severity = 'MEDIUM';
+    if (score >= criticalThreshold) severity = 'CRITICAL';
+    else if (score >= highThreshold) severity = 'HIGH';
+    else if (score >= lowThreshold) severity = 'MEDIUM';
 
     return { score, severity };
   }
 
   /**
-   * Computes Overstock Risk (0 - 100).
+   * Calculates Overstock Risk (0 - 100).
    */
   calculateOverstockRisk(params: {
     availableStock: number;
     maxStockLevel: number;
-    daysOfInventory: number | null;
+    daysOfCover: number | null;
     targetCoverageDays: number;
     trendRatio: number;
+    lowThreshold: number;
+    highThreshold: number;
+    criticalThreshold: number;
   }): { score: number; severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' } {
-    const { availableStock, maxStockLevel, daysOfInventory, targetCoverageDays, trendRatio } = params;
+    const { availableStock, maxStockLevel, daysOfCover, targetCoverageDays, trendRatio, lowThreshold, highThreshold, criticalThreshold } = params;
 
     const qtyExcessRatio = Math.max(0, availableStock - maxStockLevel) / Math.max(maxStockLevel, 1);
     const coverageExcess =
-      daysOfInventory !== null
-        ? Math.max(0, daysOfInventory - targetCoverageDays) / Math.max(targetCoverageDays, 1)
+      daysOfCover !== null
+        ? Math.max(0, daysOfCover - targetCoverageDays) / Math.max(targetCoverageDays, 1)
         : 0;
     const declineRisk = Math.min(Math.max(1.0 - trendRatio, 0), 1);
 
@@ -142,32 +168,35 @@ export class RiskService {
     const score = Math.min(100, Math.max(0, Math.round(100 * weighted)));
 
     let severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
-    if (score >= 75) severity = 'CRITICAL';
-    else if (score >= 50) severity = 'HIGH';
-    else if (score >= 25) severity = 'MEDIUM';
+    if (score >= criticalThreshold) severity = 'CRITICAL';
+    else if (score >= highThreshold) severity = 'HIGH';
+    else if (score >= lowThreshold) severity = 'MEDIUM';
 
     return { score, severity };
   }
 
   /**
-   * Evaluates Dead Stock status and valuation.
+   * Evaluates Slow Moving and Dead Stock status.
    */
-  evaluateDeadStock(params: {
+  evaluateSlowAndDeadStock(params: {
     availableStock: number;
     daysSinceLastSale: number | null;
-    configuredDeadStockDays: number;
+    slowMovingDays: number;
+    deadStockDays: number;
     costPrice: number;
     sellingPrice: number;
   }): {
+    isSlowMoving: boolean;
     isDeadStock: boolean;
     severity: 'NONE' | 'WARNING' | 'CRITICAL';
     costValue: number;
     retailValue: number;
   } {
-    const { availableStock, daysSinceLastSale, configuredDeadStockDays, costPrice, sellingPrice } = params;
+    const { availableStock, daysSinceLastSale, slowMovingDays, deadStockDays, costPrice, sellingPrice } = params;
 
-    if (availableStock <= 0 || daysSinceLastSale === null || daysSinceLastSale < configuredDeadStockDays) {
+    if (availableStock <= 0 || daysSinceLastSale === null) {
       return {
+        isSlowMoving: false,
         isDeadStock: false,
         severity: 'NONE',
         costValue: 0,
@@ -175,12 +204,22 @@ export class RiskService {
       };
     }
 
-    const severity: 'WARNING' | 'CRITICAL' = daysSinceLastSale >= 180 ? 'CRITICAL' : 'WARNING';
+    const isSlowMoving = daysSinceLastSale >= slowMovingDays;
+    const isDeadStock = daysSinceLastSale >= deadStockDays;
+
+    let severity: 'NONE' | 'WARNING' | 'CRITICAL' = 'NONE';
+    if (daysSinceLastSale >= 180) {
+      severity = 'CRITICAL';
+    } else if (isDeadStock || isSlowMoving) {
+      severity = 'WARNING';
+    }
+
     const costValue = Number((availableStock * costPrice).toFixed(2));
     const retailValue = Number((availableStock * sellingPrice).toFixed(2));
 
     return {
-      isDeadStock: true,
+      isSlowMoving,
+      isDeadStock,
       severity,
       costValue,
       retailValue,
@@ -191,7 +230,7 @@ export class RiskService {
    * Detects unusual demand spikes or drops based on recent 3 days vs 30 days history.
    */
   detectUnusualDemand(
-    recent3Series: DailyMetricAggregateRow[],
+    recent3Series: DailySalesSummaryAggregateRow[],
     mean30: number,
     stdDev30: number
   ): {

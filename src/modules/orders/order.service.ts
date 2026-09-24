@@ -3,7 +3,6 @@ import { prisma as defaultPrisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createOrderSchema, cancelOrderSchema } from './order.schema';
-import { toDecimal, toNumber } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 
 export class OrderService {

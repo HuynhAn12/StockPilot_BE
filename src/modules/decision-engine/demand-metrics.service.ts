@@ -1,4 +1,4 @@
-import { DailyMetricAggregateRow } from '../daily-metrics/daily-metrics.service';
+import { DailySalesSummaryAggregateRow } from '../daily-sales-summary/daily-sales-summary.service';
 
 export type DemandTrend =
   | 'STRONG_UP'
@@ -22,12 +22,12 @@ export interface DemandMetricsResult {
   daysWithSales90: number;
 }
 
-export class DemandService {
+export class DemandMetricsService {
   /**
-   * Calculates deterministic demand metrics from a 90-day daily metric series.
+   * Calculates deterministic demand metrics from a 90-day daily sales summary series.
    * Assumes series is sorted chronologically ascending with exactly 90 days.
    */
-  calculateDemandMetrics(series90: DailyMetricAggregateRow[]): DemandMetricsResult {
+  calculateDemandMetrics(series90: DailySalesSummaryAggregateRow[]): DemandMetricsResult {
     const totalDays = series90.length;
     if (totalDays === 0) {
       return {
@@ -48,7 +48,7 @@ export class DemandService {
     const series30 = series90.slice(Math.max(0, totalDays - 30));
     const series60 = series90.slice(Math.max(0, totalDays - 60));
 
-    const sumQty = (arr: DailyMetricAggregateRow[]) =>
+    const sumQty = (arr: DailySalesSummaryAggregateRow[]) =>
       arr.reduce((acc, row) => acc + row.netSoldQty, 0);
 
     const totalSold7 = sumQty(series7);

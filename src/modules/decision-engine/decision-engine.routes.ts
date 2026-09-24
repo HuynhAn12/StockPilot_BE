@@ -6,7 +6,7 @@ import { validate } from '../../common/middleware/validate';
 import {
   decisionSkuParamsSchema,
   decisionOverviewQuerySchema,
-  updatePolicySchema,
+  updateEngineConfigSchema,
 } from './decision-engine.schema';
 
 export const decisionEngineRouter = Router();
@@ -38,17 +38,30 @@ decisionEngineRouter.post(
   controller.recalculate
 );
 
-// Inventory Policy
+// Engine Config
 decisionEngineRouter.get(
-  '/policy/:stockItemId',
+  '/config',
   requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
-  validate({ params: decisionSkuParamsSchema }),
-  controller.getPolicy
+  controller.getConfig
 );
 
 decisionEngineRouter.put(
-  '/policy/:stockItemId',
+  '/config',
   requireRole('SHOP_OWNER'),
-  validate({ params: decisionSkuParamsSchema, body: updatePolicySchema }),
-  controller.updatePolicy
+  validate({ body: updateEngineConfigSchema }),
+  controller.updateConfig
+);
+
+// Backward compatibility alias for /policy
+decisionEngineRouter.get(
+  '/policy/:stockItemId?',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  controller.getConfig
+);
+
+decisionEngineRouter.put(
+  '/policy/:stockItemId?',
+  requireRole('SHOP_OWNER'),
+  validate({ body: updateEngineConfigSchema }),
+  controller.updateConfig
 );

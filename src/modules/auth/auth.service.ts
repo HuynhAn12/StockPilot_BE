@@ -165,9 +165,9 @@ export class AuthService {
   }
 
   async refreshToken(token: string, meta?: { userAgent?: string; ipAddress?: string }) {
-    let payload;
+    let _payload;
     try {
-      payload = verifyRefreshToken(token);
+      _payload = verifyRefreshToken(token);
     } catch {
       throw new UnauthenticatedError('Refresh token không hợp lệ hoặc đã hết hạn');
     }

@@ -1,7 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
-import { NotFoundError } from '../../common/errors/app-error';
-import { DecisionEngineService, SkuDecisionAnalysisResult } from '../decision-engine/decision-engine.service';
+import { DecisionEngineService } from '../decision-engine/decision-engine.service';
 
 export class AssistantService {
   constructor(
@@ -16,7 +15,7 @@ export class AssistantService {
     const analysis = await this.decisionEngineService.analyzeSku(storeId, stockItemId);
 
     // Fetch active alerts for this SKU
-    const alerts = await this.prisma.smartAlert.findMany({
+    const alerts = await this.prisma.alert.findMany({
       where: {
         storeId,
         stockItemId,
@@ -27,7 +26,8 @@ export class AssistantService {
         severity: true,
         title: true,
         message: true,
-        score: true,
+        riskScore: true,
+        confidence: true,
       },
     });
 
@@ -42,6 +42,7 @@ export class AssistantService {
         currentPrice: true,
         recommendedPrice: true,
         discountPct: true,
+        action: true,
         reasonJson: true,
       },
     });
@@ -57,9 +58,10 @@ export class AssistantService {
       },
       inventory: analysis.inventory,
       demand: analysis.demand,
-      policy: analysis.policy,
-      metrics: analysis.metrics,
-      risks: analysis.risks,
+      coverage: analysis.coverage,
+      risk: analysis.risk,
+      confidence: analysis.confidence,
+      engineConfig: analysis.engineConfig,
       activeAlerts: alerts,
       pricingRecommendation: recommendation,
     };
@@ -69,41 +71,45 @@ export class AssistantService {
 
     // 1. Inventory & Demand summary
     explanationParagraphs.push(
-      `Sản phẩm "${analysis.productName}" (SKU: ${analysis.sku}) hiện có ${analysis.inventory.available} đơn vị khả dụng trong kho (tổng tồn ${analysis.inventory.onHand}, đang giữ chỗ ${analysis.inventory.reserved}). Nhu cầu tiêu thụ trung bình 30 ngày qua là ${analysis.demand.avg30} đơn vị/ngày.`
+      `Sản phẩm "${analysis.productName}" (SKU: ${analysis.sku}) hiện có ${analysis.inventory.available} đơn vị khả dụng trong kho (tổng tồn ${analysis.inventory.onHand}, đang giữ chỗ ${analysis.inventory.reserved}). Nhu cầu tiêu thụ trung bình 30 ngày qua là ${analysis.demand.avg30} đơn vị/ngày (ADD_7: ${analysis.demand.avg7}, xu hướng: ${analysis.demand.trend}). Độ tin cậy tính toán: ${analysis.confidence.score}/100 (${analysis.confidence.level}).`
     );
 
     // 2. Stockout Risk Explanation
-    if (analysis.risks.stockoutScore >= 50 || analysis.inventory.available <= 0) {
+    if (analysis.risk.stockout >= 50 || analysis.inventory.available <= 0) {
       if (analysis.inventory.available <= 0) {
         explanationParagraphs.push(
-          `CẢNH BÁO HẾT HÀNG (Điểm rủi ro: 100/100): Sản phẩm hiện không còn hàng tồn trong kho. Với lead time nhập hàng ${analysis.policy.leadTimeDays} ngày và điểm đặt hàng lại ROP là ${analysis.metrics.reorderPoint} đơn vị, cần tạo đơn nhập hàng ngay lập tức để tránh mất doanh số.`
+          `CẢNH BÁO HẾT HÀNG (Điểm rủi ro: 100/100): Sản phẩm hiện không còn hàng tồn khả dụng trong kho. Với lead time nhập hàng ${analysis.engineConfig.leadTimeDays} ngày và điểm đặt hàng lại ROP là ${analysis.coverage.reorderPoint} đơn vị, cần tạo đơn nhập hàng ngay lập tức để tránh mất doanh số.`
         );
       } else {
         explanationParagraphs.push(
-          `NGUY CƠ THIẾU HÀNG CAO (Điểm rủi ro: ${analysis.risks.stockoutScore}/100): Tồn kho khả dụng (${analysis.inventory.available}) đang thấp hơn điểm đặt hàng lại (${analysis.metrics.reorderPoint} đơn vị, bao gồm ${analysis.metrics.safetyStock} đơn vị tồn an toàn). Thời gian tồn kho ước tính (DOI) chỉ còn ${analysis.metrics.daysOfInventory ?? 'N/A'} ngày trong khi thời gian giao hàng từ nhà cung cấp là ${analysis.policy.leadTimeDays} ngày.`
+          `NGUY CƠ THIẾU HÀNG CAO (Điểm rủi ro: ${analysis.risk.stockout}/100): Tồn kho khả dụng (${analysis.inventory.available}) đang thấp hơn điểm đặt hàng lại (${analysis.coverage.reorderPoint} đơn vị, bao gồm ${analysis.coverage.safetyStock} đơn vị tồn an toàn). Thời gian tồn kho ước tính (Days of Cover) chỉ còn ${analysis.coverage.daysOfCover ?? 'N/A'} ngày trong khi thời gian giao hàng từ nhà cung cấp là ${analysis.engineConfig.leadTimeDays} ngày.`
         );
       }
     } else {
       explanationParagraphs.push(
-        `Tình trạng cung ứng an toàn: Mức tồn ${analysis.inventory.available} đơn vị cao hơn điểm đặt hàng lại ${analysis.metrics.reorderPoint} đơn vị (DOI: ${analysis.metrics.daysOfInventory ?? 'N/A'} ngày).`
+        `Tình trạng cung ứng an toàn: Mức tồn ${analysis.inventory.available} đơn vị cao hơn điểm đặt hàng lại ${analysis.coverage.reorderPoint} đơn vị (Days of Cover: ${analysis.coverage.daysOfCover ?? 'N/A'} ngày).`
       );
     }
 
     // 3. Overstock / Dead Stock Explanation
-    if (analysis.risks.isDeadStock) {
+    if (analysis.risk.deadStock) {
       explanationParagraphs.push(
-        `CẢNH BÁO TỒN KHO Ứ ĐỌNG: Sản phẩm chưa có giao dịch bán hàng nào trong ${analysis.risks.daysSinceLastSale ?? 90} ngày qua, làm đọng khoảng ${(analysis.risks.deadStockCostValue).toLocaleString()} VNĐ vốn giá gốc.`
+        `CẢNH BÁO TỒN KHO Ứ ĐỌNG (Dead Stock): Sản phẩm chưa có giao dịch bán hàng nào trong ${analysis.risk.daysSinceLastSale ?? 90} ngày qua, làm đọng khoảng ${(analysis.risk.deadStockCostValue).toLocaleString()} VNĐ vốn giá gốc.`
       );
-    } else if (analysis.risks.overstockScore >= 50) {
+    } else if (analysis.risk.slowMoving) {
       explanationParagraphs.push(
-        `CẢNH BÁO THỪA HÀNG (Điểm rủi ro: ${analysis.risks.overstockScore}/100): Tồn kho hiện tại vượt mức tối đa hoặc mục tiêu lưu kho ${analysis.policy.targetCoverageDays} ngày.`
+        `CẢNH BÁO HÀNG CHẬM LUÂN CHUYỂN: Sản phẩm không phát sinh bán hàng trong ${analysis.risk.daysSinceLastSale ?? 60} ngày qua.`
+      );
+    } else if (analysis.risk.overstock >= 50) {
+      explanationParagraphs.push(
+        `CẢNH BÁO THỪA HÀNG (Điểm rủi ro: ${analysis.risk.overstock}/100): Tồn kho hiện tại vượt mức tối đa hoặc mục tiêu lưu kho ${analysis.engineConfig.targetCoverageDays} ngày.`
       );
     }
 
     // 4. Pricing recommendation note
     if (recommendation) {
       explanationParagraphs.push(
-        `ĐỀ XUẤT ĐIỀU CHỈNH GIÁ: Hệ thống đề xuất giảm ${recommendation.discountPct}% từ ${Number(recommendation.currentPrice).toLocaleString()} VNĐ xuống ${Number(recommendation.recommendedPrice).toLocaleString()} VNĐ nhằm kích cầu giải phóng tồn kho, đồng thời vẫn bảo đảm biên lợi nhuận tối thiểu ${(analysis.policy.minimumMarginPct * 100).toFixed(0)}%.`
+        `ĐỀ XUẤT ĐIỀU CHỈNH GIÁ: Hệ thống đề xuất hành động ${recommendation.action} từ ${Number(recommendation.currentPrice).toLocaleString()} VNĐ sang ${Number(recommendation.recommendedPrice).toLocaleString()} VNĐ nhằm tối ưu hóa vòng quay hàng tồn, đồng thời vẫn bảo đảm biên lợi nhuận gộp tối thiểu ${(analysis.engineConfig.minimumMarginPct * 100).toFixed(0)}%.`
       );
     }
 
@@ -127,7 +133,7 @@ export class AssistantService {
       limit: 100,
     });
 
-    const openAlertsCount = await this.prisma.smartAlert.count({
+    const openAlertsCount = await this.prisma.alert.count({
       where: { storeId, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
     });
 

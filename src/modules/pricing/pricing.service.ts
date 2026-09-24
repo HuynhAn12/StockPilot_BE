@@ -1,7 +1,8 @@
 import { PrismaClient, Prisma, RecommendationStatus } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError, ValidationError } from '../../common/errors/app-error';
-import { DemandTrend } from '../decision-engine/demand.service';
+import { DemandTrend } from '../decision-engine/demand-metrics.service';
+import { PricingEvaluator, PricingEvaluationResult } from '../decision-engine/pricing-evaluator';
 
 export interface PricingEvaluationInput {
   storeId: number;
@@ -9,122 +10,74 @@ export interface PricingEvaluationInput {
   sellingPrice: number;
   costPrice: number;
   minimumMarginPct: number;
+  maxMarkdownPct: number;
+  maxMarkupPct: number;
   daysSinceLastSale: number | null;
-  daysOfInventory: number | null;
+  daysOfCover: number | null;
   overstockScore: number;
+  stockoutScore: number;
   trend: DemandTrend;
+  confidenceScore: number;
+  engineVersion?: string;
 }
 
 export class PricingService {
-  constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
+  private readonly evaluator: PricingEvaluator;
+
+  constructor(
+    private readonly prisma: PrismaClient = defaultPrisma,
+    evaluator?: PricingEvaluator
+  ) {
+    this.evaluator = evaluator ?? new PricingEvaluator();
+  }
 
   /**
-   * Evaluates if a pricing recommendation should be generated for a SKU.
+   * Evaluates if a pricing recommendation should be generated for a SKU and syncs with DB.
    */
-  async evaluatePricingRecommendation(input: PricingEvaluationInput) {
+  async evaluatePricingRecommendation(input: PricingEvaluationInput): Promise<PricingEvaluationResult> {
     const {
       storeId,
       stockItemId,
       sellingPrice,
       costPrice,
       minimumMarginPct,
+      maxMarkdownPct,
+      maxMarkupPct,
       daysSinceLastSale,
-      daysOfInventory,
+      daysOfCover,
       overstockScore,
+      stockoutScore,
       trend,
+      confidenceScore,
+      engineVersion = 'DECISION_ENGINE_V1',
     } = input;
 
-    // 1. Price floor guard: priceFloor = costPrice * (1 + minimumMarginPct)
-    const priceFloor = Math.ceil(costPrice * (1 + minimumMarginPct));
-
-    // If current selling price is already at or below floor, no markdown recommended
-    if (sellingPrice <= priceFloor) {
-      return null;
-    }
-
-    // 2. Base discount determination
-    let baseDiscount = 0;
-    const factors: Array<{ code: string; label: string; impact: string; value?: unknown }> = [];
-
-    if (daysSinceLastSale !== null && daysSinceLastSale >= 180) {
-      baseDiscount = 0.25;
-      factors.push({
-        code: 'DEAD_STOCK_CRITICAL',
-        label: `Tồn kho bất động trên 180 ngày (${daysSinceLastSale} ngày không phát sinh bán)`,
-        impact: 'GIẢM_25%',
-        value: daysSinceLastSale,
-      });
-    } else if (daysSinceLastSale !== null && daysSinceLastSale >= 90) {
-      baseDiscount = 0.15;
-      factors.push({
-        code: 'DEAD_STOCK_WARNING',
-        label: `Tồn kho chậm luân chuyển (${daysSinceLastSale} ngày không phát sinh bán)`,
-        impact: 'GIẢM_15%',
-        value: daysSinceLastSale,
-      });
-    } else if (overstockScore >= 50 || (daysOfInventory !== null && daysOfInventory > 60)) {
-      baseDiscount = 0.1;
-      factors.push({
-        code: 'OVERSTOCK_RISK',
-        label: `Tồn kho dư thừa cao (Điểm rủi ro: ${overstockScore}, DOI: ${daysOfInventory ?? 'N/A'} ngày)`,
-        impact: 'GIẢM_10%',
-        value: { overstockScore, daysOfInventory },
-      });
-    }
-
-    // If no risk trigger, return null
-    if (baseDiscount === 0) {
-      return null;
-    }
-
-    // 3. Trend adjustment
-    let trendAdjustment = 0;
-    if (trend === 'STRONG_DOWN') {
-      trendAdjustment = 0.05;
-      factors.push({ code: 'DEMAND_TREND_STRONG_DOWN', label: 'Xu hướng nhu cầu giảm mạnh', impact: '+5% giảm giá' });
-    } else if (trend === 'DOWN') {
-      trendAdjustment = 0.03;
-      factors.push({ code: 'DEMAND_TREND_DOWN', label: 'Xu hướng nhu cầu giảm', impact: '+3% giảm giá' });
-    } else if (trend === 'UP') {
-      trendAdjustment = -0.03;
-      factors.push({ code: 'DEMAND_TREND_UP', label: 'Nhu cầu đang có xu hướng tăng', impact: '-3% giảm giá' });
-    } else if (trend === 'STRONG_UP') {
-      trendAdjustment = -0.05;
-      factors.push({ code: 'DEMAND_TREND_STRONG_UP', label: 'Nhu cầu tăng mạnh', impact: '-5% giảm giá' });
-    }
-
-    const totalDiscountPct = Math.min(0.4, Math.max(0.05, baseDiscount + trendAdjustment));
-    const candidatePrice = sellingPrice * (1 - totalDiscountPct);
-
-    // Apply Price Floor Clamp
-    let finalRecommendedPrice = Math.max(priceFloor, candidatePrice);
-
-    // Round to nearest 1,000 VND
-    finalRecommendedPrice = Math.round(finalRecommendedPrice / 1000) * 1000;
-
-    // Safety check: recommended price must be strictly less than current price
-    if (finalRecommendedPrice >= sellingPrice) {
-      return null;
-    }
-
-    const actualDiscountPct = Number((((sellingPrice - finalRecommendedPrice) / sellingPrice) * 100).toFixed(1));
-    const expectedMarginPct = Number((((finalRecommendedPrice - costPrice) / finalRecommendedPrice) * 100).toFixed(1));
-
-    factors.push({
-      code: 'PRICE_FLOOR_GUARD',
-      label: `Biên lợi nhuận tối thiểu bảo đảm: ${(minimumMarginPct * 100).toFixed(0)}% (Giá sàn: ${priceFloor.toLocaleString()} đ)`,
-      impact: 'GIÁ_SÀN_BẢO_VỆ',
-      value: { priceFloor, expectedMarginPct },
+    const evaluation = this.evaluator.evaluatePricing({
+      sellingPrice,
+      costPrice,
+      minimumMarginPct,
+      maxMarkdownPct,
+      maxMarkupPct,
+      daysSinceLastSale,
+      daysOfCover,
+      overstockScore,
+      stockoutScore,
+      trend,
+      confidenceScore,
     });
+
+    if (!evaluation.shouldGenerateRecommendation) {
+      return evaluation;
+    }
 
     const reasonJson = {
       sellingPrice,
       costPrice,
-      priceFloor,
-      minimumMarginPct,
-      expectedMarginPct,
-      actualDiscountPct,
-      factors,
+      minimumPrice: evaluation.minimumPrice,
+      expectedMarginPct: evaluation.expectedMarginPct,
+      discountPct: evaluation.discountPct,
+      action: evaluation.action,
+      factors: evaluation.factors,
     };
 
     // Check if there is already a PENDING recommendation for this SKU
@@ -138,35 +91,40 @@ export class PricingService {
     });
 
     if (existing) {
-      const updated = await this.prisma.pricingRecommendation.update({
+      await this.prisma.pricingRecommendation.update({
         where: { id: existing.id },
         data: {
           currentPrice: new Prisma.Decimal(sellingPrice),
-          recommendedPrice: new Prisma.Decimal(finalRecommendedPrice),
-          discountPct: new Prisma.Decimal(actualDiscountPct),
-          score: new Prisma.Decimal(overstockScore),
+          recommendedPrice: new Prisma.Decimal(evaluation.recommendedPrice),
+          discountPct: new Prisma.Decimal(evaluation.discountPct),
+          action: evaluation.action,
+          riskScore: new Prisma.Decimal(Math.max(overstockScore, stockoutScore)),
+          confidence: new Prisma.Decimal(confidenceScore),
           reasonJson: reasonJson as Prisma.InputJsonValue,
+          engineVersion,
           expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days
         },
       });
-      return updated;
+    } else {
+      await this.prisma.pricingRecommendation.create({
+        data: {
+          storeId,
+          stockItemId,
+          currentPrice: new Prisma.Decimal(sellingPrice),
+          recommendedPrice: new Prisma.Decimal(evaluation.recommendedPrice),
+          discountPct: new Prisma.Decimal(evaluation.discountPct),
+          action: evaluation.action,
+          riskScore: new Prisma.Decimal(Math.max(overstockScore, stockoutScore)),
+          confidence: new Prisma.Decimal(confidenceScore),
+          reasonJson: reasonJson as Prisma.InputJsonValue,
+          status: 'PENDING',
+          engineVersion,
+          expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+        },
+      });
     }
 
-    const created = await this.prisma.pricingRecommendation.create({
-      data: {
-        storeId,
-        stockItemId,
-        currentPrice: new Prisma.Decimal(sellingPrice),
-        recommendedPrice: new Prisma.Decimal(finalRecommendedPrice),
-        discountPct: new Prisma.Decimal(actualDiscountPct),
-        score: new Prisma.Decimal(overstockScore),
-        reasonJson: reasonJson as Prisma.InputJsonValue,
-        status: 'PENDING',
-        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      },
-    });
-
-    return created;
+    return evaluation;
   }
 
   async listRecommendations(
@@ -244,11 +202,14 @@ export class PricingService {
     }
 
     return await this.prisma.$transaction(async (tx) => {
+      const oldPrice = rec.stockItem.sellingPrice;
+      const newPrice = rec.recommendedPrice;
+
       const updated = await tx.pricingRecommendation.update({
         where: { id: recommendationId },
         data: {
           status: 'ACCEPTED',
-          acceptedPrice: rec.recommendedPrice,
+          finalUserSelectedPrice: newPrice,
           decidedById: userId,
           decidedAt: new Date(),
         },
@@ -257,7 +218,21 @@ export class PricingService {
       if (applyToStockItem) {
         await tx.stockItem.update({
           where: { id: rec.stockItemId },
-          data: { sellingPrice: rec.recommendedPrice },
+          data: { sellingPrice: newPrice },
+        });
+
+        // Record immutable price history
+        await tx.priceHistory.create({
+          data: {
+            storeId,
+            stockItemId: rec.stockItemId,
+            oldPrice,
+            newPrice,
+            source: 'RECOMMENDATION_ACCEPT',
+            recommendationId: rec.id,
+            changedById: userId,
+            reason: `Chấp nhận đề xuất điều chỉnh giá từ hệ thống (${rec.action})`,
+          },
         });
       }
 
@@ -265,7 +240,7 @@ export class PricingService {
     });
   }
 
-  async rejectRecommendation(storeId: number, userId: number, recommendationId: number) {
+  async rejectRecommendation(storeId: number, userId: number, recommendationId: number, _reason?: string) {
     const rec = await this.prisma.pricingRecommendation.findUnique({
       where: { id: recommendationId },
     });
@@ -317,11 +292,14 @@ export class PricingService {
     }
 
     return await this.prisma.$transaction(async (tx) => {
+      const oldPrice = rec.stockItem.sellingPrice;
+      const newPrice = new Prisma.Decimal(customPrice);
+
       const updated = await tx.pricingRecommendation.update({
         where: { id: recommendationId },
         data: {
           status: 'MODIFIED',
-          acceptedPrice: new Prisma.Decimal(customPrice),
+          finalUserSelectedPrice: newPrice,
           decidedById: userId,
           decidedAt: new Date(),
         },
@@ -330,11 +308,52 @@ export class PricingService {
       if (applyToStockItem) {
         await tx.stockItem.update({
           where: { id: rec.stockItemId },
-          data: { sellingPrice: new Prisma.Decimal(customPrice) },
+          data: { sellingPrice: newPrice },
+        });
+
+        // Record immutable price history
+        await tx.priceHistory.create({
+          data: {
+            storeId,
+            stockItemId: rec.stockItemId,
+            oldPrice,
+            newPrice,
+            source: 'RECOMMENDATION_MODIFY',
+            recommendationId: rec.id,
+            changedById: userId,
+            reason: `Chủ cửa hàng điều chỉnh giá theo đề xuất tuỳ chỉnh (${customPrice.toLocaleString()} đ)`,
+          },
         });
       }
 
       return updated;
+    });
+  }
+
+  async getPriceHistories(storeId: number, stockItemId?: number, limit = 50) {
+    return await this.prisma.priceHistory.findMany({
+      where: {
+        storeId,
+        ...(stockItemId ? { stockItemId } : {}),
+      },
+      orderBy: { changedAt: 'desc' },
+      take: limit,
+      include: {
+        changedBy: {
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+          },
+        },
+        stockItem: {
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+          },
+        },
+      },
     });
   }
 }

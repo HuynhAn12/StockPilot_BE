@@ -1,4 +1,4 @@
-import { PrismaClient, MovementType, Prisma } from '@prisma/client';
+import { PrismaClient, MovementType } from '@prisma/client';
 import { InsufficientStockError, NotFoundError } from '../../common/errors/app-error';
 
 type TransactionClient = Omit<

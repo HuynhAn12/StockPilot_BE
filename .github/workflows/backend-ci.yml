@@ -51,6 +51,9 @@ jobs:
       - name: Apply Database Migrations
         run: npx prisma migrate deploy
 
+      - name: Code Quality & Lint Gate
+        run: npm run lint
+
       - name: TypeScript Build
         run: npm run build
 

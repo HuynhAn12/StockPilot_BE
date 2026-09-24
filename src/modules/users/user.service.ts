@@ -1,6 +1,6 @@
 import { prisma } from '../../config/db';
 import { hashPassword } from '../../common/utils/password';
-import { ConflictError, NotFoundError } from '../../common/errors/app-error';
+import { ConflictError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createStaffSchema } from './user.schema';
 

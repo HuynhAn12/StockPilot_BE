@@ -8,6 +8,6 @@ const controller = new AnalyticsController();
 
 analyticsRouter.use(authMiddleware);
 analyticsRouter.use(requireStoreScope);
-analyticsRouter.use(requireRole('SHOP_OWNER', 'ADMIN'));
+analyticsRouter.use(requireRole('SHOP_OWNER'));
 
 analyticsRouter.get('/dashboard', (req, res, next) => controller.getDashboard(req, res, next));

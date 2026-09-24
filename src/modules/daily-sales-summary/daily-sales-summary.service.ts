@@ -1,31 +1,32 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 
-export interface DailyMetricAggregateRow {
-  metricDate: string; // YYYY-MM-DD
+export interface DailySalesSummaryAggregateRow {
+  summaryDate: string; // YYYY-MM-DD
   grossSoldQty: number;
-  returnedQty: number;
+  returnQty: number;
   netSoldQty: number;
   grossRevenue: number;
   refundAmount: number;
   netRevenue: number;
+  cogs: number;
+  grossProfit: number;
   orderCount: number;
 }
 
-export class DailyMetricsService {
+export class DailySalesSummaryService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
 
   /**
-   * Rebuild daily SKU metrics for a store in a given date range.
-   * Cleans up and recomputes from Orders, HistoricalSales, and Returns.
+   * Rebuilds DailySalesSummary records for a store in a given date range.
+   * Materializes facts from FULFILLED Orders, HistoricalSales, and COMPLETED Returns.
    */
-  async rebuildDailyMetrics(
+  async rebuildDailySalesSummary(
     storeId: number,
     fromDate: Date,
     toDate: Date,
     stockItemIds?: number[]
   ): Promise<{ processedCount: number; updatedDays: number }> {
-    // Normalize date bounds (start of fromDate, end of toDate in UTC/local)
     const start = new Date(fromDate);
     start.setUTCHours(0, 0, 0, 0);
 
@@ -38,7 +39,10 @@ export class DailyMetricsService {
         storeId,
         ...(stockItemIds && stockItemIds.length > 0 ? { id: { in: stockItemIds } } : {}),
       },
-      select: { id: true },
+      select: {
+        id: true,
+        costPrice: true,
+      },
     });
 
     if (stockItems.length === 0) {
@@ -46,6 +50,10 @@ export class DailyMetricsService {
     }
 
     const itemIds = stockItems.map((item) => item.id);
+    const itemCostMap = new Map<number, number>();
+    for (const item of stockItems) {
+      itemCostMap.set(item.id, Number(item.costPrice));
+    }
 
     // 2. Fetch fulfilled OrderItems within range
     const orderItems = await this.prisma.orderItem.findMany({
@@ -64,6 +72,7 @@ export class DailyMetricsService {
         stockItemId: true,
         quantity: true,
         subtotal: true,
+        costPriceSnapshot: true,
         order: {
           select: {
             id: true,
@@ -122,11 +131,12 @@ export class DailyMetricsService {
       string,
       {
         stockItemId: number;
-        metricDate: Date;
+        summaryDate: Date;
         grossSoldQty: number;
-        returnedQty: number;
+        returnQty: number;
         grossRevenue: number;
         refundAmount: number;
+        cogs: number;
         orderIds: Set<string>;
       }
     >();
@@ -143,11 +153,12 @@ export class DailyMetricsService {
         const dateOnly = new Date(date.toISOString().split('T')[0] + 'T00:00:00.000Z');
         entry = {
           stockItemId,
-          metricDate: dateOnly,
+          summaryDate: dateOnly,
           grossSoldQty: 0,
-          returnedQty: 0,
+          returnQty: 0,
           grossRevenue: 0,
           refundAmount: 0,
+          cogs: 0,
           orderIds: new Set(),
         };
         map.set(key, entry);
@@ -161,6 +172,8 @@ export class DailyMetricsService {
       const entry = getOrCreate(oi.stockItemId, date);
       entry.grossSoldQty += oi.quantity;
       entry.grossRevenue += Number(oi.subtotal);
+      const itemCost = Number(oi.costPriceSnapshot) > 0 ? Number(oi.costPriceSnapshot) : (itemCostMap.get(oi.stockItemId) ?? 0);
+      entry.cogs += oi.quantity * itemCost;
       entry.orderIds.add(`ORD_${oi.order.id}`);
     }
 
@@ -170,6 +183,8 @@ export class DailyMetricsService {
       const entry = getOrCreate(hs.stockItemId, hs.soldAt);
       entry.grossSoldQty += hs.quantity;
       entry.grossRevenue += Number(hs.totalAmount);
+      const fallbackCost = itemCostMap.get(hs.stockItemId) ?? 0;
+      entry.cogs += hs.quantity * fallbackCost;
       entry.orderIds.add(`HS_${hs.externalOrderId || hs.soldAt.toISOString()}`);
     }
 
@@ -177,46 +192,53 @@ export class DailyMetricsService {
     for (const ri of returnItems) {
       const date = ri.returnOrder.createdAt;
       const entry = getOrCreate(ri.stockItemId, date);
-      entry.returnedQty += ri.quantity;
+      entry.returnQty += ri.quantity;
       const itemRefund = Number(ri.refundPrice) * ri.quantity;
       entry.refundAmount += itemRefund;
+      const itemCost = itemCostMap.get(ri.stockItemId) ?? 0;
+      entry.cogs = Math.max(0, entry.cogs - ri.quantity * itemCost);
     }
 
-    // Upsert into DailySkuMetric
+    // Upsert into DailySalesSummary
     let processedCount = 0;
     const entries = Array.from(map.values());
 
     for (const entry of entries) {
-      const netSoldQty = Math.max(0, entry.grossSoldQty - entry.returnedQty);
+      const netSoldQty = Math.max(0, entry.grossSoldQty - entry.returnQty);
       const netRevenue = Math.max(0, entry.grossRevenue - entry.refundAmount);
+      const grossProfit = Number((netRevenue - entry.cogs).toFixed(2));
 
-      await this.prisma.dailySkuMetric.upsert({
+      await this.prisma.dailySalesSummary.upsert({
         where: {
-          storeId_stockItemId_metricDate: {
+          storeId_stockItemId_summaryDate: {
             storeId,
             stockItemId: entry.stockItemId,
-            metricDate: entry.metricDate,
+            summaryDate: entry.summaryDate,
           },
         },
         update: {
           grossSoldQty: entry.grossSoldQty,
-          returnedQty: entry.returnedQty,
+          returnQty: entry.returnQty,
           netSoldQty,
           grossRevenue: new Prisma.Decimal(entry.grossRevenue),
           refundAmount: new Prisma.Decimal(entry.refundAmount),
           netRevenue: new Prisma.Decimal(netRevenue),
+          cogs: new Prisma.Decimal(entry.cogs),
+          grossProfit: new Prisma.Decimal(grossProfit),
           orderCount: entry.orderIds.size,
         },
         create: {
           storeId,
           stockItemId: entry.stockItemId,
-          metricDate: entry.metricDate,
+          summaryDate: entry.summaryDate,
           grossSoldQty: entry.grossSoldQty,
-          returnedQty: entry.returnedQty,
+          returnQty: entry.returnQty,
           netSoldQty,
           grossRevenue: new Prisma.Decimal(entry.grossRevenue),
           refundAmount: new Prisma.Decimal(entry.refundAmount),
           netRevenue: new Prisma.Decimal(netRevenue),
+          cogs: new Prisma.Decimal(entry.cogs),
+          grossProfit: new Prisma.Decimal(grossProfit),
           orderCount: entry.orderIds.size,
         },
       });
@@ -230,65 +252,69 @@ export class DailyMetricsService {
   }
 
   /**
-   * Retrieves an array of daily series metrics for a SKU over the past N days.
-   * Every day in the window is guaranteed to be present (missing days have 0 net sales).
+   * Retrieves an array of daily series summaries for a SKU over the past N days.
+   * Every day in the window is guaranteed to be present with 0 values if no sales occurred.
    */
   async getDailySeries(
     storeId: number,
     stockItemId: number,
     days: number
-  ): Promise<DailyMetricAggregateRow[]> {
+  ): Promise<DailySalesSummaryAggregateRow[]> {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
     const fromDate = new Date(today);
     fromDate.setUTCDate(today.getUTCDate() - (days - 1));
 
-    const metrics = await this.prisma.dailySkuMetric.findMany({
+    const summaries = await this.prisma.dailySalesSummary.findMany({
       where: {
         storeId,
         stockItemId,
-        metricDate: {
+        summaryDate: {
           gte: fromDate,
           lte: today,
         },
       },
-      orderBy: { metricDate: 'asc' },
+      orderBy: { summaryDate: 'asc' },
     });
 
-    const metricMap = new Map<string, (typeof metrics)[0]>();
-    for (const m of metrics) {
-      const dStr = m.metricDate.toISOString().split('T')[0];
-      metricMap.set(dStr, m);
+    const summaryMap = new Map<string, (typeof summaries)[0]>();
+    for (const s of summaries) {
+      const dStr = s.summaryDate.toISOString().split('T')[0];
+      summaryMap.set(dStr, s);
     }
 
-    const series: DailyMetricAggregateRow[] = [];
+    const series: DailySalesSummaryAggregateRow[] = [];
     for (let i = 0; i < days; i++) {
       const curDate = new Date(fromDate);
       curDate.setUTCDate(fromDate.getUTCDate() + i);
       const dStr = curDate.toISOString().split('T')[0];
 
-      const existing = metricMap.get(dStr);
+      const existing = summaryMap.get(dStr);
       if (existing) {
         series.push({
-          metricDate: dStr,
+          summaryDate: dStr,
           grossSoldQty: existing.grossSoldQty,
-          returnedQty: existing.returnedQty,
+          returnQty: existing.returnQty,
           netSoldQty: existing.netSoldQty,
           grossRevenue: Number(existing.grossRevenue),
           refundAmount: Number(existing.refundAmount),
           netRevenue: Number(existing.netRevenue),
+          cogs: Number(existing.cogs),
+          grossProfit: Number(existing.grossProfit),
           orderCount: existing.orderCount,
         });
       } else {
         series.push({
-          metricDate: dStr,
+          summaryDate: dStr,
           grossSoldQty: 0,
-          returnedQty: 0,
+          returnQty: 0,
           netSoldQty: 0,
           grossRevenue: 0,
           refundAmount: 0,
           netRevenue: 0,
+          cogs: 0,
+          grossProfit: 0,
           orderCount: 0,
         });
       }

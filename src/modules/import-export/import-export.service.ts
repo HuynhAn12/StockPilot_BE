@@ -493,34 +493,35 @@ export class ImportExportService {
                   );
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
-                // P0-03: REPLACE_STOCK as physical counted quantity with strict deterministic AUDIT_ADJUSTMENT
+                // P0-C: REPLACE_STOCK as physical counted quantity with strict deterministic AUDIT_ADJUSTMENT and row locking
                 const targetQty = item.countedQuantity !== undefined ? item.countedQuantity : item.initialQuantity;
-                const balance = await tx.inventoryBalance.upsert({
-                  where: {
-                    warehouseId_stockItemId: {
-                      warehouseId: warehouse.id,
-                      stockItemId,
-                    },
-                  },
-                  create: {
-                    storeId,
-                    warehouseId: warehouse.id,
-                    stockItemId,
-                    quantity: targetQty,
-                    reservedQuantity: 0,
-                  },
-                  update: {},
-                });
+                const lockedBalances: Array<{ id: number; quantity: number }> = await tx.$queryRaw`
+                  SELECT id, quantity FROM inventory_balances
+                  WHERE warehouse_id = ${warehouse.id} AND stock_item_id = ${stockItemId}
+                  FOR UPDATE
+                `;
 
-                const beforeQty = balance.quantity;
-                const delta = targetQty - beforeQty;
-
-                if (delta !== 0) {
+                let beforeQty = 0;
+                if (lockedBalances.length > 0) {
+                  beforeQty = lockedBalances[0].quantity;
                   await tx.inventoryBalance.update({
-                    where: { id: balance.id },
+                    where: { id: lockedBalances[0].id },
                     data: { quantity: targetQty },
                   });
+                } else {
+                  await tx.inventoryBalance.create({
+                    data: {
+                      storeId,
+                      warehouseId: warehouse.id,
+                      stockItemId,
+                      quantity: targetQty,
+                      reservedQuantity: 0,
+                    },
+                  });
+                }
 
+                const delta = targetQty - beforeQty;
+                if (delta !== 0) {
                   await tx.stockMovement.create({
                     data: {
                       storeId,
@@ -573,6 +574,7 @@ export class ImportExportService {
         jobId: job.id,
         summary: {
           totalProcessed: jobData.items.length,
+          createdProducts,
           createdSkus,
           updatedSkus,
           skippedSkus,
@@ -832,8 +834,7 @@ export class ImportExportService {
       include: {
         product: true,
         balances: true,
-        stockPolicies: true,
-        smartAlerts: {
+        alerts: {
           where: { status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
         },
         pricingRecommendations: {
@@ -853,7 +854,6 @@ export class ImportExportService {
       'Available Stock',
       'Min Stock Level',
       'Max Stock Level',
-      'Lead Time (Days)',
       'Active Alerts Count',
       'Pending Discount (%)',
       'Recommended Price',
@@ -865,7 +865,6 @@ export class ImportExportService {
       const onHand = s.balances.reduce((acc, b) => acc + b.quantity, 0);
       const reserved = s.balances.reduce((acc, b) => acc + b.reservedQuantity, 0);
       const available = Math.max(0, onHand - reserved);
-      const policy = s.stockPolicies[0];
       const pendingRec = s.pricingRecommendations[0];
 
       const row = [
@@ -878,8 +877,7 @@ export class ImportExportService {
         sanitizeCsvCell(available),
         sanitizeCsvCell(s.minStockLevel),
         sanitizeCsvCell(s.maxStockLevel),
-        sanitizeCsvCell(policy?.leadTimeDays ?? 7),
-        sanitizeCsvCell(s.smartAlerts.length),
+        sanitizeCsvCell(s.alerts.length),
         sanitizeCsvCell(pendingRec?.discountPct ? pendingRec.discountPct.toString() : '0'),
         sanitizeCsvCell(pendingRec?.recommendedPrice ? pendingRec.recommendedPrice.toString() : s.sellingPrice.toString()),
       ];
@@ -890,10 +888,10 @@ export class ImportExportService {
   }
 
   /**
-   * Export Smart Alerts as CSV
+   * Export Alerts as CSV
    */
   async exportAlertsCsv(storeId: number): Promise<string> {
-    const alerts = await this.prisma.smartAlert.findMany({
+    const alerts = await this.prisma.alert.findMany({
       where: { storeId },
       include: { stockItem: true },
       orderBy: [{ severity: 'desc' }, { openedAt: 'desc' }],
@@ -906,7 +904,8 @@ export class ImportExportService {
       'Type',
       'Severity',
       'Status',
-      'Score',
+      'Risk Score',
+      'Confidence',
       'Title',
       'Message',
       'Opened At',
@@ -923,7 +922,8 @@ export class ImportExportService {
         sanitizeCsvCell(a.type),
         sanitizeCsvCell(a.severity),
         sanitizeCsvCell(a.status),
-        sanitizeCsvCell(a.score ?? ''),
+        sanitizeCsvCell(a.riskScore ?? ''),
+        sanitizeCsvCell(a.confidence ?? ''),
         sanitizeCsvCell(a.title),
         sanitizeCsvCell(a.message),
         sanitizeCsvCell(a.openedAt.toISOString()),
@@ -952,8 +952,9 @@ export class ImportExportService {
       'Current Price',
       'Recommended Price',
       'Discount (%)',
+      'Action',
       'Status',
-      'Accepted Price',
+      'Final Selected Price',
       'Created At',
       'Expires At',
     ];
@@ -968,8 +969,9 @@ export class ImportExportService {
         sanitizeCsvCell(r.currentPrice),
         sanitizeCsvCell(r.recommendedPrice),
         sanitizeCsvCell(r.discountPct),
+        sanitizeCsvCell(r.action),
         sanitizeCsvCell(r.status),
-        sanitizeCsvCell(r.acceptedPrice ?? ''),
+        sanitizeCsvCell(r.finalUserSelectedPrice ?? ''),
         sanitizeCsvCell(r.createdAt.toISOString()),
         sanitizeCsvCell(r.expiresAt ? r.expiresAt.toISOString() : ''),
       ];
@@ -979,4 +981,5 @@ export class ImportExportService {
     return rows.join('\n');
   }
 }
+
 

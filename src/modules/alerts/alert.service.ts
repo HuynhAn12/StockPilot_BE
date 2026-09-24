@@ -13,9 +13,13 @@ export interface AlertEvaluationInput {
   stockoutScore: number;
   stockoutSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   overstockScore: number;
+  overstockSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  isSlowMoving: boolean;
   isDeadStock: boolean;
   deadStockSeverity: 'NONE' | 'WARNING' | 'CRITICAL';
   daysSinceLastSale: number | null;
+  confidenceScore: number;
+  engineVersion?: string;
   unusualDemand: {
     isAnomaly: boolean;
     type: 'NONE' | 'CRITICAL_SPIKE' | 'HIGH_SPIKE' | 'DEMAND_DROP' | 'NEW_DEMAND_SPIKE';
@@ -32,7 +36,7 @@ export class AlertService {
   }
 
   /**
-   * Evaluates analysis result and syncs deduplicated SmartAlert records.
+   * Evaluates analysis result and syncs deduplicated Alert records.
    */
   async syncAlertsForSku(input: AlertEvaluationInput): Promise<void> {
     const {
@@ -48,15 +52,17 @@ export class AlertService {
       isDeadStock,
       deadStockSeverity,
       daysSinceLastSale,
+      confidenceScore,
+      engineVersion = 'DECISION_ENGINE_V1',
       unusualDemand,
     } = input;
 
     // 1. Determine active alert triggers
-    // Priority: STOCKOUT > LOW_STOCK (mutually exclusive)
+    // Priority: STOCKOUT supersedes LOW_STOCK (mutually exclusive)
     let stockoutTrigger: {
       type: AlertType;
       severity: AlertSeverity;
-      score: number;
+      riskScore: number;
       title: string;
       message: string;
       reasonJson: Record<string, unknown>;
@@ -66,7 +72,7 @@ export class AlertService {
       stockoutTrigger = {
         type: 'STOCKOUT',
         severity: 'CRITICAL',
-        score: 100,
+        riskScore: 100,
         title: `Hết hàng: SKU ${sku} (${productName})`,
         message: `SKU ${sku} hiện có sẵn 0 sản phẩm trong kho. Cần nhập hàng khẩn cấp.`,
         reasonJson: { availableStock, reorderPoint, stockoutScore: 100 },
@@ -77,7 +83,7 @@ export class AlertService {
       stockoutTrigger = {
         type: 'LOW_STOCK',
         severity: sev,
-        score: stockoutScore,
+        riskScore: stockoutScore,
         title: `Cảnh báo tồn kho thấp: SKU ${sku}`,
         message: `SKU ${sku} chỉ còn ${availableStock} đơn vị khả dụng, dưới điểm đặt hàng ${reorderPoint}.`,
         reasonJson: { availableStock, reorderPoint, stockoutScore },
@@ -88,7 +94,7 @@ export class AlertService {
     let overstockTrigger: {
       type: AlertType;
       severity: AlertSeverity;
-      score: number;
+      riskScore: number;
       title: string;
       message: string;
       reasonJson: Record<string, unknown>;
@@ -99,7 +105,7 @@ export class AlertService {
       overstockTrigger = {
         type: 'OVERSTOCK_DEADSTOCK',
         severity: sev,
-        score: overstockScore,
+        riskScore: overstockScore,
         title: `Hàng tồn kho ứ đọng (Dead Stock): SKU ${sku}`,
         message: `SKU ${sku} không có giao dịch bán hàng trong ${daysSinceLastSale ?? 90} ngày qua. Cần xem xét giảm giá xả hàng.`,
         reasonJson: { daysSinceLastSale, overstockScore, deadStockSeverity },
@@ -108,7 +114,7 @@ export class AlertService {
       overstockTrigger = {
         type: 'OVERSTOCK_DEADSTOCK',
         severity: overstockScore >= 75 ? 'WARNING' : 'INFO',
-        score: overstockScore,
+        riskScore: overstockScore,
         title: `Cảnh báo thừa hàng: SKU ${sku}`,
         message: `SKU ${sku} có mức tồn kho vượt ngưỡng an toàn so với tốc độ tiêu thụ hiện tại.`,
         reasonJson: { overstockScore, availableStock },
@@ -119,7 +125,7 @@ export class AlertService {
     let anomalyTrigger: {
       type: AlertType;
       severity: AlertSeverity;
-      score: number;
+      riskScore: number;
       title: string;
       message: string;
       reasonJson: Record<string, unknown>;
@@ -130,7 +136,7 @@ export class AlertService {
       anomalyTrigger = {
         type: 'UNUSUAL_DEMAND',
         severity: sev,
-        score: Math.abs(unusualDemand.zScore) * 20,
+        riskScore: Math.min(100, Math.round(Math.abs(unusualDemand.zScore) * 20)),
         title: `Nhu cầu bất thường: SKU ${sku}`,
         message:
           unusualDemand.type === 'NEW_DEMAND_SPIKE'
@@ -146,40 +152,43 @@ export class AlertService {
 
     const activeTriggerTypes = new Set<AlertType>(triggers.map((t) => t.type));
 
-    // Handle triggers: Upsert or Reopen
+    // Upsert or reopen triggers
     for (const trigger of triggers) {
       const fingerprint = AlertService.computeFingerprint(storeId, stockItemId, trigger.type);
-      const existing = await this.prisma.smartAlert.findUnique({
+      const existing = await this.prisma.alert.findUnique({
         where: { storeId_fingerprint: { storeId, fingerprint } },
       });
 
       if (!existing) {
-        await this.prisma.smartAlert.create({
+        await this.prisma.alert.create({
           data: {
             storeId,
             stockItemId,
             type: trigger.type,
             severity: trigger.severity,
             status: 'OPEN',
-            score: new Prisma.Decimal(trigger.score),
+            riskScore: new Prisma.Decimal(trigger.riskScore),
+            confidence: new Prisma.Decimal(confidenceScore),
             title: trigger.title,
             message: trigger.message,
             reasonJson: trigger.reasonJson as Prisma.InputJsonValue,
             fingerprint,
+            engineVersion,
             openedAt: new Date(),
           },
         });
       } else {
-        // If it was resolved, reopen it; otherwise update score/message
         const shouldReopen = existing.status === 'RESOLVED';
-        await this.prisma.smartAlert.update({
+        await this.prisma.alert.update({
           where: { id: existing.id },
           data: {
             severity: trigger.severity,
-            score: new Prisma.Decimal(trigger.score),
+            riskScore: new Prisma.Decimal(trigger.riskScore),
+            confidence: new Prisma.Decimal(confidenceScore),
             title: trigger.title,
             message: trigger.message,
             reasonJson: trigger.reasonJson as Prisma.InputJsonValue,
+            engineVersion,
             ...(shouldReopen ? { status: 'OPEN', openedAt: new Date(), resolvedAt: null } : {}),
           },
         });
@@ -192,13 +201,13 @@ export class AlertService {
       // If STOCKOUT is active, make sure LOW_STOCK is resolved
       if (type === 'LOW_STOCK' && activeTriggerTypes.has('STOCKOUT')) {
         const fp = AlertService.computeFingerprint(storeId, stockItemId, 'LOW_STOCK');
-        await this.prisma.smartAlert.updateMany({
+        await this.prisma.alert.updateMany({
           where: { storeId, fingerprint: fp, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
           data: { status: 'RESOLVED', resolvedAt: new Date() },
         });
       } else if (!activeTriggerTypes.has(type)) {
         const fp = AlertService.computeFingerprint(storeId, stockItemId, type);
-        await this.prisma.smartAlert.updateMany({
+        await this.prisma.alert.updateMany({
           where: { storeId, fingerprint: fp, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
           data: { status: 'RESOLVED', resolvedAt: new Date() },
         });
@@ -217,7 +226,7 @@ export class AlertService {
       limit: number;
     }
   ) {
-    const where: Prisma.SmartAlertWhereInput = {
+    const where: Prisma.AlertWhereInput = {
       storeId,
       ...(query.status ? { status: query.status } : {}),
       ...(query.type ? { type: query.type } : {}),
@@ -226,8 +235,8 @@ export class AlertService {
     };
 
     const [total, items] = await Promise.all([
-      this.prisma.smartAlert.count({ where }),
-      this.prisma.smartAlert.findMany({
+      this.prisma.alert.count({ where }),
+      this.prisma.alert.findMany({
         where,
         orderBy: [{ openedAt: 'desc' }],
         skip: (query.page - 1) * query.limit,
@@ -258,7 +267,7 @@ export class AlertService {
   }
 
   async acknowledgeAlert(storeId: number, alertId: number) {
-    const alert = await this.prisma.smartAlert.findUnique({
+    const alert = await this.prisma.alert.findUnique({
       where: { id: alertId },
     });
 
@@ -266,7 +275,7 @@ export class AlertService {
       throw new NotFoundError('Không tìm thấy cảnh báo');
     }
 
-    const updated = await this.prisma.smartAlert.update({
+    const updated = await this.prisma.alert.update({
       where: { id: alertId },
       data: { status: 'ACKNOWLEDGED' },
     });
@@ -275,7 +284,7 @@ export class AlertService {
   }
 
   async resolveAlert(storeId: number, alertId: number) {
-    const alert = await this.prisma.smartAlert.findUnique({
+    const alert = await this.prisma.alert.findUnique({
       where: { id: alertId },
     });
 
@@ -283,7 +292,7 @@ export class AlertService {
       throw new NotFoundError('Không tìm thấy cảnh báo');
     }
 
-    const updated = await this.prisma.smartAlert.update({
+    const updated = await this.prisma.alert.update({
       where: { id: alertId },
       data: { status: 'RESOLVED', resolvedAt: new Date() },
     });
