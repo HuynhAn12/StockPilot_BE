@@ -1,5 +1,5 @@
-import { Prisma } from '@prisma/client';
-import { prisma } from '../../config/db';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { prisma as defaultPrisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createReturnSchema } from './return.schema';
@@ -8,10 +8,16 @@ import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { PaginationQuery, buildPaginationResult } from '../../common/utils/pagination';
 
 export class ReturnService {
+  private prisma: PrismaClient;
+
+  constructor(customPrisma?: PrismaClient) {
+    this.prisma = customPrisma || defaultPrisma;
+  }
+
   async createReturn(storeId: number, userId: number, input: z.infer<typeof createReturnSchema>) {
     const returnNumber = `RET-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
-    const defaultWarehouse = await prisma.warehouse.findFirst({
+    const defaultWarehouse = await this.prisma.warehouse.findFirst({
       where: { storeId, isDefault: true, isActive: true },
     });
 
@@ -19,7 +25,7 @@ export class ReturnService {
       throw new NotFoundError('Không tìm thấy kho mặc định để nhận hàng trả');
     }
 
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.findFirst({
         where: { id: input.orderId, storeId },
         include: {
@@ -74,11 +80,53 @@ export class ReturnService {
       const returnItemsData = [];
       const restockList: { stockItemId: number; quantity: number }[] = [];
 
-      // 2. Perform atomic conditional updates on order_items to strictly guard against over-return
+      // 2. Perform atomic conditional updates on order_items to strictly guard against over-return and over-refund
       for (const [orderItemId, reqItem] of sortedEntries) {
         const orderItem = orderItemMap.get(orderItemId);
         if (!orderItem) {
           throw new NotFoundError(`Dòng đơn hàng ID ${orderItemId} không thuộc đơn hàng #${order.orderNumber}`);
+        }
+
+        const linePrice = orderItem.unitPriceSnapshot
+          ? new Prisma.Decimal(orderItem.unitPriceSnapshot).mul(orderItem.quantity)
+          : new Prisma.Decimal(0);
+        const refundableTotal = orderItem.refundableAmount !== undefined && orderItem.refundableAmount !== null
+          ? new Prisma.Decimal(orderItem.refundableAmount)
+          : (orderItem.subtotal !== undefined && orderItem.subtotal !== null)
+          ? new Prisma.Decimal(orderItem.subtotal)
+          : linePrice;
+        const currentRefunded = orderItem.refundedAmount !== undefined && orderItem.refundedAmount !== null
+          ? new Prisma.Decimal(orderItem.refundedAmount)
+          : new Prisma.Decimal(0);
+        const returnedQty = typeof orderItem.returnedQuantity === 'number' ? orderItem.returnedQuantity : 0;
+        const remainingRefundable = refundableTotal.minus(currentRefunded);
+
+        if (remainingRefundable.lte(0)) {
+          throw new ConflictError(
+            `Dòng sản phẩm ${orderItem.skuSnapshot} đã được hoàn tiền tối đa (Tổng được hoàn: ${refundableTotal}, Đã hoàn: ${currentRefunded})`
+          );
+        }
+
+        const remainingQuantity = orderItem.quantity - returnedQty;
+        if (reqItem.quantity > remainingQuantity) {
+          throw new ConflictError(
+            `Số lượng trả vượt quá giới hạn mua còn lại của SKU ${orderItem.skuSnapshot} (Còn lại có thể trả: ${remainingQuantity}, Yêu cầu trả: ${reqItem.quantity})`
+          );
+        }
+
+        // Exact refund calculation: If returning all remaining units of this line, absorb any rounding remainder
+        let itemRefundPrice: Prisma.Decimal;
+        if (reqItem.quantity === remainingQuantity) {
+          itemRefundPrice = remainingRefundable;
+        } else {
+          const proRata = orderItem.quantity > 0
+            ? refundableTotal.mul(reqItem.quantity).div(orderItem.quantity).toDecimalPlaces(2)
+            : new Prisma.Decimal(0);
+          itemRefundPrice = Prisma.Decimal.min(proRata, remainingRefundable);
+        }
+
+        if (itemRefundPrice.lt(0)) {
+          itemRefundPrice = new Prisma.Decimal(0);
         }
 
         const updateResult = await tx.orderItem.updateMany({
@@ -89,29 +137,25 @@ export class ReturnService {
             returnedQuantity: {
               lte: orderItem.quantity - reqItem.quantity,
             },
+            refundedAmount: {
+              lte: refundableTotal.minus(itemRefundPrice),
+            },
           },
           data: {
             returnedQuantity: {
               increment: reqItem.quantity,
+            },
+            refundedAmount: {
+              increment: itemRefundPrice,
             },
           },
         });
 
         if (updateResult.count !== 1) {
           throw new ConflictError(
-            `Số lượng trả vượt quá giới hạn mua của SKU ${orderItem.skuSnapshot} (Số lượng đơn: ${orderItem.quantity}, Yêu cầu trả: ${reqItem.quantity})`
+            `Số lượng trả hoặc số tiền hoàn vượt quá giới hạn cho phép của SKU ${orderItem.skuSnapshot}`
           );
         }
-
-        // Calculate net refund proportional to order discount/tax to prevent over-refunding
-        const orderSubtotal = new Prisma.Decimal(order.subtotalAmount ?? order.totalAmount ?? 0);
-        const orderTotal = new Prisma.Decimal(order.totalAmount ?? order.subtotalAmount ?? 0);
-        const netRatio = orderSubtotal.gt(0) ? orderTotal.div(orderSubtotal) : new Prisma.Decimal(1);
-
-        const itemRefundPrice = new Prisma.Decimal(orderItem.unitPriceSnapshot || 0)
-          .mul(reqItem.quantity)
-          .mul(netRatio)
-          .toDecimalPlaces(2);
 
         totalRefundAmount = totalRefundAmount.plus(itemRefundPrice);
 
@@ -179,7 +223,7 @@ export class ReturnService {
     const skip = (page - 1) * limit;
 
     const [items, total] = await Promise.all([
-      prisma.returnOrder.findMany({
+      this.prisma.returnOrder.findMany({
         where: { storeId },
         include: {
           order: true,
@@ -189,9 +233,10 @@ export class ReturnService {
         skip,
         take: limit,
       }),
-      prisma.returnOrder.count({ where: { storeId } }),
+      this.prisma.returnOrder.count({ where: { storeId } }),
     ]);
 
     return buildPaginationResult(items, total, page, limit);
   }
 }
+

@@ -7,12 +7,14 @@ export class ImportExportController {
   async preview(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const result = await service.previewImport(storeId, req.body.items);
+      const userId = req.user!.userId;
+      const result = await service.previewImport(storeId, userId, req.body);
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
       next(error);
     }
   }
+
 
   async commit(req: Request, res: Response, next: NextFunction) {
     try {

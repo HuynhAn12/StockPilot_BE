@@ -1,5 +1,5 @@
-import { Prisma } from '@prisma/client';
-import { prisma } from '../../config/db';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { prisma as defaultPrisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createOrderSchema, cancelOrderSchema } from './order.schema';
@@ -7,6 +7,12 @@ import { toDecimal, toNumber } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 
 export class OrderService {
+  private prisma: PrismaClient;
+
+  constructor(customPrisma?: PrismaClient) {
+    this.prisma = customPrisma || defaultPrisma;
+  }
+
   async createDraftOrder(storeId: number, userId: number, input: z.infer<typeof createOrderSchema>) {
     const orderNumber = `ORD-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
@@ -14,7 +20,7 @@ export class OrderService {
     const aggregatedItems = StockLedgerService.normalizeItems(input.items);
     const itemIds = aggregatedItems.map((i) => i.stockItemId);
 
-    const stockItems = await prisma.stockItem.findMany({
+    const stockItems = await this.prisma.stockItem.findMany({
       where: {
         storeId,
         id: { in: itemIds },
@@ -29,7 +35,13 @@ export class OrderService {
     const itemMap = new Map(stockItems.map((s) => [s.id, s]));
 
     let subtotalAmount = new Prisma.Decimal(0);
-    const orderItemsData = [];
+    const rawLines: {
+      stockItem: (typeof stockItems)[0];
+      quantity: number;
+      unitPrice: Prisma.Decimal;
+      costPrice: Prisma.Decimal;
+      lineSubtotal: Prisma.Decimal;
+    }[] = [];
 
     for (const item of aggregatedItems) {
       const s = itemMap.get(item.stockItemId)!;
@@ -38,15 +50,12 @@ export class OrderService {
       const lineSubtotal = unitPrice.mul(item.quantity);
       subtotalAmount = subtotalAmount.plus(lineSubtotal);
 
-      orderItemsData.push({
-        storeId,
-        stockItemId: s.id,
-        skuSnapshot: s.sku,
-        nameSnapshot: s.name,
-        unitPriceSnapshot: unitPrice,
-        costPriceSnapshot: costPrice,
+      rawLines.push({
+        stockItem: s,
         quantity: item.quantity,
-        subtotal: lineSubtotal,
+        unitPrice,
+        costPrice,
+        lineSubtotal,
       });
     }
 
@@ -59,7 +68,46 @@ export class OrderService {
 
     const totalAmount = subtotalAmount.minus(discount).plus(tax);
 
-    return prisma.order.create({
+    // Pro-rata allocate discount & tax across lines to derive exact line-item refundableAmount
+    // Invariant: SUM(lineRefundable) == Order.totalAmount
+    const orderItemsData = [];
+    let allocatedRefundableSum = new Prisma.Decimal(0);
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      const isLastLine = i === rawLines.length - 1;
+
+      let lineRefundable: Prisma.Decimal;
+      if (isLastLine) {
+        // Last line absorbs any rounding remainder
+        lineRefundable = totalAmount.minus(allocatedRefundableSum);
+      } else {
+        if (subtotalAmount.gt(0)) {
+          const lineDiscount = discount.mul(line.lineSubtotal).div(subtotalAmount).toDecimalPlaces(2);
+          const lineTax = tax.mul(line.lineSubtotal).div(subtotalAmount).toDecimalPlaces(2);
+          lineRefundable = line.lineSubtotal.minus(lineDiscount).plus(lineTax).toDecimalPlaces(2);
+        } else {
+          lineRefundable = new Prisma.Decimal(0);
+        }
+        allocatedRefundableSum = allocatedRefundableSum.plus(lineRefundable);
+      }
+
+      orderItemsData.push({
+        storeId,
+        stockItemId: line.stockItem.id,
+        skuSnapshot: line.stockItem.sku,
+        nameSnapshot: line.stockItem.name,
+        unitPriceSnapshot: line.unitPrice,
+        costPriceSnapshot: line.costPrice,
+        quantity: line.quantity,
+        returnedQuantity: 0,
+        refundableAmount: lineRefundable,
+        refundedAmount: new Prisma.Decimal(0),
+        subtotal: line.lineSubtotal,
+      });
+    }
+
+    return this.prisma.order.create({
       data: {
         storeId,
         orderNumber,
@@ -84,7 +132,7 @@ export class OrderService {
   }
 
   async confirmOrder(storeId: number, userId: number, orderId: number) {
-    const defaultWarehouse = await prisma.warehouse.findFirst({
+    const defaultWarehouse = await this.prisma.warehouse.findFirst({
       where: { storeId, isDefault: true, isActive: true },
     });
 
@@ -92,7 +140,7 @@ export class OrderService {
       throw new NotFoundError('Không tìm thấy kho hàng mặc định đang hoạt động để xuất đơn');
     }
 
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       // 1. Atomically guard and advance order status from DRAFT -> CONFIRMED
       const updateOrderGuard = await tx.order.updateMany({
         where: { id: orderId, storeId, status: 'DRAFT' },
@@ -143,7 +191,7 @@ export class OrderService {
   }
 
   async fulfillOrder(storeId: number, orderId: number) {
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const updateResult = await tx.order.updateMany({
         where: { id: orderId, storeId, status: 'CONFIRMED' },
         data: {
@@ -168,11 +216,11 @@ export class OrderService {
   }
 
   async cancelOrder(storeId: number, userId: number, orderId: number, input: z.infer<typeof cancelOrderSchema>) {
-    const defaultWarehouse = await prisma.warehouse.findFirst({
+    const defaultWarehouse = await this.prisma.warehouse.findFirst({
       where: { storeId, isDefault: true, isActive: true },
     });
 
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.findFirst({
         where: { id: orderId, storeId },
         include: { items: true },
@@ -267,7 +315,7 @@ export class OrderService {
     const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
 
     const [items, total] = await Promise.all([
-      prisma.order.findMany({
+      this.prisma.order.findMany({
         where,
         include: {
           items: true,
@@ -277,7 +325,7 @@ export class OrderService {
         skip,
         take: limit,
       }),
-      prisma.order.count({ where }),
+      this.prisma.order.count({ where }),
     ]);
 
     return {
@@ -292,7 +340,7 @@ export class OrderService {
   }
 
   async getOrderById(storeId: number, id: number) {
-    const order = await prisma.order.findFirst({
+    const order = await this.prisma.order.findFirst({
       where: { id, storeId },
       include: {
         items: true,
@@ -308,3 +356,4 @@ export class OrderService {
     return order;
   }
 }
+

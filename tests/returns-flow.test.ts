@@ -119,4 +119,41 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
       })
     ).rejects.toThrow(ValidationError);
   });
+
+  it('Hấp thụ chính xác số tiền hoàn còn lại khi trả hết các sản phẩm cuối cùng (absorb rounding remainder)', async () => {
+    (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
+    (prisma.order.findFirst as jest.Mock).mockResolvedValue({
+      id: 50,
+      storeId: 1,
+      orderNumber: 'ORD-50',
+      status: 'FULFILLED',
+      subtotalAmount: 300000,
+      totalAmount: 200000,
+      items: [
+        {
+          id: 1,
+          stockItemId: 10,
+          skuSnapshot: 'SKU-01',
+          quantity: 3,
+          unitPriceSnapshot: 100000,
+          refundableAmount: 200000, // 200k refundable for 3 units
+          refundedAmount: 133333.33, // 2 units previously returned for 133,333.33
+          returnedQuantity: 2,
+        },
+      ],
+      returns: [],
+    });
+    (prisma.orderItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (prisma.returnOrder.create as jest.Mock).mockImplementation(({ data }) => Promise.resolve({ id: 2, ...data }));
+
+    const result = await returnService.createReturn(1, 100, {
+      orderId: 50,
+      reason: 'Trả sản phẩm cuối cùng',
+      items: [{ orderItemId: 1, quantity: 1, isRestockable: false }],
+    });
+
+    // Final refund must absorb exact remaining refundable: 200,000 - 133,333.33 = 66,666.67
+    expect(Number(result.totalRefundAmount)).toBeCloseTo(66666.67, 2);
+  });
 });
+

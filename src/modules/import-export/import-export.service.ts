@@ -1,9 +1,16 @@
-import { prisma } from '../../config/db';
+import crypto from 'crypto';
+import { PrismaClient } from '@prisma/client';
+import { prisma as defaultPrisma } from '../../config/db';
 import { z } from 'zod';
-import { importItemSchema, importCommitSchema } from './import-export.schema';
+import {
+  importItemSchema,
+  importPreviewSchema,
+  importCommitSchema,
+  ImportMode,
+} from './import-export.schema';
 import { toDecimal } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
-import { NotFoundError } from '../../common/errors/app-error';
+import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 
 export interface ImportIssue {
   row: number;
@@ -39,10 +46,23 @@ export function sanitizeCsvCell(value: unknown): string {
 }
 
 export class ImportExportService {
+  private prisma: PrismaClient;
+
+  constructor(customPrisma?: PrismaClient) {
+    this.prisma = customPrisma || defaultPrisma;
+  }
+
   /**
-   * Step 1: Dry-Run validation for bulk import
+   * Step 1: Dry-Run validation for bulk import & ImportJob creation
    */
-  async previewImport(storeId: number, items: z.infer<typeof importItemSchema>[]) {
+  async previewImport(
+    storeId: number,
+    userId: number,
+    input: z.input<typeof importPreviewSchema>
+  ) {
+    const parsedInput = importPreviewSchema.parse(input);
+    const items = parsedInput.items;
+    const mode = parsedInput.mode;
     const totalRows = items.length;
     const issues: ImportIssue[] = [];
     const validItems: typeof items = [];
@@ -90,7 +110,7 @@ export class ImportExportService {
     }
 
     // 3. Check existing SKUs in database
-    const existingStockItems = await prisma.stockItem.findMany({
+    const existingStockItems = await this.prisma.stockItem.findMany({
       where: {
         storeId,
         sku: { in: Array.from(seenSkusInPayload) },
@@ -99,163 +119,320 @@ export class ImportExportService {
     });
 
     const existingSkuSet = new Set(existingStockItems.map((s) => s.sku.toUpperCase()));
-    const previewItems = items.map((item, idx) => ({
-      row: idx + 1,
-      ...item,
-      isExistingInDb: existingSkuSet.has(item.sku.trim().toUpperCase()),
-    }));
+    const previewItems = items.map((item, idx) => {
+      const isExisting = existingSkuSet.has(item.sku.trim().toUpperCase());
+      if (isExisting && mode === 'CREATE_ONLY') {
+        issues.push({
+          row: idx + 1,
+          sku: item.sku,
+          field: 'sku',
+          severity: 'WARNING',
+          message: `SKU ${item.sku} đã tồn tại trong hệ thống (Chế độ CREATE_ONLY sẽ bỏ qua cập nhật)`,
+        });
+        warningRowIndices.add(idx + 1);
+      }
+      return {
+        row: idx + 1,
+        ...item,
+        isExistingInDb: isExisting,
+      };
+    });
+
+    const validRowsCount = totalRows - invalidRowIndices.size;
+    const invalidRowsCount = invalidRowIndices.size;
+    const warningRowsCount = warningRowIndices.size;
+
+    // 4. Compute SHA-256 payload hash and create persistent ImportJob
+    const canonicalPayload = JSON.stringify({
+      storeId,
+      mode,
+      warehouseId: input.warehouseId,
+      items: items.map((i) => ({
+        ...i,
+        sku: i.sku.trim(),
+        productCode: i.productCode.trim(),
+        categoryCode: i.categoryCode.trim(),
+      })),
+    });
+
+    const payloadHash = crypto.createHash('sha256').update(canonicalPayload).digest('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours TTL
+
+    const job = await this.prisma.importJob.create({
+      data: {
+        storeId,
+        createdById: userId,
+        type: 'PRODUCT_BULK_IMPORT',
+        payloadHash,
+        payloadJson: {
+          items,
+          mode,
+          warehouseId: input.warehouseId,
+        },
+        status: 'PREVIEWED',
+        totalRows,
+        validRows: validRowsCount,
+        invalidRows: invalidRowsCount,
+        warningRows: warningRowsCount,
+        expiresAt,
+      },
+    });
 
     return {
+      jobId: job.id,
+      payloadHash,
+      mode,
       totalRows,
-      validRows: totalRows - invalidRowIndices.size,
-      invalidRows: invalidRowIndices.size,
-      warningRows: warningRowIndices.size,
+      validRows: validRowsCount,
+      invalidRows: invalidRowsCount,
+      warningRows: warningRowsCount,
       issues,
       previewItems,
+      expiresAt,
     };
   }
 
   /**
-   * Step 2: Batch commit with transaction chunking (100 rows per transaction)
+   * Step 2: Idempotent Batch commit bound by ImportJob
    */
   async commitImport(storeId: number, userId: number, input: z.infer<typeof importCommitSchema>) {
-    const warehouse = input.warehouseId
-      ? await prisma.warehouse.findFirst({ where: { id: input.warehouseId, storeId, isActive: true } })
-      : await prisma.warehouse.findFirst({ where: { storeId, isDefault: true, isActive: true } });
+    const job = await this.prisma.importJob.findFirst({
+      where: { id: input.jobId, storeId },
+    });
 
-    if (!warehouse) {
-      throw new NotFoundError('Không tìm thấy kho hàng để ghi nhận tồn kho ban đầu');
+    if (!job) {
+      throw new NotFoundError('Mã phiên import (jobId) không tồn tại hoặc không thuộc cửa hàng này');
     }
 
-    const chunkSize = 100;
-    let createdProducts = 0;
-    let createdSkus = 0;
-    let updatedSkus = 0;
+    // Idempotent Replay Protection: If already completed, return stored result without re-mutating stock
+    if (job.status === 'COMPLETED' && job.resultJson) {
+      return job.resultJson as any;
+    }
 
-    for (let i = 0; i < input.items.length; i += chunkSize) {
-      const chunk = input.items.slice(i, i + chunkSize);
+    if (job.status === 'COMMITTING') {
+      throw new ConflictError('Phiên import này đang được hệ thống xử lý, vui lòng không gửi lại');
+    }
 
-      await prisma.$transaction(async (tx) => {
-        for (const item of chunk) {
-          // 1. Upsert Category
-          const category = await tx.category.upsert({
-            where: {
-              storeId_code: {
+    if (job.status === 'EXPIRED' || job.expiresAt < new Date()) {
+      await this.prisma.importJob.update({
+        where: { id: job.id },
+        data: { status: 'EXPIRED' },
+      });
+      throw new ValidationError('Phiên xem trước (preview) đã hết hạn. Vui lòng tạo preview mới');
+    }
+
+    // Atomic Status Transition: PREVIEWED / FAILED -> COMMITTING
+    const transition = await this.prisma.importJob.updateMany({
+      where: {
+        id: job.id,
+        storeId,
+        status: { in: ['PREVIEWED', 'FAILED'] },
+      },
+      data: {
+        status: 'COMMITTING',
+      },
+    });
+
+    if (transition.count !== 1) {
+      const currentJob = await this.prisma.importJob.findUnique({ where: { id: job.id } });
+      if (currentJob?.status === 'COMPLETED' && currentJob.resultJson) {
+        return currentJob.resultJson as any;
+      }
+      throw new ConflictError('Không thể thực hiện commit phiên import vào lúc này');
+    }
+
+    try {
+      const jobData = job.payloadJson as {
+        items: z.infer<typeof importItemSchema>[];
+        mode?: ImportMode;
+        warehouseId?: number;
+      };
+
+      const items = jobData.items;
+      const mode = input.mode || jobData.mode || 'CREATE_ONLY';
+      const targetWarehouseId = input.warehouseId || jobData.warehouseId;
+
+      const warehouse = targetWarehouseId
+        ? await this.prisma.warehouse.findFirst({ where: { id: targetWarehouseId, storeId, isActive: true } })
+        : await this.prisma.warehouse.findFirst({ where: { storeId, isDefault: true, isActive: true } });
+
+      if (!warehouse) {
+        throw new NotFoundError('Không tìm thấy kho hàng hợp lệ để thực hiện ghi nhận tồn kho');
+      }
+
+      const chunkSize = 100;
+      let createdProducts = 0;
+      let createdSkus = 0;
+      let updatedSkus = 0;
+      let skippedSkus = 0;
+
+      for (let i = 0; i < items.length; i += chunkSize) {
+        const chunk = items.slice(i, i + chunkSize);
+
+        await this.prisma.$transaction(async (tx) => {
+          for (const item of chunk) {
+            // Check existing SKU
+            const existingSku = await tx.stockItem.findUnique({
+              where: {
+                storeId_sku: {
+                  storeId,
+                  sku: item.sku.trim(),
+                },
+              },
+            });
+
+            if (existingSku && mode === 'CREATE_ONLY') {
+              skippedSkus++;
+              continue;
+            }
+
+            // 1. Upsert Category
+            const category = await tx.category.upsert({
+              where: {
+                storeId_code: {
+                  storeId,
+                  code: item.categoryCode.trim().toUpperCase(),
+                },
+              },
+              create: {
                 storeId,
+                name: item.categoryName.trim(),
                 code: item.categoryCode.trim().toUpperCase(),
               },
-            },
-            create: {
-              storeId,
-              name: item.categoryName.trim(),
-              code: item.categoryCode.trim().toUpperCase(),
-            },
-            update: {
-              name: item.categoryName.trim(),
-            },
-          });
+              update: {
+                name: item.categoryName.trim(),
+              },
+            });
 
-          // 2. Upsert Product
-          const product = await tx.product.upsert({
-            where: {
-              storeId_code: {
+            // 2. Upsert Product
+            const product = await tx.product.upsert({
+              where: {
+                storeId_code: {
+                  storeId,
+                  code: item.productCode.trim().toUpperCase(),
+                },
+              },
+              create: {
                 storeId,
+                categoryId: category.id,
+                name: item.productName.trim(),
                 code: item.productCode.trim().toUpperCase(),
               },
-            },
-            create: {
-              storeId,
-              categoryId: category.id,
-              name: item.productName.trim(),
-              code: item.productCode.trim().toUpperCase(),
-            },
-            update: {
-              name: item.productName.trim(),
-              categoryId: category.id,
-            },
-          });
-          createdProducts++;
-
-          // 3. Upsert StockItem
-          const existingSku = await tx.stockItem.findUnique({
-            where: {
-              storeId_sku: {
-                storeId,
-                sku: item.sku.trim(),
-              },
-            },
-          });
-
-          let stockItemId: number;
-
-          if (existingSku) {
-            const updated = await tx.stockItem.update({
-              where: { id: existingSku.id },
-              data: {
+              update: {
                 name: item.productName.trim(),
-                barcode: item.barcode || existingSku.barcode,
-                costPrice: toDecimal(item.costPrice),
-                sellingPrice: toDecimal(item.sellingPrice),
-                minStockLevel: item.minStockLevel,
-                maxStockLevel: item.maxStockLevel,
+                categoryId: category.id,
               },
             });
-            stockItemId = updated.id;
-            updatedSkus++;
-          } else {
-            const created = await tx.stockItem.create({
-              data: {
-                storeId,
-                productId: product.id,
-                sku: item.sku.trim(),
-                name: item.productName.trim(),
-                barcode: item.barcode,
-                costPrice: toDecimal(item.costPrice),
-                sellingPrice: toDecimal(item.sellingPrice),
-                minStockLevel: item.minStockLevel,
-                maxStockLevel: item.maxStockLevel,
-              },
-            });
-            stockItemId = created.id;
-            createdSkus++;
-          }
+            createdProducts++;
 
-          // 4. If initialQuantity > 0, set or add opening balance
-          if (item.initialQuantity > 0) {
-            await StockLedgerService.atomicAdd(
-              tx,
-              {
-                storeId,
-                warehouseId: warehouse.id,
-                userId,
-                referenceType: 'IMPORT',
-                referenceId: `IMPORT-${Date.now()}`,
-                note: `Nhập tồn kho ban đầu từ file bulk import`,
-              },
-              'INFLOW',
-              [{ stockItemId, quantity: item.initialQuantity }]
-            );
+            // 3. Upsert StockItem
+            let stockItemId: number;
+
+            if (existingSku) {
+              const updated = await tx.stockItem.update({
+                where: { id: existingSku.id },
+                data: {
+                  name: item.productName.trim(),
+                  barcode: item.barcode || existingSku.barcode,
+                  costPrice: toDecimal(item.costPrice),
+                  sellingPrice: toDecimal(item.sellingPrice),
+                  minStockLevel: item.minStockLevel,
+                  maxStockLevel: item.maxStockLevel,
+                },
+              });
+              stockItemId = updated.id;
+              updatedSkus++;
+            } else {
+              const created = await tx.stockItem.create({
+                data: {
+                  storeId,
+                  productId: product.id,
+                  sku: item.sku.trim(),
+                  name: item.productName.trim(),
+                  barcode: item.barcode,
+                  costPrice: toDecimal(item.costPrice),
+                  sellingPrice: toDecimal(item.sellingPrice),
+                  minStockLevel: item.minStockLevel,
+                  maxStockLevel: item.maxStockLevel,
+                },
+              });
+              stockItemId = created.id;
+              createdSkus++;
+            }
+
+            // 4. Handle Stock Inventory according to Mode
+            if (!existingSku && item.initialQuantity > 0) {
+              // Brand new SKU initial stock inflow
+              await StockLedgerService.atomicAdd(
+                tx,
+                {
+                  storeId,
+                  warehouseId: warehouse.id,
+                  userId,
+                  referenceType: 'IMPORT',
+                  referenceId: `JOB-${job.id}`,
+                  note: `Nhập tồn kho ban đầu từ file bulk import (Job #${job.id})`,
+                },
+                'INFLOW',
+                [{ stockItemId, quantity: item.initialQuantity }]
+              );
+            } else if (existingSku && mode === 'ADJUST_STOCK' && item.initialQuantity > 0) {
+              // Adjust delta stock
+              await StockLedgerService.atomicAdd(
+                tx,
+                {
+                  storeId,
+                  warehouseId: warehouse.id,
+                  userId,
+                  referenceType: 'IMPORT_ADJUST',
+                  referenceId: `JOB-${job.id}`,
+                  note: `Điều chỉnh tăng tồn kho từ bulk import (Job #${job.id})`,
+                },
+                'INFLOW',
+                [{ stockItemId, quantity: item.initialQuantity }]
+              );
+            }
           }
-        }
+        });
+      }
+
+      const result = {
+        success: true,
+        message: `Đã import thành công ${items.length} mục hàng`,
+        jobId: job.id,
+        summary: {
+          totalProcessed: items.length,
+          createdSkus,
+          updatedSkus,
+          skippedSkus,
+          mode,
+        },
+      };
+
+      // Mark ImportJob as COMPLETED with saved result
+      await this.prisma.importJob.update({
+        where: { id: job.id },
+        data: {
+          status: 'COMPLETED',
+          resultJson: result,
+        },
       });
-    }
 
-    return {
-      success: true,
-      message: `Đã import thành công ${input.items.length} mục hàng`,
-      summary: {
-        totalProcessed: input.items.length,
-        createdSkus,
-        updatedSkus,
-      },
-    };
+      return result;
+    } catch (err) {
+      await this.prisma.importJob.update({
+        where: { id: job.id },
+        data: { status: 'FAILED' },
+      });
+      throw err;
+    }
   }
 
   /**
    * Export Products & SKUs as CSV
    */
   async exportProductsCsv(storeId: number, role?: string): Promise<string> {
-    const products = await prisma.product.findMany({
+    const products = await this.prisma.product.findMany({
       where: { storeId },
       include: {
         category: true,
@@ -308,7 +485,7 @@ export class ImportExportService {
    * Export Inventory Balances as CSV
    */
   async exportInventoryCsv(storeId: number, role?: string): Promise<string> {
-    const balances = await prisma.inventoryBalance.findMany({
+    const balances = await this.prisma.inventoryBalance.findMany({
       where: { storeId },
       include: {
         warehouse: true,
@@ -354,3 +531,4 @@ export class ImportExportService {
     return rows.join('\n');
   }
 }
+

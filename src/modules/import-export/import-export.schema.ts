@@ -1,5 +1,14 @@
 import { z } from 'zod';
 
+export const importModeSchema = z.enum([
+  'CREATE_ONLY',
+  'UPSERT_METADATA',
+  'ADJUST_STOCK',
+  'REPLACE_STOCK',
+]);
+
+export type ImportMode = z.infer<typeof importModeSchema>;
+
 export const importItemSchema = z.object({
   categoryName: z.string().min(1, 'Tên danh mục không được để trống'),
   categoryCode: z.string().min(1, 'Mã danh mục không được để trống'),
@@ -16,9 +25,14 @@ export const importItemSchema = z.object({
 
 export const importPreviewSchema = z.object({
   items: z.array(importItemSchema).min(1, 'Danh sách import phải có ít nhất 1 dòng'),
+  mode: importModeSchema.optional().default('CREATE_ONLY'),
+  warehouseId: z.coerce.number().int().positive().optional(),
 });
 
 export const importCommitSchema = z.object({
-  items: z.array(importItemSchema).min(1, 'Danh sách import phải có ít nhất 1 dòng'),
+  jobId: z.string().min(1, 'Mã jobId của bản xem trước (preview) là bắt buộc để commit an toàn'),
+  mode: importModeSchema.optional(),
   warehouseId: z.coerce.number().int().positive().optional(),
 });
+
+

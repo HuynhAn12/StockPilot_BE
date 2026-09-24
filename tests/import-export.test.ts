@@ -7,6 +7,7 @@ jest.mock('../src/config/db', () => ({
     category: { upsert: jest.fn() },
     product: { upsert: jest.fn(), findMany: jest.fn() },
     stockItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findFirst: jest.fn() },
+    importJob: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
     inventoryBalance: { upsert: jest.fn(), findMany: jest.fn() },
     stockMovement: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
@@ -36,59 +37,91 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
     });
   });
 
-  describe('Step 1: Dry-Run Import Preview', () => {
-    it('Detects duplicate SKUs within the upload batch and checks existing DB items', async () => {
+  describe('Step 1: Dry-Run Import Preview with ImportJob', () => {
+    it('Detects duplicate SKUs within the upload batch and creates PREVIEWED ImportJob', async () => {
       (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([{ sku: 'SKU-EXISTING' }]);
+      (prisma as any).importJob.create.mockResolvedValue({ id: 'job_test_123', status: 'PREVIEWED' });
 
-      const result = await service.previewImport(1, [
-        {
-          categoryName: 'Thời trang',
-          categoryCode: 'TT',
-          productName: 'Áo thun 1',
-          productCode: 'AT1',
-          sku: 'SKU-01',
-          costPrice: 50000,
-          sellingPrice: 100000,
-          initialQuantity: 10,
-          minStockLevel: 5,
-          maxStockLevel: 500,
-        },
-        {
-          categoryName: 'Thời trang',
-          categoryCode: 'TT',
-          productName: 'Áo thun 2',
-          productCode: 'AT2',
-          sku: 'SKU-01', // Trùng SKU với dòng 1
-          costPrice: 50000,
-          sellingPrice: 100000,
-          initialQuantity: 10,
-          minStockLevel: 5,
-          maxStockLevel: 500,
-        },
-        {
-          categoryName: 'Thời trang',
-          categoryCode: 'TT',
-          productName: 'Áo thun 3',
-          productCode: 'AT3',
-          sku: 'SKU-EXISTING',
-          costPrice: 50000,
-          sellingPrice: 100000,
-          initialQuantity: 10,
-          minStockLevel: 5,
-          maxStockLevel: 500,
-        },
-      ]);
+      const result = await service.previewImport(1, 100, {
+        items: [
+          {
+            categoryName: 'Thời trang',
+            categoryCode: 'TT',
+            productName: 'Áo thun 1',
+            productCode: 'AT1',
+            sku: 'SKU-01',
+            costPrice: 50000,
+            sellingPrice: 100000,
+            initialQuantity: 10,
+            minStockLevel: 5,
+            maxStockLevel: 500,
+          },
+          {
+            categoryName: 'Thời trang',
+            categoryCode: 'TT',
+            productName: 'Áo thun 2',
+            productCode: 'AT2',
+            sku: 'SKU-01', // Trùng SKU với dòng 1
+            costPrice: 50000,
+            sellingPrice: 100000,
+            initialQuantity: 10,
+            minStockLevel: 5,
+            maxStockLevel: 500,
+          },
+          {
+            categoryName: 'Thời trang',
+            categoryCode: 'TT',
+            productName: 'Áo thun 3',
+            productCode: 'AT3',
+            sku: 'SKU-EXISTING',
+            costPrice: 50000,
+            sellingPrice: 100000,
+            initialQuantity: 10,
+            minStockLevel: 5,
+            maxStockLevel: 500,
+          },
+        ],
+      });
 
+      expect(result.jobId).toBe('job_test_123');
       expect(result.totalRows).toBe(3);
       expect(result.invalidRows).toBe(1);
       expect(result.validRows).toBe(2);
       expect(result.issues[0].message).toContain('bị trùng lặp');
       expect(result.previewItems[2].isExistingInDb).toBe(true);
+      expect((prisma as any).importJob.create).toHaveBeenCalled();
     });
   });
 
-  describe('Step 2: Batch Commit Execution', () => {
-    it('Processes import items in transactions and initializes stock balances', async () => {
+  describe('Step 2: Batch Commit Execution via Job ID', () => {
+    it('Processes import items in transactions and marks ImportJob as COMPLETED', async () => {
+      (prisma as any).importJob.findFirst.mockResolvedValue({
+        id: 'job_test_123',
+        storeId: 1,
+        status: 'PREVIEWED',
+        expiresAt: new Date(Date.now() + 60000),
+        payloadJson: {
+          items: [
+            {
+              categoryName: 'Điện tử',
+              categoryCode: 'DT',
+              productName: 'Tai nghe Bluetooth',
+              productCode: 'TN-BT',
+              sku: 'SKU-TN01',
+              costPrice: 150000,
+              sellingPrice: 300000,
+              initialQuantity: 50,
+              minStockLevel: 10,
+              maxStockLevel: 200,
+            },
+          ],
+          mode: 'CREATE_ONLY',
+        },
+      });
+
+      (prisma as any).importJob.updateMany.mockResolvedValue({ count: 1 });
+      (prisma as any).importJob.update.mockResolvedValue({ id: 'job_test_123', status: 'COMPLETED' });
+
       (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
       (prisma.category.upsert as jest.Mock).mockResolvedValue({ id: 10 });
       (prisma.product.upsert as jest.Mock).mockResolvedValue({ id: 20 });
@@ -98,20 +131,7 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
       (prisma.inventoryBalance.upsert as jest.Mock).mockResolvedValue({ id: 40, quantity: 50 });
 
       const result = await service.commitImport(1, 100, {
-        items: [
-          {
-            categoryName: 'Điện tử',
-            categoryCode: 'DT',
-            productName: 'Tai nghe Bluetooth',
-            productCode: 'TN-BT',
-            sku: 'SKU-TN01',
-            costPrice: 150000,
-            sellingPrice: 300000,
-            initialQuantity: 50,
-            minStockLevel: 10,
-            maxStockLevel: 200,
-          },
-        ],
+        jobId: 'job_test_123',
       });
 
       expect(result.success).toBe(true);
@@ -120,6 +140,11 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
       expect(prisma.product.upsert).toHaveBeenCalled();
       expect(prisma.stockItem.create).toHaveBeenCalled();
       expect(prisma.stockMovement.create).toHaveBeenCalled();
+      expect((prisma as any).importJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'COMPLETED' }),
+        })
+      );
     });
   });
 

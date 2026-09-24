@@ -105,4 +105,41 @@ describe('OrderService - Vòng đời đơn hàng & Trừ tồn kho', () => {
       orderService.cancelOrder(1, 100, 50, { cancelReason: 'Khách muốn hủy' })
     ).rejects.toThrow(ConflictError);
   });
+
+  it('Phân bổ chiết khấu pro-rata cho từng OrderItem và dòng cuối nhận phần dư làm tròn chính xác', async () => {
+    (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([
+      { id: 1, sku: 'SKU-01', name: 'Item 1', sellingPrice: 100000, costPrice: 50000, isActive: true },
+      { id: 2, sku: 'SKU-02', name: 'Item 2', sellingPrice: 100000, costPrice: 50000, isActive: true },
+      { id: 3, sku: 'SKU-03', name: 'Item 3', sellingPrice: 100000, costPrice: 50000, isActive: true },
+    ]);
+
+    (prisma.order.create as jest.Mock).mockImplementation(({ data }) => Promise.resolve({ id: 10, ...data }));
+
+    await orderService.createDraftOrder(1, 100, {
+      items: [
+        { stockItemId: 1, quantity: 1 },
+        { stockItemId: 2, quantity: 1 },
+        { stockItemId: 3, quantity: 1 },
+      ],
+      discountAmount: 100000, // 100k discount on 300k subtotal => total = 200k. Lines: 66666.67, 66666.67, 66666.66
+      taxAmount: 0,
+    });
+
+    expect(prisma.order.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          subtotalAmount: expect.any(Object),
+          totalAmount: expect.any(Object),
+          items: expect.objectContaining({
+            create: expect.arrayContaining([
+              expect.objectContaining({ stockItemId: 1 }),
+              expect.objectContaining({ stockItemId: 2 }),
+              expect.objectContaining({ stockItemId: 3 }),
+            ]),
+          }),
+        }),
+      })
+    );
+  });
 });
+

@@ -1,20 +1,27 @@
-import { prisma } from '../../config/db';
+import { PrismaClient } from '@prisma/client';
+import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { inflowSchema, outflowSchema, auditSchema } from './inventory.schema';
 import { StockLedgerService } from './stock-ledger.service';
 
 export class InventoryService {
+  private prisma: PrismaClient;
+
+  constructor(customPrisma?: PrismaClient) {
+    this.prisma = customPrisma || defaultPrisma;
+  }
+
   private async getTargetWarehouse(storeId: number, warehouseId?: number) {
     if (warehouseId) {
-      const wh = await prisma.warehouse.findFirst({
+      const wh = await this.prisma.warehouse.findFirst({
         where: { id: warehouseId, storeId, isActive: true },
       });
       if (!wh) throw new NotFoundError('Kho hàng không tồn tại hoặc đã bị vô hiệu hóa');
       return wh;
     }
 
-    const defaultWh = await prisma.warehouse.findFirst({
+    const defaultWh = await this.prisma.warehouse.findFirst({
       where: { storeId, isDefault: true, isActive: true },
     });
     if (!defaultWh) throw new NotFoundError('Không tìm thấy kho mặc định của cửa hàng');
@@ -25,7 +32,7 @@ export class InventoryService {
     const warehouse = await this.getTargetWarehouse(storeId, input.warehouseId);
     const refId = input.referenceId || `INFLOW-${Date.now()}`;
 
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const movements = await StockLedgerService.atomicAdd(
         tx,
         {
@@ -48,7 +55,7 @@ export class InventoryService {
     const warehouse = await this.getTargetWarehouse(storeId, input.warehouseId);
     const refId = input.referenceId || `OUTFLOW-${Date.now()}`;
 
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const movements = await StockLedgerService.atomicDeduct(
         tx,
         {
@@ -71,7 +78,7 @@ export class InventoryService {
     const warehouse = await this.getTargetWarehouse(storeId, input.warehouseId);
     const refId = input.referenceId || `AUDIT-${Date.now()}`;
 
-    return prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
       const movements = [];
       const sortedItems = [...input.items].sort((a, b) => a.stockItemId - b.stockItemId);
 
@@ -162,7 +169,7 @@ export class InventoryService {
     }
 
     const [items, total] = await Promise.all([
-      prisma.inventoryBalance.findMany({
+      this.prisma.inventoryBalance.findMany({
         where,
         include: {
           warehouse: true,
@@ -176,7 +183,7 @@ export class InventoryService {
         skip,
         take: limit,
       }),
-      prisma.inventoryBalance.count({ where }),
+      this.prisma.inventoryBalance.count({ where }),
     ]);
 
     return {
@@ -213,7 +220,7 @@ export class InventoryService {
     const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
 
     const [items, total] = await Promise.all([
-      prisma.stockMovement.findMany({
+      this.prisma.stockMovement.findMany({
         where,
         include: {
           stockItem: true,
@@ -226,7 +233,7 @@ export class InventoryService {
         skip,
         take: limit,
       }),
-      prisma.stockMovement.count({ where }),
+      this.prisma.stockMovement.count({ where }),
     ]);
 
     return {
@@ -240,3 +247,4 @@ export class InventoryService {
     };
   }
 }
+

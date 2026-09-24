@@ -21,11 +21,25 @@ export const productListQuerySchema = paginationQuerySchema.extend({
   }, z.boolean().optional()),
 });
 
-export const orderListQuerySchema = paginationQuerySchema.extend({
-  status: z.enum(['DRAFT', 'CONFIRMED', 'FULFILLED', 'CANCELED']).optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-});
+export const orderListQuerySchema = paginationQuerySchema
+  .extend({
+    status: z.enum(['DRAFT', 'CONFIRMED', 'FULFILLED', 'CANCELED']).optional(),
+    from: z.coerce.date().optional(),
+    to: z.coerce.date().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.from && data.to) {
+        return data.from <= data.to;
+      }
+      return true;
+    },
+    {
+      message: 'Khoảng thời gian không hợp lệ: "from" phải trước hoặc bằng "to"',
+      path: ['from'],
+    }
+  );
+
 
 export const movementListQuerySchema = paginationQuerySchema.extend({
   stockItemId: z.coerce.number().int().positive().optional(),
