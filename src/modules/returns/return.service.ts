@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
@@ -41,16 +42,7 @@ export class ReturnService {
 
       const orderItemMap = new Map(order.items.map((i) => [i.id, i]));
 
-      // 1. Calculate historical returned quantity per orderItemId
-      const previousReturnsMap = new Map<number, number>();
-      for (const ret of order.returns) {
-        for (const item of ret.items) {
-          const current = previousReturnsMap.get(item.orderItemId) || 0;
-          previousReturnsMap.set(item.orderItemId, current + item.quantity);
-        }
-      }
-
-      // 2. Validate and aggregate current request items by orderItemId
+      // 1. Validate and aggregate current request items by orderItemId
       const requestItemsMap = new Map<number, { quantity: number; isRestockable: boolean; note?: string }>();
       for (const item of input.items) {
         const existing = requestItemsMap.get(item.orderItemId);
@@ -75,35 +67,51 @@ export class ReturnService {
         }
       }
 
-      let totalRefundAmount = 0;
+      // Sort orderItemIds ascending to prevent deadlocks under high concurrency
+      const sortedEntries = Array.from(requestItemsMap.entries()).sort((a, b) => a[0] - b[0]);
+
+      let totalRefundAmount = new Prisma.Decimal(0);
       const returnItemsData = [];
       const restockList: { stockItemId: number; quantity: number }[] = [];
 
-      for (const [orderItemId, reqItem] of requestItemsMap.entries()) {
+      // 2. Perform atomic conditional updates on order_items to strictly guard against over-return
+      for (const [orderItemId, reqItem] of sortedEntries) {
         const orderItem = orderItemMap.get(orderItemId);
         if (!orderItem) {
           throw new NotFoundError(`Dòng đơn hàng ID ${orderItemId} không thuộc đơn hàng #${order.orderNumber}`);
         }
 
-        const alreadyReturned = previousReturnsMap.get(orderItemId) || 0;
-        const maxReturnable = orderItem.quantity - alreadyReturned;
+        const updateResult = await tx.orderItem.updateMany({
+          where: {
+            id: orderItemId,
+            orderId: order.id,
+            storeId,
+            returnedQuantity: {
+              lte: orderItem.quantity - reqItem.quantity,
+            },
+          },
+          data: {
+            returnedQuantity: {
+              increment: reqItem.quantity,
+            },
+          },
+        });
 
-        if (reqItem.quantity > maxReturnable) {
-          throw new ValidationError(
-            `Số lượng trả vượt quá giới hạn mua của SKU ${orderItem.skuSnapshot} (Đã mua: ${orderItem.quantity}, Đã trả trước đó: ${alreadyReturned}, Yêu cầu trả: ${reqItem.quantity}, Tối đa cho phép: ${maxReturnable})`
+        if (updateResult.count !== 1) {
+          throw new ConflictError(
+            `Số lượng trả vượt quá giới hạn mua của SKU ${orderItem.skuSnapshot} (Số lượng đơn: ${orderItem.quantity}, Yêu cầu trả: ${reqItem.quantity})`
           );
         }
 
-        const unitPrice = toNumber(orderItem.unitPriceSnapshot);
-        const itemRefundPrice = unitPrice * reqItem.quantity;
-        totalRefundAmount += itemRefundPrice;
+        const itemRefundPrice = new Prisma.Decimal(orderItem.unitPriceSnapshot).mul(reqItem.quantity);
+        totalRefundAmount = totalRefundAmount.plus(itemRefundPrice);
 
         returnItemsData.push({
           storeId,
           orderItemId: orderItem.id,
           stockItemId: orderItem.stockItemId,
           quantity: reqItem.quantity,
-          refundPrice: toDecimal(itemRefundPrice),
+          refundPrice: itemRefundPrice,
           isRestockable: reqItem.isRestockable,
           restockWarehouseId: reqItem.isRestockable ? defaultWarehouse.id : null,
           note: reqItem.note,
@@ -141,7 +149,7 @@ export class ReturnService {
           orderId: order.id,
           returnNumber,
           status: 'COMPLETED',
-          totalRefundAmount: toDecimal(totalRefundAmount),
+          totalRefundAmount,
           reason: input.reason,
           createdById: userId,
           items: {

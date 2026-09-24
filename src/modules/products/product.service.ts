@@ -10,9 +10,34 @@ export class ProductService {
     const limit = Number(query?.limit) || 20;
     const skip = (page - 1) * limit;
 
+    const where: any = { storeId };
+
+    if (query?.categoryId) {
+      where.categoryId = Number(query.categoryId);
+    }
+
+    if (typeof query?.isActive === 'boolean') {
+      where.isActive = query.isActive;
+    }
+
+    if (query?.q && typeof query.q === 'string' && query.q.trim().length > 0) {
+      const keyword = query.q.trim();
+      where.OR = [
+        { name: { contains: keyword } },
+        { code: { contains: keyword } },
+        { stockItems: { some: { sku: { contains: keyword } } } },
+        { stockItems: { some: { barcode: { contains: keyword } } } },
+      ];
+    }
+
+    const sortField = ['createdAt', 'name', 'code', 'updatedAt'].includes(query?.sort)
+      ? query.sort
+      : 'createdAt';
+    const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
+
     const [items, total] = await Promise.all([
       prisma.product.findMany({
-        where: { storeId },
+        where,
         include: {
           category: true,
           stockItems: {
@@ -25,11 +50,11 @@ export class ProductService {
             },
           },
         },
-        orderBy: { createdAt: (query?.order as any) || 'desc' },
+        orderBy: { [sortField]: sortOrder },
         skip,
         take: limit,
       }),
-      prisma.product.count({ where: { storeId } }),
+      prisma.product.count({ where }),
     ]);
 
     return {

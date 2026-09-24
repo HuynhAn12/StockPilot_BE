@@ -186,8 +186,8 @@ export class AuthService {
     }
 
     if (session.expiresAt < new Date()) {
-      await prisma.authSession.update({
-        where: { id: session.id },
+      await prisma.authSession.updateMany({
+        where: { id: session.id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
       throw new UnauthenticatedError('Phiên đăng nhập đã hết hạn');
@@ -209,12 +209,27 @@ export class AuthService {
     const newRefreshToken = generateRefreshToken(tokenPayload);
     const newRefreshTokenHash = hashToken(newRefreshToken);
 
-    // Rotate session: Invalidate old session and create new active session
+    // Rotate session race-safely: Atomically revoke old session where revokedAt is null
     await prisma.$transaction(async (tx) => {
-      await tx.authSession.update({
-        where: { id: session.id },
+      const revokeResult = await tx.authSession.updateMany({
+        where: {
+          id: session.id,
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
         data: { revokedAt: new Date() },
       });
+
+      if (revokeResult.count !== 1) {
+        // Replay attack / concurrent reused token detected! Revoke all sessions for this user
+        await tx.authSession.updateMany({
+          where: { userId: session.userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        throw new UnauthenticatedError(
+          'Refresh token đã được sử dụng hoặc phiên không còn hợp lệ. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn'
+        );
+      }
 
       await tx.authSession.create({
         data: {

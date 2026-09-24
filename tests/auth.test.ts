@@ -119,13 +119,15 @@ describe('AuthService - Shop Owner Registration, Login & Session Management', ()
       },
     });
 
+    (prisma.authSession.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
     const result = await authService.refreshToken(validToken);
 
     expect(result.accessToken).toBeDefined();
     expect(result.refreshToken).toBeDefined();
-    expect(prisma.authSession.update).toHaveBeenCalledWith(
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 1 },
+        where: expect.objectContaining({ id: 1, revokedAt: null }),
         data: expect.objectContaining({ revokedAt: expect.any(Date) }),
       })
     );

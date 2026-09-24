@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
@@ -27,36 +28,36 @@ export class OrderService {
 
     const itemMap = new Map(stockItems.map((s) => [s.id, s]));
 
-    let subtotalAmount = 0;
+    let subtotalAmount = new Prisma.Decimal(0);
     const orderItemsData = [];
 
     for (const item of aggregatedItems) {
       const s = itemMap.get(item.stockItemId)!;
-      const unitPrice = toNumber(s.sellingPrice);
-      const costPrice = toNumber(s.costPrice);
-      const lineSubtotal = unitPrice * item.quantity;
-      subtotalAmount += lineSubtotal;
+      const unitPrice = new Prisma.Decimal(s.sellingPrice);
+      const costPrice = new Prisma.Decimal(s.costPrice);
+      const lineSubtotal = unitPrice.mul(item.quantity);
+      subtotalAmount = subtotalAmount.plus(lineSubtotal);
 
       orderItemsData.push({
         storeId,
         stockItemId: s.id,
         skuSnapshot: s.sku,
         nameSnapshot: s.name,
-        unitPriceSnapshot: toDecimal(unitPrice),
-        costPriceSnapshot: toDecimal(costPrice),
+        unitPriceSnapshot: unitPrice,
+        costPriceSnapshot: costPrice,
         quantity: item.quantity,
-        subtotal: toDecimal(lineSubtotal),
+        subtotal: lineSubtotal,
       });
     }
 
-    const discount = input.discountAmount || 0;
-    const tax = input.taxAmount || 0;
+    const discount = new Prisma.Decimal(input.discountAmount || 0);
+    const tax = new Prisma.Decimal(input.taxAmount || 0);
 
-    if (discount > subtotalAmount) {
+    if (discount.gt(subtotalAmount)) {
       throw new ValidationError(`Số tiền chiết khấu (${discount}) không thể vượt quá tổng tiền hàng (${subtotalAmount})`);
     }
 
-    const totalAmount = Math.max(0, subtotalAmount - discount + tax);
+    const totalAmount = subtotalAmount.minus(discount).plus(tax);
 
     return prisma.order.create({
       data: {
@@ -66,10 +67,10 @@ export class OrderService {
         customerName: input.customerName,
         customerPhone: input.customerPhone,
         customerAddress: input.customerAddress,
-        subtotalAmount: toDecimal(subtotalAmount),
-        discountAmount: toDecimal(discount),
-        taxAmount: toDecimal(tax),
-        totalAmount: toDecimal(totalAmount),
+        subtotalAmount,
+        discountAmount: discount,
+        taxAmount: tax,
+        totalAmount,
         note: input.note,
         createdById: userId,
         items: {

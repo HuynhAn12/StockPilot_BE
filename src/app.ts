@@ -17,6 +17,7 @@ import { inventoryRouter } from './modules/inventory/inventory.routes';
 import { orderRouter } from './modules/orders/order.routes';
 import { returnRouter } from './modules/returns/return.routes';
 import { analyticsRouter } from './modules/analytics/analytics.routes';
+import { importExportRouter } from './modules/import-export/import-export.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -94,6 +95,8 @@ export function createApp(): Express {
   app.use('/api/v1/orders', orderRouter);
   app.use('/api/v1/returns', returnRouter);
   app.use('/api/v1/analytics', analyticsRouter);
+  app.use('/api/v1/import', importExportRouter);
+  app.use('/api/v1/export', importExportRouter);
 
   // Centralized Error Handling
   app.use(errorHandler);

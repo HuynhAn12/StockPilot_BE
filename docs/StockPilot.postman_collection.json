@@ -1,0 +1,473 @@
+{
+	"info": {
+		"_postman_id": "stockpilot-backend-v3-collection",
+		"name": "StockPilot Backend API Collection",
+		"description": "Comprehensive Postman API Collection for StockPilot Modular Monolith Backend (36 Production Endpoints).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000/api/v1",
+			"type": "string"
+		},
+		{
+			"key": "accessToken",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refreshToken",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Health & System",
+			"item": [
+				{
+					"name": "Health Status",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/health"
+					}
+				},
+				{
+					"name": "Liveness Probe",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/health/live"
+					}
+				},
+				{
+					"name": "Readiness Probe (DB Check)",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/health/ready"
+					}
+				}
+			]
+		},
+		{
+			"name": "2. Authentication",
+			"item": [
+				{
+					"name": "Register Shop Owner",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/auth/register",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"fullName\": \"Nguyen Van A\",\n  \"email\": \"owner@stockpilot.com\",\n  \"password\": \"Password123@\",\n  \"storeName\": \"StockPilot Fashion Store\",\n  \"storeCode\": \"STORE_FASHION\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/auth/login",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"owner@stockpilot.com\",\n  \"password\": \"Password123@\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Refresh Token Rotation",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/auth/refresh",
+						"header": [{ "key": "Content-Type", "value": "application/json" }],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Get Profile (Me)",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/auth/me",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Logout Session",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/auth/logout",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Users & Staff",
+			"item": [
+				{
+					"name": "Create Warehouse Staff",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/users",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"fullName\": \"Staff Kho 1\",\n  \"email\": \"staff1@stockpilot.com\",\n  \"password\": \"StaffPassword123@\"\n}"
+						}
+					}
+				},
+				{
+					"name": "List Store Users",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/users?page=1&limit=20",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				}
+			]
+		},
+		{
+			"name": "4. Categories",
+			"item": [
+				{
+					"name": "List Categories",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/categories?page=1&limit=20",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Get Category by ID",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/categories/1",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Create Category",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/categories",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Áo sơ mi nam\",\n  \"code\": \"SHIRT_MEN\",\n  \"description\": \"Danh mục áo sơ mi nam cao cấp\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Update Category",
+					"request": {
+						"method": "PUT",
+						"url": "{{baseUrl}}/categories/1",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Áo sơ mi nam 2026\"\n}"
+						}
+					}
+				},
+				{
+					"name": "Delete Category",
+					"request": {
+						"method": "DELETE",
+						"url": "{{baseUrl}}/categories/1",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				}
+			]
+		},
+		{
+			"name": "5. Products & SKUs",
+			"item": [
+				{
+					"name": "List Products (with Search & Category filter)",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/products?q=somi&page=1&limit=20",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Get Product by ID",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/products/1",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Create Product with SKUs",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/products",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Áo sơ mi Oxford\",\n  \"code\": \"PROD_OXFORD\",\n  \"categoryId\": 1,\n  \"items\": [\n    {\n      \"sku\": \"OXFORD-M-WHT\",\n      \"name\": \"Áo sơ mi Oxford Trắng Size M\",\n      \"costPrice\": 120000,\n      \"sellingPrice\": 250000,\n      \"minStockLevel\": 5,\n      \"maxStockLevel\": 100\n    }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Update Product",
+					"request": {
+						"method": "PUT",
+						"url": "{{baseUrl}}/products/1",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Áo sơ mi Oxford Cao Cấp 2026\"\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "6. Inventory & Stock Ledger",
+			"item": [
+				{
+					"name": "Get Real-time Inventory Balances",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/inventory/balances?page=1&limit=50",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Get Audit Trail Movements",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/inventory/movements?page=1&limit=20",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Inbound Goods Inflow",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/inventory/inflow",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"note\": \"Nhập hàng đợt 1\",\n  \"items\": [\n    { \"stockItemId\": 1, \"quantity\": 50 }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Manual Outflow",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/inventory/outflow",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"note\": \"Xuất mẫu trưng bày\",\n  \"items\": [\n    { \"stockItemId\": 1, \"quantity\": 2 }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Audit Adjustment (Row-Locked)",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/inventory/audit",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"note\": \"Kiểm kê định kỳ cuối tháng\",\n  \"items\": [\n    { \"stockItemId\": 1, \"countedQuantity\": 48 }\n  ]\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "7. Orders Management",
+			"item": [
+				{
+					"name": "List Orders (Filter by Status)",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/orders?status=CONFIRMED&page=1&limit=20",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Get Order Detail",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/orders/1",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Create Draft Order",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/orders",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"customerName\": \"Tran Van B\",\n  \"customerPhone\": \"0987654321\",\n  \"discountAmount\": 20000,\n  \"taxAmount\": 0,\n  \"items\": [\n    { \"stockItemId\": 1, \"quantity\": 2 }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Confirm Order (Deduct Stock Atomically)",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/orders/1/confirm",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Fulfill Order",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/orders/1/fulfill",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Cancel Order (Auto Restock if Confirmed)",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/orders/1/cancel",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"reason\": \"Khách đổi ý trước khi giao hàng\"\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "8. Returns & Refunds",
+			"item": [
+				{
+					"name": "List Returns",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/returns?page=1&limit=20",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Create Return (Atomic Concurrency Guard)",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/returns",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"orderId\": 1,\n  \"reason\": \"Khách mặc không vừa size\",\n  \"items\": [\n    { \"orderItemId\": 1, \"quantity\": 1, \"isRestockable\": true }\n  ]\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "9. Analytics & Reporting",
+			"item": [
+				{
+					"name": "Financial & Inventory Dashboard",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/analytics/dashboard",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				}
+			]
+		},
+		{
+			"name": "10. Bulk Import & Export",
+			"item": [
+				{
+					"name": "Preview Import (Dry-Run)",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/import/preview",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"items\": [\n    {\n      \"categoryName\": \"Giày nam\",\n      \"categoryCode\": \"SHOES_MEN\",\n      \"productName\": \"Giày Sneaker Sport\",\n      \"productCode\": \"SNEAKER_SPORT\",\n      \"sku\": \"SNEAKER-41-BLK\",\n      \"costPrice\": 300000,\n      \"sellingPrice\": 650000,\n      \"initialQuantity\": 20,\n      \"minStockLevel\": 5,\n      \"maxStockLevel\": 100\n    }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Commit Import (Batch Chunking)",
+					"request": {
+						"method": "POST",
+						"url": "{{baseUrl}}/import/commit",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{accessToken}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"items\": [\n    {\n      \"categoryName\": \"Giày nam\",\n      \"categoryCode\": \"SHOES_MEN\",\n      \"productName\": \"Giày Sneaker Sport\",\n      \"productCode\": \"SNEAKER_SPORT\",\n      \"sku\": \"SNEAKER-41-BLK\",\n      \"costPrice\": 300000,\n      \"sellingPrice\": 650000,\n      \"initialQuantity\": 20,\n      \"minStockLevel\": 5,\n      \"maxStockLevel\": 100\n    }\n  ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Export Products CSV",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/export/products",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				},
+				{
+					"name": "Export Inventory CSV",
+					"request": {
+						"method": "GET",
+						"url": "{{baseUrl}}/export/inventory",
+						"header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }]
+					}
+				}
+			]
+		}
+	]
+}

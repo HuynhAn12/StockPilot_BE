@@ -39,4 +39,5 @@ Thumbs.db
 
 # Temporary workspace instruction files
 flow*.md
+STOCKPILOT_*.md
 *.tmp

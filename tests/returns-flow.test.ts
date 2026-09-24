@@ -6,6 +6,7 @@ jest.mock('../src/config/db', () => ({
   prisma: {
     warehouse: { findFirst: jest.fn() },
     order: { findFirst: jest.fn() },
+    orderItem: { updateMany: jest.fn() },
     stockItem: { findFirst: jest.fn() },
     inventoryBalance: { findUnique: jest.fn(), update: jest.fn(), upsert: jest.fn() },
     stockMovement: { create: jest.fn() },
@@ -41,25 +42,26 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
     ).rejects.toThrow(ConflictError);
   });
 
-  it('Từ chối nếu số lượng trả vượt quá số lượng đã mua hoặc chưa hoàn trả', async () => {
+  it('Từ chối nếu số lượng trả vượt quá số lượng có thể trả (atomic update count = 0)', async () => {
     (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
+      orderNumber: 'ORD-50',
       status: 'FULFILLED',
       items: [{ id: 1, stockItemId: 10, skuSnapshot: 'SKU-01', quantity: 2, unitPriceSnapshot: 100000 }],
-      returns: [
-        { items: [{ orderItemId: 1, quantity: 1 }] }, // Đã trả 1 cái trước đó
-      ],
+      returns: [],
     });
+    // Giả lập atomic updateMany thất bại do điều kiện lte: quantity - requested không thỏa mãn
+    (prisma.orderItem.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
 
     await expect(
       returnService.createReturn(1, 100, {
         orderId: 50,
         reason: 'Khách trả tiếp',
-        items: [{ orderItemId: 1, quantity: 2, isRestockable: true }], // Muốn trả 2 -> Tổng là 3 > 2 (Mua)
+        items: [{ orderItemId: 1, quantity: 5, isRestockable: true }],
       })
-    ).rejects.toThrow(ValidationError);
+    ).rejects.toThrow(ConflictError);
   });
 
   it('Hàng lỗi/hỏng (isRestockable = false) không được nhập lại vào kho', async () => {
@@ -67,10 +69,12 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
+      orderNumber: 'ORD-50',
       status: 'FULFILLED',
       items: [{ id: 1, stockItemId: 10, skuSnapshot: 'SKU-01', quantity: 2, unitPriceSnapshot: 100000 }],
       returns: [],
     });
+    (prisma.orderItem.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
 
     (prisma.returnOrder.create as jest.Mock).mockResolvedValue({
       id: 1,
@@ -96,6 +100,7 @@ describe('ReturnService - Trả hàng, hoàn tiền & nhập kho có điều ki�
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
+      orderNumber: 'ORD-50',
       status: 'FULFILLED',
       items: [{ id: 1, stockItemId: 10, skuSnapshot: 'SKU-01', quantity: 2, unitPriceSnapshot: 100000 }],
       returns: [],
