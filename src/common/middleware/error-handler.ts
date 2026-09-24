@@ -17,6 +17,28 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
     });
   }
 
+  if ((err as any).code === 'P2002') {
+    return res.status(409).json({
+      success: false,
+      error: {
+        code: 'CONFLICT',
+        message: 'Unique constraint conflict',
+        requestId,
+      },
+    });
+  }
+
+  if ((err as any).code === 'P2025') {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Requested record was not found',
+        requestId,
+      },
+    });
+  }
+
   // Log unexpected errors
   console.error('[UNHANDLED_ERROR]', {
     requestId,

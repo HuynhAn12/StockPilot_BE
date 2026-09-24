@@ -4,6 +4,7 @@ import { ReturnService } from '../../src/modules/returns/return.service';
 import { InventoryService } from '../../src/modules/inventory/inventory.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { ImportExportService } from '../../src/modules/import-export/import-export.service';
+import { generateRefreshToken, hashToken } from '../../src/common/utils/jwt';
 
 /**
  * Real MySQL 8.4 Concurrency & Transaction Integration Test Suite (V6 Hardened)
@@ -401,7 +402,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     expect([12, 15]).toContain(finalBalance?.quantity);
   });
 
-  it('Test F (Concurrent Refresh Token Rotation Race): 2 concurrent refreshes with the same token => exactly 1 succeeds, 1 rejected, active replacement count = 1', async () => {
+  it('Test F (Concurrent Refresh Token Rotation Race): 2 concurrent refreshes with the same token => exactly 1 succeeds, 1 rejected, replay revocation is persisted', async () => {
     const uniqueEmail = `race_user_${Date.now()}@test.com`;
     const regResult = await authService.registerOwner({
       email: uniqueEmail,
@@ -434,8 +435,40 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     const activeSessions = sessions.filter((s) => s.revokedAt === null);
     const revokedSessions = sessions.filter((s) => s.revokedAt !== null);
 
-    expect(activeSessions.length).toBe(1);
+    expect(activeSessions.length).toBe(0);
     expect(revokedSessions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Test M (Same-second Refresh): rotated refresh token differs from old token', async () => {
+    const uniqueEmail = `same_second_${Date.now()}@test.com`;
+    const regResult = await authService.registerOwner({
+      email: uniqueEmail,
+      password: 'StrongPassword123!',
+      fullName: 'Same Second Auth User',
+      storeName: `Same Second Store ${Date.now()}`,
+      storeCode: `SAME_${Date.now()}`,
+    });
+
+    createdTestStoreIds.push(regResult.user.storeId!);
+    createdTestUserIds.push(regResult.user.id);
+
+    const rotated = await authService.refreshToken(regResult.tokens.refreshToken);
+    expect(rotated.refreshToken).not.toBe(regResult.tokens.refreshToken);
+    expect(hashToken(rotated.refreshToken)).not.toBe(hashToken(regResult.tokens.refreshToken));
+  });
+
+  it('Test N (Rapid Refresh Token Uniqueness): 100 refresh JWTs generated rapidly are all unique', () => {
+    const payload = {
+      userId: testUserId,
+      email: `rapid_${Date.now()}@test.com`,
+      role: 'SHOP_OWNER' as const,
+      storeId: testStoreId,
+    };
+    const tokens = Array.from({ length: 100 }, () => generateRefreshToken(payload));
+    const hashes = tokens.map(hashToken);
+
+    expect(new Set(tokens).size).toBe(tokens.length);
+    expect(new Set(hashes).size).toBe(hashes.length);
   });
 
   it('Test G (Import Job Idempotency & Partial Failure Resume Guard): Duplicate commits on same ImportJob do not duplicate inventory stock', async () => {
@@ -493,5 +526,201 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     });
     expect(itemCheckpoints.length).toBe(1);
     expect(itemCheckpoints[0].status).toBe('COMPLETED');
+  });
+
+  it('Test H (Confirm vs Cancel Race): final CANCELED order always has stock restored and movement counts reconcile', async () => {
+    await prisma.inventoryBalance.upsert({
+      where: {
+        warehouseId_stockItemId: {
+          warehouseId: testWarehouseId,
+          stockItemId: testStockItemId,
+        },
+      },
+      create: {
+        storeId: testStoreId,
+        warehouseId: testWarehouseId,
+        stockItemId: testStockItemId,
+        quantity: 10,
+      },
+      update: { quantity: 10 },
+    });
+
+    const draftOrder = await orderService.createDraftOrder(testStoreId, testUserId, {
+      items: [{ stockItemId: testStockItemId, quantity: 2 }],
+      discountAmount: 0,
+      taxAmount: 0,
+    });
+
+    const results = await Promise.allSettled([
+      orderService.confirmOrder(testStoreId, testUserId, draftOrder.id),
+      orderService.cancelOrder(testStoreId, testUserId, draftOrder.id, { cancelReason: 'Confirm/cancel race' }),
+    ]);
+
+    const successful = results.filter((r) => r.status === 'fulfilled');
+    expect(successful.length).toBeGreaterThanOrEqual(1);
+
+    const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: draftOrder.id } });
+    const finalBalance = await prisma.inventoryBalance.findUnique({
+      where: {
+        warehouseId_stockItemId: {
+          warehouseId: testWarehouseId,
+          stockItemId: testStockItemId,
+        },
+      },
+    });
+
+    expect(finalOrder.status).toBe('CANCELED');
+    expect(finalBalance?.quantity).toBe(10);
+
+    const orderMovements = await prisma.stockMovement.findMany({
+      where: {
+        storeId: testStoreId,
+        stockItemId: testStockItemId,
+        referenceId: draftOrder.orderNumber,
+        type: { in: ['ORDER_FULFILL', 'ORDER_CANCEL_RESTOCK'] },
+      },
+    });
+    const deductCount = orderMovements.filter((m) => m.type === 'ORDER_FULFILL').length;
+    const restockCount = orderMovements.filter((m) => m.type === 'ORDER_CANCEL_RESTOCK').length;
+
+    expect([0, 1]).toContain(deductCount);
+    expect(restockCount).toBe(deductCount);
+  });
+
+  it('Test I (Concurrent Partial Return Rounding): 3 concurrent returns of 1 on qty 3/refundable 100.00 refund exactly 100.00', async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const product = await prisma.product.create({
+      data: {
+        storeId: testStoreId,
+        name: `Refund Product ${suffix}`,
+        code: `REFUND_PROD_${suffix}`,
+      },
+    });
+    const stockItem = await prisma.stockItem.create({
+      data: {
+        storeId: testStoreId,
+        productId: product.id,
+        sku: `REFUND_SKU_${suffix}`,
+        name: `Refund SKU ${suffix}`,
+        costPrice: 25,
+        sellingPrice: 50,
+      },
+    });
+
+    await prisma.inventoryBalance.create({
+      data: {
+        storeId: testStoreId,
+        warehouseId: testWarehouseId,
+        stockItemId: stockItem.id,
+        quantity: 10,
+      },
+    });
+
+    const draftOrder = await orderService.createDraftOrder(testStoreId, testUserId, {
+      items: [{ stockItemId: stockItem.id, quantity: 3 }],
+      discountAmount: 50,
+      taxAmount: 0,
+    });
+    await orderService.confirmOrder(testStoreId, testUserId, draftOrder.id);
+    const fulfilledOrder = await orderService.fulfillOrder(testStoreId, draftOrder.id);
+    const orderItemId = (fulfilledOrder as any).items[0].id;
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 3 }).map((_, idx) =>
+        returnService.createReturn(testStoreId, testUserId, {
+          orderId: fulfilledOrder.id,
+          reason: `Concurrent rounding return ${idx + 1}`,
+          items: [{ orderItemId, quantity: 1, isRestockable: false }],
+        })
+      )
+    );
+
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(3);
+
+    const updatedOrderItem = await prisma.orderItem.findUniqueOrThrow({ where: { id: orderItemId } });
+    expect(updatedOrderItem.returnedQuantity).toBe(3);
+    expect(Number(updatedOrderItem.refundedAmount)).toBe(100);
+
+    const returnItems = await prisma.returnItem.findMany({
+      where: { storeId: testStoreId, orderItemId },
+    });
+    const refundSum = returnItems.reduce((sum, item) => sum + Number(item.refundPrice), 0);
+    expect(refundSum).toBe(100);
+  });
+
+  it('Test J (REPLACE_STOCK vs Outflow): final quantity is only a valid serialized outcome', async () => {
+    await prisma.inventoryBalance.upsert({
+      where: {
+        warehouseId_stockItemId: {
+          warehouseId: testWarehouseId,
+          stockItemId: testStockItemId,
+        },
+      },
+      create: {
+        storeId: testStoreId,
+        warehouseId: testWarehouseId,
+        stockItemId: testStockItemId,
+        quantity: 10,
+      },
+      update: { quantity: 10 },
+    });
+
+    const existingItem = await prisma.stockItem.findUniqueOrThrow({ where: { id: testStockItemId } });
+    const existingProduct = await prisma.product.findUniqueOrThrow({ where: { id: existingItem.productId } });
+    const previewRes = await importExportService.previewImport(testStoreId, testUserId, {
+      mode: 'REPLACE_STOCK',
+      warehouseId: testWarehouseId,
+      items: [
+        {
+          categoryName: 'Replace Test Category',
+          categoryCode: `REPLACE_CAT_${Date.now()}`,
+          productName: existingProduct.name,
+          productCode: existingProduct.code,
+          sku: existingItem.sku,
+          costPrice: Number(existingItem.costPrice),
+          sellingPrice: Number(existingItem.sellingPrice),
+          countedQuantity: 15,
+          minStockLevel: existingItem.minStockLevel,
+          maxStockLevel: existingItem.maxStockLevel,
+        },
+      ],
+    });
+
+    const [replaceResult, outflowResult] = await Promise.allSettled([
+      importExportService.commitImport(testStoreId, testUserId, { jobId: previewRes.jobId }),
+      inventoryService.outflow(testStoreId, testUserId, {
+        warehouseId: testWarehouseId,
+        items: [{ stockItemId: testStockItemId, quantity: 3 }],
+        note: 'Concurrent outflow during REPLACE_STOCK',
+      }),
+    ]);
+
+    expect(replaceResult.status).toBe('fulfilled');
+    expect(outflowResult.status).toBe('fulfilled');
+
+    const finalBalance = await prisma.inventoryBalance.findUnique({
+      where: {
+        warehouseId_stockItemId: {
+          warehouseId: testWarehouseId,
+          stockItemId: testStockItemId,
+        },
+      },
+    });
+
+    expect([12, 15]).toContain(finalBalance?.quantity);
+
+    const movements = await prisma.stockMovement.findMany({
+      where: {
+        storeId: testStoreId,
+        stockItemId: testStockItemId,
+        OR: [
+          { referenceId: `JOB-${previewRes.jobId}`, type: 'AUDIT_ADJUSTMENT' },
+          { note: 'Concurrent outflow during REPLACE_STOCK', type: 'OUTFLOW' },
+        ],
+      },
+    });
+
+    expect(movements.some((m) => m.type === 'AUDIT_ADJUSTMENT')).toBe(true);
+    expect(movements.some((m) => m.type === 'OUTFLOW')).toBe(true);
   });
 });

@@ -179,6 +179,7 @@ export class OrderService {
           userId,
           referenceType: 'ORDER',
           referenceId: order.orderNumber,
+          idempotencyKey: `ORDER_CONFIRM:${storeId}:${order.id}`,
           note: `Xuất kho xác nhận đơn hàng ${order.orderNumber}`,
         },
         'ORDER_FULFILL',
@@ -227,13 +228,25 @@ export class OrderService {
 
       if (!order) throw new NotFoundError('Đơn hàng không tồn tại');
 
-      if (order.status === 'FULFILLED') {
+      const lockedOrders = typeof (tx as any).$queryRaw === 'function'
+        ? await tx.$queryRaw<Array<{ id: number; status: string }>>`
+            SELECT id, status
+            FROM orders
+            WHERE id = ${orderId}
+              AND storeId = ${storeId}
+            FOR UPDATE
+          `
+        : [{ id: order.id, status: order.status }];
+
+      const lockedOrder = lockedOrders[0];
+
+      if (lockedOrder.status === 'FULFILLED') {
         throw new ConflictError(
           'Đơn hàng đã hoàn thành FULFILLED không thể hủy trực tiếp. Vui lòng sử dụng tính năng Trả hàng (Returns)'
         );
       }
 
-      if (order.status === 'CANCELED') {
+      if (lockedOrder.status === 'CANCELED') {
         throw new ConflictError('Đơn hàng đã bị hủy trước đó');
       }
 
@@ -256,7 +269,7 @@ export class OrderService {
       }
 
       // If order was CONFIRMED, atomically restock items into inventory
-      if (order.status === 'CONFIRMED') {
+      if (lockedOrder.status === 'CONFIRMED') {
         if (!defaultWarehouse) {
           throw new NotFoundError('Không tìm thấy kho mặc định để hoàn trả tồn kho');
         }
@@ -274,6 +287,7 @@ export class OrderService {
             userId,
             referenceType: 'ORDER_CANCEL',
             referenceId: order.orderNumber,
+            idempotencyKey: `ORDER_CANCEL:${storeId}:${order.id}`,
             note: `Hoàn kho do hủy đơn hàng ${order.orderNumber}. Lý do: ${input.cancelReason}`,
           },
           'ORDER_CANCEL_RESTOCK',

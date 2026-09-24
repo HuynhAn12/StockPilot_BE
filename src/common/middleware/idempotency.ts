@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { prisma as defaultPrisma } from '../../config/db';
-import { ConflictError } from '../errors/app-error';
+import { ConflictError, ValidationError } from '../errors/app-error';
 
 export interface IdempotencyOptions {
   operation: string;
@@ -19,18 +19,16 @@ export function canonicalJsonStringify(obj: any): string {
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJsonStringify(obj[k])).join(',') + '}';
 }
 
-/**
- * Request-Level Idempotency Middleware (V7 Hardened)
- * - P0-01: Canonical Request Identity includes Method + Path + Params + Query + Body
- * - P0-02: Stale & Expired PROCESSING automatic cleanup & eviction
- */
 export function idempotency(options: IdempotencyOptions) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const key = req.headers['idempotency-key'] as string | undefined;
 
-    // If no Idempotency-Key header is provided, proceed normally
     if (!key) {
       return next();
+    }
+
+    if (key.length < 1 || key.length > 128) {
+      return next(new ValidationError('Idempotency-Key must be between 1 and 128 characters'));
     }
 
     const storeId = req.user?.storeId;
@@ -39,21 +37,21 @@ export function idempotency(options: IdempotencyOptions) {
     }
 
     const operation = options.operation;
-    const ttlSeconds = options.ttlSeconds || 86400; // 24 hours default
+    const ttlSeconds = options.ttlSeconds || 86400;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
 
-    const canonicalRequestString = [
-      req.method.toUpperCase(),
-      (req.baseUrl || '') + (req.path || ''),
-      canonicalJsonStringify(req.params || {}),
-      canonicalJsonStringify(req.query || {}),
-      canonicalJsonStringify(req.body || {}),
-    ].join('|');
+    const identity = {
+      method: req.method.toUpperCase(),
+      path: (req.baseUrl || '') + (req.path || ''),
+      params: req.params || {},
+      query: req.query || {},
+      body: req.body ?? {},
+    };
 
     const requestHash = crypto
       .createHash('sha256')
-      .update(canonicalRequestString)
+      .update(canonicalJsonStringify(identity))
       .digest('hex');
 
     const prisma = req.app.get('prisma') || defaultPrisma;
@@ -70,34 +68,24 @@ export function idempotency(options: IdempotencyOptions) {
       });
 
       if (existing) {
-        const isExpired = existing.expiresAt <= now;
-        const isStaleProcessing =
-          existing.status === 'PROCESSING' &&
-          existing.createdAt < new Date(now.getTime() - 60000);
+        if (existing.requestHash !== requestHash) {
+          throw new ConflictError('IDEMPOTENCY_KEY_REUSED: Idempotency-Key was used with a different request identity');
+        }
 
-        if (isExpired || isStaleProcessing || existing.status === 'FAILED') {
-          // Evict stale/failed record to allow clean execution
-          await prisma.idempotencyRequest.delete({ where: { id: existing.id } }).catch(() => {});
-        } else {
-          // Payload tampering detection
-          if (existing.requestHash !== requestHash) {
-            throw new ConflictError('IDEMPOTENCY_KEY_REUSED: Khóa Idempotency-Key đã được sử dụng với payload hoặc endpoint khác');
-          }
+        if (existing.status === 'COMPLETED' && existing.responseJson) {
+          res.setHeader('X-Cache-Lookup', 'IDEMPOTENT_HIT');
+          return res.status(existing.statusCode || 200).json(existing.responseJson);
+        }
 
-          // Return saved response if already completed
-          if (existing.status === 'COMPLETED' && existing.responseJson) {
-            res.setHeader('X-Cache-Lookup', 'IDEMPOTENT_HIT');
-            return res.status(existing.statusCode || 200).json(existing.responseJson);
-          }
+        if (existing.status === 'PROCESSING') {
+          throw new ConflictError('REQUEST_IN_PROGRESS: request is processing or has an unknown outcome; it will not be replayed automatically');
+        }
 
-          // Return in-progress conflict if currently active
-          if (existing.status === 'PROCESSING') {
-            throw new ConflictError('REQUEST_IN_PROGRESS: Yêu cầu với Idempotency-Key này đang được xử lý');
-          }
+        if (existing.status === 'FAILED') {
+          throw new ConflictError('IDEMPOTENCY_REQUEST_FAILED: use a new key only after checking the system state');
         }
       }
 
-      // 2. Reserve request as PROCESSING
       const record = await prisma.idempotencyRequest.create({
         data: {
           storeId,
@@ -109,35 +97,34 @@ export function idempotency(options: IdempotencyOptions) {
         },
       });
 
-      // 3. Intercept response to store response payload on completion
       const originalJson = res.json.bind(res);
       const originalSend = res.send.bind(res);
 
       res.json = (body: any) => {
         const statusCode = res.statusCode || 200;
-        if (statusCode < 400) {
-          prisma.idempotencyRequest
-            .update({
+        const responseJson = JSON.parse(JSON.stringify(body));
+        const completion = statusCode < 400
+          ? prisma.idempotencyRequest.update({
               where: { id: record.id },
               data: {
                 status: 'COMPLETED',
                 statusCode,
-                responseJson: body,
+                responseJson,
               },
             })
-            .catch(() => {});
-        } else {
-          prisma.idempotencyRequest
-            .update({
+          : prisma.idempotencyRequest.update({
               where: { id: record.id },
               data: {
                 status: 'FAILED',
                 statusCode,
               },
-            })
-            .catch(() => {});
-        }
-        return originalJson(body);
+            });
+
+        completion
+          .then(() => originalJson(body))
+          .catch(next);
+
+        return res;
       };
 
       res.send = (body: any) => {
@@ -147,7 +134,6 @@ export function idempotency(options: IdempotencyOptions) {
       next();
     } catch (err: any) {
       if (err.code === 'P2002') {
-        // Prisma unique constraint race condition
         const concurrentRecord = await prisma.idempotencyRequest.findUnique({
           where: {
             storeId_operation_key: {
@@ -162,7 +148,7 @@ export function idempotency(options: IdempotencyOptions) {
           return res.status(concurrentRecord.statusCode || 200).json(concurrentRecord.responseJson);
         }
 
-        return next(new ConflictError('REQUEST_IN_PROGRESS: Yêu cầu với Idempotency-Key này đang được xử lý'));
+        return next(new ConflictError('REQUEST_IN_PROGRESS: request is processing'));
       }
       next(err);
     }

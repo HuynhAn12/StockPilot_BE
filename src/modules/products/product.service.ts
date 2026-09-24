@@ -1,5 +1,5 @@
 import { prisma } from '../../config/db';
-import { ConflictError, NotFoundError } from '../../common/errors/app-error';
+import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createProductSchema, updateProductSchema } from './product.schema';
 import { toDecimal } from '../../common/utils/decimal';
@@ -117,6 +117,15 @@ export class ProductService {
 
     // Check SKU duplicates within store
     const skus = input.items.map((i) => i.sku.toUpperCase().trim());
+    if (new Set(skus).size !== skus.length) {
+      throw new ValidationError('Duplicate SKU in the same product request');
+    }
+
+    const invalidThreshold = input.items.find((i) => i.minStockLevel > i.maxStockLevel);
+    if (invalidThreshold) {
+      throw new ValidationError(`minStockLevel must be less than or equal to maxStockLevel for SKU ${invalidThreshold.sku}`);
+    }
+
     const existingSKUs = await prisma.stockItem.findMany({
       where: {
         storeId,
@@ -130,8 +139,12 @@ export class ProductService {
 
     // Find default warehouse to initialize balance row with 0 quantity
     const defaultWarehouse = await prisma.warehouse.findFirst({
-      where: { storeId, isDefault: true },
+      where: { storeId, isDefault: true, isActive: true },
     });
+
+    if (!defaultWarehouse) {
+      throw new NotFoundError('No active default warehouse exists for this store');
+    }
 
     return prisma.$transaction(async (tx) => {
       const product = await tx.product.create({
@@ -160,17 +173,15 @@ export class ProductService {
         });
 
         // Initialize balance with 0
-        if (defaultWarehouse) {
-          await tx.inventoryBalance.create({
-            data: {
-              storeId,
-              warehouseId: defaultWarehouse.id,
-              stockItemId: stockItem.id,
-              quantity: 0,
-              reservedQuantity: 0,
-            },
-          });
-        }
+        await tx.inventoryBalance.create({
+          data: {
+            storeId,
+            warehouseId: defaultWarehouse.id,
+            stockItemId: stockItem.id,
+            quantity: 0,
+            reservedQuantity: 0,
+          },
+        });
       }
 
       return tx.product.findUnique({

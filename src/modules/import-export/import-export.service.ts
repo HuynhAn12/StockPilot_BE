@@ -80,6 +80,8 @@ export class ImportExportService {
     const validItems: typeof items = [];
 
     const seenSkusInPayload = new Set<string>();
+    const productMetadata = new Map<string, { productName: string; categoryCode: string }>();
+    const categoryMetadata = new Map<string, string>();
     const invalidRowIndices = new Set<number>();
     const warningRowIndices = new Set<number>();
 
@@ -102,6 +104,45 @@ export class ImportExportService {
         invalidRowIndices.add(rowNumber);
       } else {
         seenSkusInPayload.add(normalizedSku);
+      }
+
+      const normalizedProductCode = item.productCode.trim().toUpperCase();
+      const normalizedCategoryCode = item.categoryCode.trim().toUpperCase();
+      const existingProductMetadata = productMetadata.get(normalizedProductCode);
+      if (
+        existingProductMetadata &&
+        (existingProductMetadata.productName !== item.productName.trim() ||
+          existingProductMetadata.categoryCode !== normalizedCategoryCode)
+      ) {
+        issues.push({
+          row: rowNumber,
+          sku: item.sku,
+          field: 'productCode',
+          severity: 'ERROR',
+          message: `Conflicting product metadata for productCode ${item.productCode}`,
+        });
+        hasError = true;
+        invalidRowIndices.add(rowNumber);
+      } else {
+        productMetadata.set(normalizedProductCode, {
+          productName: item.productName.trim(),
+          categoryCode: normalizedCategoryCode,
+        });
+      }
+
+      const existingCategoryName = categoryMetadata.get(normalizedCategoryCode);
+      if (existingCategoryName && existingCategoryName !== item.categoryName.trim()) {
+        issues.push({
+          row: rowNumber,
+          sku: item.sku,
+          field: 'categoryCode',
+          severity: 'ERROR',
+          message: `Conflicting category metadata for categoryCode ${item.categoryCode}`,
+        });
+        hasError = true;
+        invalidRowIndices.add(rowNumber);
+      } else {
+        categoryMetadata.set(normalizedCategoryCode, item.categoryName.trim());
       }
 
       // 2. Validate price relationship (Warning)
@@ -127,12 +168,29 @@ export class ImportExportService {
         storeId,
         sku: { in: Array.from(seenSkusInPayload) },
       },
-      select: { sku: true },
+      select: { sku: true, product: { select: { code: true } } },
     });
 
     const existingSkuSet = new Set(existingStockItems.map((s) => s.sku.toUpperCase()));
+    const existingSkuProductCode = new Map(
+      existingStockItems
+        .filter((s: any) => s.product?.code)
+        .map((s: any) => [s.sku.toUpperCase(), s.product.code.toUpperCase()])
+    );
     const previewItems = items.map((item, idx) => {
-      const isExisting = existingSkuSet.has(item.sku.trim().toUpperCase());
+      const normalizedSku = item.sku.trim().toUpperCase();
+      const isExisting = existingSkuSet.has(normalizedSku);
+      const existingProductCode = existingSkuProductCode.get(normalizedSku);
+      if (existingProductCode && existingProductCode !== item.productCode.trim().toUpperCase()) {
+        issues.push({
+          row: idx + 1,
+          sku: item.sku,
+          field: 'productCode',
+          severity: 'ERROR',
+          message: `SKU_PRODUCT_MISMATCH: SKU ${item.sku} belongs to product ${existingProductCode}, not ${item.productCode}`,
+        });
+        invalidRowIndices.add(idx + 1);
+      }
       if (isExisting && mode === 'CREATE_ONLY') {
         issues.push({
           row: idx + 1,
@@ -163,7 +221,7 @@ export class ImportExportService {
         categoryCode: i.categoryCode.trim(),
       })),
       mode: mode || 'CREATE_ONLY',
-      warehouseId: input.warehouseId ?? null,
+      warehouseId: parsedInput.warehouseId ?? null,
     };
 
     const payloadHash = crypto
@@ -310,16 +368,58 @@ export class ImportExportService {
         orderBy: { rowNumber: 'asc' },
       });
 
+      const checkpointCount = typeof (this.prisma as any).importJobItem.count === 'function'
+        ? await (this.prisma as any).importJobItem.count({
+            where: { importJobId: job.id },
+          })
+        : pendingItems.length;
+
+      if (checkpointCount > 0 && pendingItems.length === 0) {
+        const completedCount = await (this.prisma as any).importJobItem.count({
+          where: { importJobId: job.id, status: 'COMPLETED' },
+        });
+        const skippedCount = await (this.prisma as any).importJobItem.count({
+          where: { importJobId: job.id, status: 'SKIPPED' },
+        });
+
+        const result = {
+          success: true,
+          message: `Đã hoàn tất import từ checkpoint hiện có`,
+          jobId: job.id,
+          summary: {
+            totalProcessed: checkpointCount,
+            createdProducts: 0,
+            createdSkus: completedCount,
+            updatedSkus: 0,
+            skippedSkus: skippedCount,
+            failedRowsCount: 0,
+            mode,
+          },
+        };
+
+        await this.prisma.importJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'COMPLETED',
+            resultJson: result,
+          },
+        });
+
+        return result;
+      }
+
       // Fallback if importJobItems were not generated in legacy jobs
       const itemsToProcess = pendingItems.length > 0
         ? pendingItems
-        : jobData.items.map((item, idx) => ({
+        : checkpointCount === 0
+        ? jobData.items.map((item, idx) => ({
             id: undefined,
             rowNumber: idx + 1,
             sku: item.sku.trim(),
             resultJson: item,
             status: 'PENDING',
-          }));
+          }))
+        : [];
 
       const chunkSize = 100;
       let createdProducts = 0;
@@ -443,7 +543,7 @@ export class ImportExportService {
               // 4. Handle Stock Inventory according to Mode with Deterministic Idempotency Key
               const deterministicMovementKey = `IMPORT:${job.id}:${rowNumber}:${stockItemId}`;
 
-              if (!existingSku && item.initialQuantity > 0) {
+              if (!existingSku && mode === 'CREATE_ONLY' && item.initialQuantity > 0) {
                 // Brand new SKU initial stock inflow
                 await StockLedgerService.atomicAdd(
                   tx,
@@ -494,50 +594,19 @@ export class ImportExportService {
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
                 const targetQty = item.countedQuantity !== undefined ? item.countedQuantity : item.initialQuantity;
-                const lockedBalances: Array<{ id: number; quantity: number }> = await tx.$queryRaw`
-                  SELECT id, quantity FROM inventory_balances
-                  WHERE warehouse_id = ${warehouse.id} AND stock_item_id = ${stockItemId}
-                  FOR UPDATE
-                `;
-
-                let beforeQty = 0;
-                if (lockedBalances.length > 0) {
-                  beforeQty = lockedBalances[0].quantity;
-                  await tx.inventoryBalance.update({
-                    where: { id: lockedBalances[0].id },
-                    data: { quantity: targetQty },
-                  });
-                } else {
-                  await tx.inventoryBalance.create({
-                    data: {
-                      storeId,
-                      warehouseId: warehouse.id,
-                      stockItemId,
-                      quantity: targetQty,
-                      reservedQuantity: 0,
-                    },
-                  });
-                }
-
-                const delta = targetQty - beforeQty;
-                if (delta !== 0) {
-                  await tx.stockMovement.create({
-                    data: {
-                      storeId,
-                      warehouseId: warehouse.id,
-                      stockItemId,
-                      type: 'AUDIT_ADJUSTMENT',
-                      delta,
-                      beforeQuantity: beforeQty,
-                      afterQuantity: targetQty,
-                      referenceType: 'IMPORT_AUDIT',
-                      referenceId: `JOB-${job.id}`,
-                      idempotencyKey: deterministicMovementKey,
+                await StockLedgerService.replaceWithCount(
+                  tx,
+                  {
+                    storeId,
+                    warehouseId: warehouse.id,
+                    userId,
+                    referenceType: 'IMPORT_AUDIT',
+                    referenceId: `JOB-${job.id}`,
+                    idempotencyKey: deterministicMovementKey,
                       note: `Kiểm kê thay thế tồn kho từ bulk import (Job #${job.id}, dòng #${rowNumber})`,
-                      createdById: userId,
                     },
-                  });
-                }
+                  { stockItemId, countedQuantity: targetQty }
+                );
               }
 
               // Mark item as COMPLETED
@@ -593,6 +662,15 @@ export class ImportExportService {
 
       return result;
     } catch (err) {
+      if (typeof (this.prisma as any).importJobItem.updateMany === 'function') {
+        await (this.prisma as any).importJobItem.updateMany({
+          where: { importJobId: job.id, status: 'PROCESSING' },
+          data: {
+            status: 'FAILED',
+            errorJson: { message: err instanceof Error ? err.message : 'Import failed' },
+          },
+        });
+      }
       await this.prisma.importJob.update({
         where: { id: job.id },
         data: { status: 'FAILED' },
@@ -752,7 +830,7 @@ export class ImportExportService {
     const orderItems = await this.prisma.orderItem.findMany({
       where: {
         storeId,
-        order: { status: { in: ['CONFIRMED', 'FULFILLED'] } },
+        order: { status: 'FULFILLED' },
       },
       include: {
         order: true,
@@ -780,7 +858,7 @@ export class ImportExportService {
         sanitizeCsvCell(oi.quantity),
         sanitizeCsvCell(oi.unitPriceSnapshot),
         sanitizeCsvCell(oi.subtotal),
-        sanitizeCsvCell(oi.createdAt.toISOString()),
+        sanitizeCsvCell(oi.order.fulfilledAt ? oi.order.fulfilledAt.toISOString() : ''),
       ];
       rows.push(row.join(','));
     }
@@ -980,5 +1058,3 @@ export class ImportExportService {
     return rows.join('\n');
   }
 }
-
-

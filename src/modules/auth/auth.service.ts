@@ -173,10 +173,15 @@ export class AuthService {
     }
 
     const tokenHash = hashToken(token);
-    const session = await this.prisma.authSession.findFirst({
-      where: { refreshTokenHash: tokenHash },
-      include: { user: { include: { store: true } } },
-    });
+    const session = await ((this.prisma.authSession as any).findUnique
+      ? this.prisma.authSession.findUnique({
+          where: { refreshTokenHash: tokenHash },
+          include: { user: { include: { store: true } } },
+        })
+      : this.prisma.authSession.findFirst({
+          where: { refreshTokenHash: tokenHash },
+          include: { user: { include: { store: true } } },
+        }));
 
     // Replay detection: If session doesn't exist or already revoked
     if (!session) {
@@ -218,7 +223,7 @@ export class AuthService {
     const expiresAt = getRefreshTokenExpiry(newRefreshToken);
 
     // Rotate session race-safely: Atomically revoke old session where revokedAt is null
-    await this.prisma.$transaction(async (tx) => {
+    const rotation = await this.prisma.$transaction(async (tx) => {
       const revokeResult = await tx.authSession.updateMany({
         where: {
           id: session.id,
@@ -234,9 +239,12 @@ export class AuthService {
           where: { userId: session.userId, revokedAt: null },
           data: { revokedAt: new Date() },
         });
+        return { replayDetected: true };
+        /*
         throw new UnauthenticatedError(
           'Refresh token đã được sử dụng hoặc phiên không còn hợp lệ. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn'
         );
+        */
       }
 
       await tx.authSession.create({
@@ -248,7 +256,15 @@ export class AuthService {
           ipAddress: meta?.ipAddress || session.ipAddress,
         },
       });
+
+      return { replayDetected: false };
     });
+
+    if (rotation.replayDetected) {
+      throw new UnauthenticatedError(
+        'Refresh token đã được sử dụng hoặc phiên không còn hợp lệ. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn'
+      );
+    }
 
     return {
       accessToken: newAccessToken,

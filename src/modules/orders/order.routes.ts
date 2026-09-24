@@ -15,7 +15,7 @@ orderRouter.use(requireStoreScope);
 
 orderRouter.get('/', validate({ query: orderListQuerySchema }), (req, res, next) => controller.list(req, res, next));
 orderRouter.get('/:id', validate({ params: idParamSchema }), (req, res, next) => controller.getById(req, res, next));
-orderRouter.post('/', validate({ body: createOrderSchema }), (req, res, next) => controller.create(req, res, next));
+orderRouter.post('/', validate({ body: createOrderSchema }), idempotency({ operation: 'ORDER_CREATE' }), (req, res, next) => controller.create(req, res, next));
 orderRouter.post('/:id/confirm', validate({ params: idParamSchema }), idempotency({ operation: 'ORDER_CONFIRM' }), (req, res, next) => controller.confirm(req, res, next));
 orderRouter.post('/:id/fulfill', validate({ params: idParamSchema }), (req, res, next) => controller.fulfill(req, res, next));
 orderRouter.post('/:id/cancel', validate({ params: idParamSchema, body: cancelOrderSchema }), idempotency({ operation: 'ORDER_CANCEL' }), (req, res, next) => controller.cancel(req, res, next));

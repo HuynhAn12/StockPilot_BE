@@ -53,6 +53,9 @@ export class StockLedgerService {
 
     for (const item of normalized) {
       if (item.quantity <= 0) continue;
+      const movementIdempotencyKey = context.idempotencyKey && normalized.length > 1
+        ? `${context.idempotencyKey}:${item.stockItemId}`
+        : context.idempotencyKey;
 
       // 1. Verify SKU exists and is active in store
       const stockItem = await tx.stockItem.findFirst({
@@ -116,7 +119,7 @@ export class StockLedgerService {
           afterQuantity,
           referenceType: context.referenceType,
           referenceId: context.referenceId,
-          idempotencyKey: context.idempotencyKey,
+          idempotencyKey: movementIdempotencyKey,
           note: context.note || `Xuất kho: ${movementType}`,
           createdById: context.userId,
         },
@@ -142,6 +145,9 @@ export class StockLedgerService {
 
     for (const item of normalized) {
       if (item.quantity <= 0) continue;
+      const movementIdempotencyKey = context.idempotencyKey && normalized.length > 1
+        ? `${context.idempotencyKey}:${item.stockItemId}`
+        : context.idempotencyKey;
 
       const stockItem = await tx.stockItem.findFirst({
         where: { id: item.stockItemId, storeId: context.storeId, isActive: true },
@@ -185,7 +191,7 @@ export class StockLedgerService {
           afterQuantity,
           referenceType: context.referenceType,
           referenceId: context.referenceId,
-          idempotencyKey: context.idempotencyKey,
+          idempotencyKey: movementIdempotencyKey,
           note: context.note || `Nhập kho: ${movementType}`,
           createdById: context.userId,
         },
@@ -195,5 +201,81 @@ export class StockLedgerService {
     }
 
     return movements;
+  }
+
+  static async replaceWithCount(
+    tx: TransactionClient,
+    context: StockChangeContext,
+    item: { stockItemId: number; countedQuantity: number },
+    movementType: MovementType = 'AUDIT_ADJUSTMENT'
+  ) {
+    const stockItem = await tx.stockItem.findFirst({
+      where: { id: item.stockItemId, storeId: context.storeId, isActive: true },
+    });
+
+    if (!stockItem) {
+      throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
+    }
+
+    await tx.inventoryBalance.upsert({
+      where: {
+        warehouseId_stockItemId: {
+          warehouseId: context.warehouseId,
+          stockItemId: item.stockItemId,
+        },
+      },
+      create: {
+        storeId: context.storeId,
+        warehouseId: context.warehouseId,
+        stockItemId: item.stockItemId,
+        quantity: 0,
+        reservedQuantity: 0,
+      },
+      update: {},
+    });
+
+    const lockedRows = await tx.$queryRaw<Array<{ id: number; quantity: number }>>`
+      SELECT id, quantity
+      FROM inventory_balances
+      WHERE warehouseId = ${context.warehouseId}
+        AND stockItemId = ${item.stockItemId}
+      FOR UPDATE
+    `;
+
+    const lockedBalance = lockedRows[0];
+    const beforeQuantity = lockedBalance ? Number(lockedBalance.quantity) : 0;
+    const afterQuantity = item.countedQuantity;
+    const delta = afterQuantity - beforeQuantity;
+
+    await tx.inventoryBalance.update({
+      where: {
+        warehouseId_stockItemId: {
+          warehouseId: context.warehouseId,
+          stockItemId: item.stockItemId,
+        },
+      },
+      data: { quantity: afterQuantity },
+    });
+
+    if (delta === 0) {
+      return null;
+    }
+
+    return tx.stockMovement.create({
+      data: {
+        storeId: context.storeId,
+        warehouseId: context.warehouseId,
+        stockItemId: item.stockItemId,
+        type: movementType,
+        delta,
+        beforeQuantity,
+        afterQuantity,
+        referenceType: context.referenceType,
+        referenceId: context.referenceId,
+        idempotencyKey: context.idempotencyKey,
+        note: context.note || `Kiểm kê điều chỉnh kho: ${delta >= 0 ? '+' : ''}${delta}`,
+        createdById: context.userId,
+      },
+    });
   }
 }

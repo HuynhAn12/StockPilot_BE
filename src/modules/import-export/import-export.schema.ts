@@ -23,16 +23,35 @@ export const importItemSchema = z.object({
   countedQuantity: z.coerce.number().int().min(0, 'Số lượng kiểm kê phải >= 0').optional(),
   minStockLevel: z.coerce.number().int().min(0).default(0),
   maxStockLevel: z.coerce.number().int().min(0).default(1000),
+}).superRefine((item, ctx) => {
+  if (item.minStockLevel > item.maxStockLevel) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['minStockLevel'],
+      message: 'minStockLevel must be less than or equal to maxStockLevel',
+    });
+  }
 });
 
 export const importPreviewSchema = z.object({
   items: z.array(importItemSchema).min(1, 'Danh sách import phải có ít nhất 1 dòng'),
   mode: importModeSchema.optional().default('CREATE_ONLY'),
   warehouseId: z.coerce.number().int().positive().optional(),
+}).superRefine((input, ctx) => {
+  if (input.mode === 'UPSERT_METADATA') {
+    input.items.forEach((item, index) => {
+      if (item.initialQuantity > 0 || item.stockAdjustment !== undefined || item.countedQuantity !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index],
+          message: 'UPSERT_METADATA cannot include inventory mutation fields',
+        });
+      }
+    });
+  }
 });
 
 export const importCommitSchema = z.object({
   jobId: z.string().min(1, 'Mã jobId của bản xem trước (preview) là bắt buộc để commit an toàn'),
 });
-
 

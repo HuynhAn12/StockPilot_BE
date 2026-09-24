@@ -81,7 +81,31 @@ export class ReturnService {
 
       // 2. Perform atomic conditional updates on order_items to strictly guard against over-return and over-refund
       for (const [orderItemId, reqItem] of sortedEntries) {
-        const orderItem = orderItemMap.get(orderItemId);
+        const lockedOrderItems = typeof (tx as any).$queryRaw === 'function'
+          ? await tx.$queryRaw<Array<{
+          id: number;
+          orderId: number;
+          storeId: number;
+          stockItemId: number;
+          skuSnapshot: string;
+          unitPriceSnapshot: Prisma.Decimal;
+          quantity: number;
+          subtotal: Prisma.Decimal;
+          returnedQuantity: number;
+          refundableAmount: Prisma.Decimal;
+          refundedAmount: Prisma.Decimal;
+        }>>`
+          SELECT id, orderId, storeId, stockItemId, skuSnapshot, unitPriceSnapshot,
+                 quantity, subtotal, returnedQuantity, refundableAmount, refundedAmount
+          FROM order_items
+          WHERE id = ${orderItemId}
+            AND orderId = ${order.id}
+            AND storeId = ${storeId}
+          FOR UPDATE
+        `
+          : [];
+
+        const orderItem = lockedOrderItems[0] || orderItemMap.get(orderItemId);
         if (!orderItem) {
           throw new NotFoundError(`Dòng đơn hàng ID ${orderItemId} không thuộc đơn hàng #${order.orderNumber}`);
         }

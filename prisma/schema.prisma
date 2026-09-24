@@ -159,7 +159,7 @@ model AuthSession {
   user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-  @@index([refreshTokenHash])
+  @@unique([refreshTokenHash])
   @@map("auth_sessions")
 }
 
