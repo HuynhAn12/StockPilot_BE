@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { HistoricalSalesService } from './historical-sales.service';
 import {
-  historicalSalesPreviewSchema,
-  historicalSalesCommitSchema,
-  historicalSalesListQuerySchema,
+  HistoricalSalesPreviewInput,
+  HistoricalSalesCommitInput,
+  HistoricalSalesListQueryInput,
 } from './historical-sales.schema';
 
 export class HistoricalSalesController {
@@ -13,7 +13,8 @@ export class HistoricalSalesController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const parsed = historicalSalesPreviewSchema.parse(req.body);
+      // Route middleware validate({ body: historicalSalesPreviewSchema }) owns validation and normalization
+      const parsed = req.body as HistoricalSalesPreviewInput;
 
       const result = await this.service.previewHistoricalSales(storeId, userId, parsed.rows);
       return res.status(200).json({
@@ -29,7 +30,8 @@ export class HistoricalSalesController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const parsed = historicalSalesCommitSchema.parse(req.body);
+      // Route middleware validate({ body: historicalSalesCommitSchema }) owns validation
+      const parsed = req.body as HistoricalSalesCommitInput;
 
       const result = await this.service.commitHistoricalSales(storeId, userId, parsed.jobId);
       return res.status(200).json({
@@ -44,7 +46,8 @@ export class HistoricalSalesController {
   list = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
-      const query = historicalSalesListQuerySchema.parse(req.query);
+      // Route middleware validate({ query: historicalSalesListQuerySchema }) owns validation
+      const query = (req.query as unknown) as HistoricalSalesListQueryInput;
 
       const result = await this.service.listHistoricalSales(storeId, query);
       return res.status(200).json({

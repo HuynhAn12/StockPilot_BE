@@ -1,20 +1,29 @@
 import { z } from 'zod';
 
-const optionalCostSchema = z.coerce.number().min(0, 'Gia von khong duoc am').optional().nullable();
+const optionalHistoricalCostSchema = z.preprocess((value) => {
+  if (
+    value === undefined ||
+    value === null ||
+    (typeof value === 'string' && value.trim() === '')
+  ) {
+    return undefined;
+  }
+  return value;
+}, z.coerce.number().min(0, 'Giá vốn không được âm').optional());
 
 export const historicalSaleRowSchema = z
   .object({
     externalOrderId: z.string().trim().max(100).optional().nullable(),
-    sku: z.string().trim().min(1, 'SKU khong duoc de trong').max(100),
-    quantity: z.coerce.number().int('So luong phai la so nguyen').positive('So luong ban phai lon hon 0'),
-    unitPrice: z.coerce.number().min(0, 'Don gia khong duoc am'),
-    costPrice: optionalCostSchema,
-    unitCost: optionalCostSchema,
-    soldAt: z.coerce.date({ errorMap: () => ({ message: 'Ngay ban soldAt khong hop le' }) }),
+    sku: z.string().trim().min(1, 'SKU không được để trống').max(100),
+    quantity: z.coerce.number().int('Số lượng phải là số nguyên').positive('Số lượng bán phải lớn hơn 0'),
+    unitPrice: z.coerce.number().min(0, 'Đơn giá không được âm'),
+    costPrice: optionalHistoricalCostSchema,
+    unitCost: optionalHistoricalCostSchema,
+    soldAt: z.coerce.date({ errorMap: () => ({ message: 'Ngày bán soldAt không hợp lệ' }) }),
     source: z.string().trim().min(1).max(50).default('CSV'),
   })
   .superRefine((row, ctx) => {
-    if (row.costPrice !== null && row.costPrice !== undefined && row.unitCost !== null && row.unitCost !== undefined) {
+    if (row.costPrice !== undefined && row.unitCost !== undefined) {
       const costPrice = Number(row.costPrice);
       const unitCost = Number(row.unitCost);
       if (costPrice !== unitCost) {
@@ -26,20 +35,27 @@ export const historicalSaleRowSchema = z
       }
     }
   })
-  .transform(({ costPrice, unitCost, ...row }) => ({
-    ...row,
-    costPriceSnapshot: costPrice ?? unitCost ?? null,
-  }));
+  .transform(({ costPrice, unitCost, ...row }) => {
+    const resolved = costPrice !== undefined ? costPrice : (unitCost !== undefined ? unitCost : null);
+    return {
+      ...row,
+      costPriceSnapshot: resolved !== null ? Number(resolved) : null,
+    };
+  });
 
 export type HistoricalSaleRowInput = z.infer<typeof historicalSaleRowSchema>;
 
 export const historicalSalesPreviewSchema = z.object({
-  rows: z.array(historicalSaleRowSchema).min(1, 'Danh sach du lieu ban hang khong duoc rong').max(5000, 'Toi da 5,000 dong moi lan import'),
+  rows: z.array(historicalSaleRowSchema).min(1, 'Danh sách dữ liệu bán hàng không được rỗng').max(5000, 'Tối đa 5,000 dòng mỗi lần import'),
 });
 
+export type HistoricalSalesPreviewInput = z.infer<typeof historicalSalesPreviewSchema>;
+
 export const historicalSalesCommitSchema = z.object({
-  jobId: z.string().uuid('Ma Job khong hop le'),
+  jobId: z.string().uuid('Mã Job không hợp lệ'),
 });
+
+export type HistoricalSalesCommitInput = z.infer<typeof historicalSalesCommitSchema>;
 
 export const historicalSalesListQuerySchema = z.object({
   sku: z.string().optional(),
@@ -50,3 +66,5 @@ export const historicalSalesListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
+
+export type HistoricalSalesListQueryInput = z.infer<typeof historicalSalesListQuerySchema>;

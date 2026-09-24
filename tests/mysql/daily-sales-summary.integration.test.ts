@@ -2,12 +2,14 @@ import { PrismaClient } from '@prisma/client';
 import { DailySalesSummaryService } from '../../src/modules/daily-sales-summary/daily-sales-summary.service';
 import { OrderService } from '../../src/modules/orders/order.service';
 import { ReturnService } from '../../src/modules/returns/return.service';
+import { HistoricalSalesService } from '../../src/modules/historical-sales/historical-sales.service';
+import { runRebuildDailySalesSummaryV10 } from '../../scripts/rebuild-daily-sales-summary-v10';
 
 /**
  * Real MySQL 8.4 DailySalesSummary Integration Test Suite
  *
  * Tests real database transactions, decimal aggregations, realized revenue,
- * and return COGS accounting policies without any mocks.
+ * return COGS accounting policies, and V10 backfill reconciliation without any mocks.
  */
 
 const rawDbUrl = process.env.TEST_DATABASE_URL;
@@ -46,6 +48,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
   let summaryService: DailySalesSummaryService;
   let orderService: OrderService;
   let returnService: ReturnService;
+  let historicalSalesService: HistoricalSalesService;
 
   let storeId: number;
   let warehouseId: number;
@@ -59,6 +62,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     summaryService = new DailySalesSummaryService(prisma);
     orderService = new OrderService(prisma);
     returnService = new ReturnService(prisma);
+    historicalSalesService = new HistoricalSalesService(prisma);
 
     const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
@@ -293,8 +297,109 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     expect(Number(day4Summary.grossProfit)).toBe(-100000);
   });
 
+  it('Real MySQL: Preview and Commit of Historical Sales with costPrice persists costPriceSnapshot', async () => {
+    const item = await prisma.stockItem.findUniqueOrThrow({ where: { id: stockItemId } });
+
+    const preview = await historicalSalesService.previewHistoricalSales(storeId, userId, [
+      {
+        sku: item.sku,
+        quantity: 3,
+        unitPrice: 120000,
+        costPriceSnapshot: 75000,
+        soldAt: new Date('2026-02-15T10:00:00.000Z'),
+        source: 'CSV',
+        externalOrderId: `EXT-HIST-${Date.now()}`,
+      },
+    ]);
+
+    expect(preview.validRows).toBe(1);
+    expect(preview.previewSample[0].costPriceSnapshot).toBe(75000);
+
+    const commit = await historicalSalesService.commitHistoricalSales(storeId, userId, preview.jobId);
+    expect(commit.status).toBe('COMPLETED');
+
+    const persistedSale = await prisma.historicalSale.findFirstOrThrow({
+      where: { storeId, stockItemId, externalOrderId: preview.previewSample[0].externalOrderId },
+    });
+
+    expect(Number(persistedSale.costPriceSnapshot)).toBe(75000);
+    expect(persistedSale.quantity).toBe(3);
+  });
+
+  it('Real MySQL: Rebuild DailySalesSummary correctly handles historical sales with and without costPriceSnapshot', async () => {
+    const item = await prisma.stockItem.findUniqueOrThrow({ where: { id: stockItemId } });
+    const targetDate = new Date('2026-02-20T10:00:00.000Z');
+    const businessSummaryDate = new Date('2026-02-20T00:00:00.000Z');
+
+    // 1. Create a historical sale without cost (costPriceSnapshot = null)
+    await prisma.historicalSale.create({
+      data: {
+        storeId,
+        stockItemId,
+        externalSku: item.sku,
+        quantity: 2,
+        unitPrice: 100000,
+        totalAmount: 200000,
+        costPriceSnapshot: null,
+        soldAt: targetDate,
+        source: 'CSV',
+        externalOrderId: `EXT-NOCOST-${Date.now()}`,
+        sourceRowHash: `hash-nocost-${Date.now()}`,
+      },
+    });
+
+    // 2. Pre-seed a stale summary row that incorrectly assumed StockItem.costPrice (e.g. 95k * 2 = 190k)
+    await prisma.dailySalesSummary.upsert({
+      where: {
+        storeId_stockItemId_summaryDate: {
+          storeId,
+          stockItemId,
+          summaryDate: businessSummaryDate,
+        },
+      },
+      create: {
+        storeId,
+        stockItemId,
+        summaryDate: businessSummaryDate,
+        grossSoldQty: 2,
+        returnQty: 0,
+        netSoldQty: 2,
+        grossRevenue: 200000,
+        refundAmount: 0,
+        netRevenue: 200000,
+        cogs: 190000,
+        grossProfit: 10000,
+        orderCount: 1,
+        historicalCostMissingQty: 0,
+      },
+      update: {
+        cogs: 190000,
+        historicalCostMissingQty: 0,
+      },
+    });
+
+    // 3. Run the V10 backfill reconciliation tool
+    const backfillRes = await runRebuildDailySalesSummaryV10(prisma, { storeId });
+    expect(backfillRes.processedStores).toBeGreaterThanOrEqual(1);
+
+    // 4. Verify the updated summary: COGS contribution is 0, historicalCostMissingQty is 2
+    const reconciledSummary = await prisma.dailySalesSummary.findUniqueOrThrow({
+      where: {
+        storeId_stockItemId_summaryDate: {
+          storeId,
+          stockItemId,
+          summaryDate: businessSummaryDate,
+        },
+      },
+    });
+
+    expect(reconciledSummary.grossSoldQty).toBe(2);
+    expect(Number(reconciledSummary.cogs)).toBe(0);
+    expect(reconciledSummary.historicalCostMissingQty).toBe(2);
+    expect(Number(reconciledSummary.grossProfit)).toBe(200000);
+  });
+
   it('Real MySQL: Vietnam business-day rebuild includes sales from previous UTC calendar date', async () => {
-    process.env.APP_TIMEZONE = 'Asia/Ho_Chi_Minh';
     const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const businessDate = new Date('2026-09-25T00:00:00.000Z');
     const firstHourVietnamBusinessDay = new Date('2026-09-24T17:30:00.000Z');

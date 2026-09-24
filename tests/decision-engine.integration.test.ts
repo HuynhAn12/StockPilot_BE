@@ -52,8 +52,114 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       expect(noCostHash).toBe(withCostHash);
     });
 
-    it('normalizes historical cost aliases and rejects conflicting values', () => {
-      const accepted = historicalSaleRowSchema.parse({
+    it('normalizes historical cost aliases, empty strings, and rejects invalid/conflicting values', () => {
+      // 1. undefined / null -> null
+      const omitted = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(omitted.costPriceSnapshot).toBeNull();
+
+      const nullCost = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: null,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(nullCost.costPriceSnapshot).toBeNull();
+
+      // 2. Empty string & whitespace strings -> null
+      const emptyStr = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: '',
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(emptyStr.costPriceSnapshot).toBeNull();
+
+      const whitespaceStr = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        unitCost: '   ',
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(whitespaceStr.costPriceSnapshot).toBeNull();
+
+      // 3. "0" and 0 -> numeric 0
+      const zeroStr = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: '0',
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(zeroStr.costPriceSnapshot).toBe(0);
+
+      const zeroNum = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: 0,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(zeroNum.costPriceSnapshot).toBe(0);
+
+      // 4. "60000" and 60000 -> numeric 60000
+      const numStr = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: '60000',
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(numStr.costPriceSnapshot).toBe(60000);
+
+      const numVal = historicalSaleRowSchema.parse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        unitCost: 60000,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(numVal.costPriceSnapshot).toBe(60000);
+
+      // 5. Negative value -> validation failure
+      const negativeRes = historicalSaleRowSchema.safeParse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: -5000,
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(negativeRes.success).toBe(false);
+
+      // 6. Invalid text -> validation failure
+      const invalidText = historicalSaleRowSchema.safeParse({
+        sku: 'SKU-A',
+        quantity: 1,
+        unitPrice: 100000,
+        costPrice: 'abc',
+        soldAt: new Date('2026-05-01'),
+        source: 'CSV',
+      });
+      expect(invalidText.success).toBe(false);
+
+      // 7. Matching aliases -> 50000
+      const matchingAliases = historicalSaleRowSchema.parse({
         sku: 'SKU-A',
         quantity: 1,
         unitPrice: 100000,
@@ -62,6 +168,9 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         soldAt: new Date('2026-05-01'),
         source: 'CSV',
       });
+      expect(matchingAliases.costPriceSnapshot).toBe(50000);
+
+      // 8. Conflicting aliases -> validation failure
       const conflict = historicalSaleRowSchema.safeParse({
         sku: 'SKU-A',
         quantity: 1,
@@ -71,8 +180,6 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         soldAt: new Date('2026-05-01'),
         source: 'CSV',
       });
-
-      expect(accepted.costPriceSnapshot).toBe(50000);
       expect(conflict.success).toBe(false);
     });
 
