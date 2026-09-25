@@ -440,6 +440,14 @@ export class ImportExportService {
 
       for (let i = 0; i < itemsToProcess.length; i += chunkSize) {
         const chunk = itemsToProcess.slice(i, i + chunkSize);
+        const chunkIds = chunk.map((item) => item.id).filter(Boolean);
+
+        if (chunkIds.length > 0) {
+          await (this.prisma as any).importJobItem.updateMany({
+            where: { id: { in: chunkIds } },
+            data: { status: 'PROCESSING' },
+          });
+        }
 
         await this.prisma.$transaction(async (tx) => {
           for (const itemRecord of chunk) {
@@ -470,7 +478,10 @@ export class ImportExportService {
                 if (itemRecord.id) {
                   await (tx as any).importJobItem.update({
                     where: { id: itemRecord.id },
-                    data: { status: 'SKIPPED' },
+                    data: {
+                      status: 'SKIPPED',
+                      resultJson: { ...(item as any), action: 'SKIPPED' },
+                    },
                   });
                 }
                 continue;
@@ -552,6 +563,7 @@ export class ImportExportService {
 
               // 4. Handle Stock Inventory according to Mode with Deterministic Idempotency Key
               const deterministicMovementKey = `IMPORT:${job.id}:${rowNumber}:${stockItemId}`;
+              let action = existingSku ? 'UPDATED_SKU' : 'CREATED_SKU';
 
               if (!existingSku && mode === 'CREATE_ONLY' && item.initialQuantity > 0) {
                 // Brand new SKU initial stock inflow
@@ -570,6 +582,7 @@ export class ImportExportService {
                   [{ stockItemId, quantity: item.initialQuantity }]
                 );
               } else if (existingSku && mode === 'ADJUST_STOCK') {
+                action = 'ADJUSTED_STOCK';
                 const adjQty = item.stockAdjustment;
                 if (adjQty === undefined) {
                   throw new ValidationError('ADJUST_STOCK requires stockAdjustment');
@@ -606,6 +619,7 @@ export class ImportExportService {
                   );
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
+                action = 'REPLACED_STOCK';
                 const targetQty = item.countedQuantity;
                 if (targetQty === undefined) {
                   throw new ValidationError('REPLACE_STOCK requires countedQuantity');
@@ -632,6 +646,7 @@ export class ImportExportService {
                   data: {
                     status: 'COMPLETED',
                     stockItemId,
+                    resultJson: { ...(item as any), action },
                   },
                 });
               }

@@ -9,7 +9,7 @@ jest.mock('../src/config/db', () => ({
     product: { upsert: jest.fn(), findMany: jest.fn() },
     stockItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findFirst: jest.fn() },
     importJob: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
-    importJobItem: { createMany: jest.fn(), findMany: jest.fn(), update: jest.fn() },
+    importJobItem: { createMany: jest.fn(), findMany: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
     inventoryBalance: { upsert: jest.fn(), findMany: jest.fn() },
     stockMovement: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
@@ -230,6 +230,76 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
       expect((prisma as any).importJob.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ status: 'COMPLETED' }),
+        })
+      );
+    });
+
+    it('Persists failed checkpoint diagnostics after business transaction rollback', async () => {
+      const testItem = {
+        categoryName: 'Category',
+        categoryCode: 'CAT',
+        productName: 'Product',
+        productCode: 'PRD',
+        sku: 'SKU-FAIL',
+        costPrice: 50000,
+        sellingPrice: 100000,
+        initialQuantity: 10,
+        minStockLevel: 5,
+        maxStockLevel: 500,
+      };
+      const payloadJson = {
+        items: [testItem],
+        mode: 'CREATE_ONLY',
+        warehouseId: null,
+      };
+      const payloadHash = crypto
+        .createHash('sha256')
+        .update(canonicalJsonStringify(payloadJson))
+        .digest('hex');
+
+      (prisma as any).importJob.findFirst.mockResolvedValue({
+        id: 'job_fail_123',
+        storeId: 1,
+        status: 'PREVIEWED',
+        invalidRows: 0,
+        payloadHash,
+        expiresAt: new Date(Date.now() + 60000),
+        payloadJson,
+      });
+      (prisma as any).importJobItem.findMany.mockResolvedValue([
+        {
+          id: 1,
+          importJobId: 'job_fail_123',
+          rowNumber: 1,
+          sku: 'SKU-FAIL',
+          status: 'PENDING',
+          resultJson: testItem,
+        },
+      ]);
+      (prisma as any).importJob.updateMany.mockResolvedValue({ count: 1 });
+      (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.category.upsert as jest.Mock).mockRejectedValue(new Error('category rollback test'));
+      (prisma as any).importJob.update.mockResolvedValue({ id: 'job_fail_123', status: 'FAILED' });
+
+      await expect(service.commitImport(1, 100, { jobId: 'job_fail_123' })).rejects.toThrow('category rollback test');
+
+      expect((prisma as any).importJobItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { status: 'PROCESSING' },
+        })
+      );
+      expect((prisma as any).importJobItem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'FAILED',
+            errorJson: expect.objectContaining({ message: 'category rollback test' }),
+          }),
+        })
+      );
+      expect((prisma as any).importJob.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { status: 'FAILED' },
         })
       );
     });
