@@ -23,6 +23,7 @@ jest.mock('../src/config/db', () => ({
     pricingRecommendation: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findMany: jest.fn(), count: jest.fn() },
     priceHistory: { create: jest.fn(), findMany: jest.fn() },
     decisionSnapshot: { create: jest.fn() },
+    $queryRaw: jest.fn(),
     $transaction: jest.fn((callback) => callback(prisma)),
   },
 }));
@@ -815,11 +816,13 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         storeId: 1,
         stockItemId: 10,
         action: 'DECREASE',
+        currentPrice: 200000,
         recommendedPrice: 164000,
         status: 'PENDING',
         stockItem: { sellingPrice: 200000 },
       });
       (prisma.pricingRecommendation.update as jest.Mock).mockResolvedValue({ id: 99, status: 'ACCEPTED' });
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue({ id: 10, sellingPrice: 200000 });
       (prisma.stockItem.update as jest.Mock).mockResolvedValue({ id: 10, sellingPrice: 164000 });
       (prisma.priceHistory.create as jest.Mock).mockResolvedValue({ id: 1 });
 
