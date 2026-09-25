@@ -42,3 +42,5 @@ flow*.md
 STOCKPILOT_*.md
 *.tmp
 prisma/*.sql
+!prisma/StockPilot_MySQL8_Target_v1.1_Complete_Design.sql
+
