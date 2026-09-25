@@ -8,6 +8,13 @@ import { RiskEvaluator, SafetyStockResult } from './risk-evaluator';
 import { PricingEvaluator, PricingEvaluationResult } from './pricing-evaluator';
 import { AlertService } from '../alerts/alert.service';
 import { PricingService } from '../pricing/pricing.service';
+import {
+  addBusinessDays,
+  businessDateKeyToDate,
+  businessDaysElapsed,
+  businessDaysInclusiveBetween,
+  toBusinessDateKey,
+} from '../../common/utils/business-date';
 
 export interface SkuDecisionAnalysisResult {
   stockItemId: number;
@@ -62,6 +69,11 @@ export interface SkuDecisionAnalysisResult {
   calculatedAt: string;
 }
 
+export interface AnalyzeSkuOptions {
+  persist?: boolean;
+  evaluationDate?: Date;
+}
+
 export class DecisionEngineService {
   constructor(
     private readonly prisma: PrismaClient = defaultPrisma,
@@ -75,9 +87,14 @@ export class DecisionEngineService {
   ) {}
 
   /**
-   * Deterministically analyzes a single SKU, updates alerts and pricing recommendations, and persists a snapshot.
+   * Deterministically analyzes a single SKU. Persistence is explicit so GET handlers can remain read-only.
    */
-  async analyzeSku(storeId: number, stockItemId: number): Promise<SkuDecisionAnalysisResult> {
+  async analyzeSku(
+    storeId: number,
+    stockItemId: number,
+    options: AnalyzeSkuOptions = {}
+  ): Promise<SkuDecisionAnalysisResult> {
+    const shouldPersist = options.persist !== false;
     const stockItem = await this.prisma.stockItem.findUnique({
       where: { id: stockItemId },
       include: {
@@ -103,65 +120,39 @@ export class DecisionEngineService {
     // 3. Compute Demand Metrics
     const demand = this.demandMetricsService.calculateDemandMetrics(series90);
 
-    // 4. Compute Days Since Last Sale
-    let daysSinceLastSale: number | null = null;
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+    // 4. Compute source-fact history depth and last-sale semantics.
+    const evaluationDate = options.evaluationDate ?? new Date();
+    const historyFacts = await this.getHistoryFacts(storeId, stockItemId);
+    const evaluationBusinessDate = toBusinessDateKey(evaluationDate);
+    const actualHistoryDays = historyFacts.earliestActualHistoryAt
+      ? Math.min(
+          90,
+          businessDaysInclusiveBetween(
+            toBusinessDateKey(historyFacts.earliestActualHistoryAt),
+            evaluationBusinessDate
+          )
+        )
+      : 0;
 
-    // Search backwards in series90 for last sale
-    for (let i = series90.length - 1; i >= 0; i--) {
-      if (series90[i].netSoldQty > 0) {
-        const lastSaleDate = new Date(series90[i].summaryDate + 'T00:00:00.000Z');
-        const diffDays = Math.floor((today.getTime() - lastSaleDate.getTime()) / (1000 * 60 * 60 * 24));
-        daysSinceLastSale = Math.max(0, diffDays);
-        break;
-      }
-    }
-
-    // If not found in 90 days, query database for older orders or historical sales
-    if (daysSinceLastSale === null) {
-      const [latestOrderItem, latestHistoricalSale] = await Promise.all([
-        this.prisma.orderItem.findFirst({
-          where: {
-            stockItemId,
-            order: { status: 'FULFILLED' },
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { createdAt: true },
-        }),
-        this.prisma.historicalSale.findFirst({
-          where: { stockItemId },
-          orderBy: { soldAt: 'desc' },
-          select: { soldAt: true },
-        }),
-      ]);
-
-      const lastDates: Date[] = [];
-      if (latestOrderItem) lastDates.push(latestOrderItem.createdAt);
-      if (latestHistoricalSale) lastDates.push(latestHistoricalSale.soldAt);
-
-      if (lastDates.length > 0) {
-        lastDates.sort((a, b) => b.getTime() - a.getTime());
-        const latestDate = lastDates[0];
-        daysSinceLastSale = Math.max(
-          0,
-          Math.floor((today.getTime() - latestDate.getTime()) / (1000 * 60 * 60 * 24))
-        );
-      }
-    }
+    const daysSinceLastSale = historyFacts.latestActualSaleAt
+      ? businessDaysElapsed(toBusinessDateKey(historyFacts.latestActualSaleAt), evaluationBusinessDate)
+      : null;
 
     // 5. Get Engine Config
     const config = await this.engineConfigService.getConfig(storeId);
 
     // 6. Compute Confidence
     const confidence = this.riskEvaluator.calculateConfidence(
-      series90.length,
+      actualHistoryDays,
       config.minimumHistoryDays,
       demand.daysWithSales90
     );
 
     // 7. Compute Safety Stock, Reorder Point, Days of Cover
-    const hasSufficientHistory = confidence.level !== 'LOW' && (demand.daysWithSales90 >= 5 || demand.totalSold90 > 0);
+    const hasSufficientHistory =
+      actualHistoryDays >= config.minimumHistoryDays &&
+      confidence.level !== 'LOW' &&
+      (demand.daysWithSales90 >= 5 || demand.totalSold90 > 0);
     const safetyStockResult: SafetyStockResult = this.riskEvaluator.calculateSafetyStock({
       stdDev30: demand.stdDev30,
       leadTimeDays: config.leadTimeDays,
@@ -220,31 +211,29 @@ export class DecisionEngineService {
       demand.stdDev30
     );
 
-    // 9. Sync Alerts
-    await this.alertService.syncAlertsForSku({
-      storeId,
-      stockItemId,
-      sku: stockItem.sku,
-      productName: stockItem.name,
-      availableStock: available,
-      reorderPoint,
-      stockoutScore: stockoutRisk.score,
-      stockoutSeverity: stockoutRisk.severity,
-      overstockScore: overstockRisk.score,
-      overstockSeverity: overstockRisk.severity,
-      isSlowMoving: deadStockResult.isSlowMoving,
-      isDeadStock: deadStockResult.isDeadStock,
-      deadStockSeverity: deadStockResult.severity,
-      daysSinceLastSale,
-      confidenceScore: confidence.score,
-      engineVersion: config.engineVersion,
-      unusualDemand,
-    });
+    if (shouldPersist) {
+      await this.alertService.syncAlertsForSku({
+        storeId,
+        stockItemId,
+        sku: stockItem.sku,
+        productName: stockItem.name,
+        availableStock: available,
+        reorderPoint,
+        stockoutScore: stockoutRisk.score,
+        stockoutSeverity: stockoutRisk.severity,
+        overstockScore: overstockRisk.score,
+        overstockSeverity: overstockRisk.severity,
+        isSlowMoving: deadStockResult.isSlowMoving,
+        isDeadStock: deadStockResult.isDeadStock,
+        deadStockSeverity: deadStockResult.severity,
+        daysSinceLastSale,
+        confidenceScore: confidence.score,
+        engineVersion: config.engineVersion,
+        unusualDemand,
+      });
+    }
 
-    // 10. Sync Pricing Recommendations
-    const pricingEval = await this.pricingService.evaluatePricingRecommendation({
-      storeId,
-      stockItemId,
+    const pricingEval = this.pricingEvaluator.evaluatePricing({
       sellingPrice: Number(stockItem.sellingPrice),
       costPrice: Number(stockItem.costPrice),
       minimumMarginPct: config.minimumMarginPct,
@@ -256,8 +245,26 @@ export class DecisionEngineService {
       stockoutScore: stockoutRisk.score,
       trend: demand.trend,
       confidenceScore: confidence.score,
-      engineVersion: config.engineVersion,
     });
+
+    if (shouldPersist) {
+      await this.pricingService.evaluatePricingRecommendation({
+        storeId,
+        stockItemId,
+        sellingPrice: Number(stockItem.sellingPrice),
+        costPrice: Number(stockItem.costPrice),
+        minimumMarginPct: config.minimumMarginPct,
+        maxMarkdownPct: config.maxMarkdownPct,
+        maxMarkupPct: config.maxMarkupPct,
+        daysSinceLastSale,
+        daysOfCover,
+        overstockScore: overstockRisk.score,
+        stockoutScore: stockoutRisk.score,
+        trend: demand.trend,
+        confidenceScore: confidence.score,
+        engineVersion: config.engineVersion,
+      });
+    }
 
     const calculatedAt = new Date().toISOString();
     const minimumPrice = PricingEvaluator.calculateMinimumPrice(Number(stockItem.costPrice), config.minimumMarginPct);
@@ -311,26 +318,27 @@ export class DecisionEngineService {
       calculatedAt,
     };
 
-    // 11. Persist Decision Snapshot
-    await this.prisma.decisionSnapshot.create({
-      data: {
-        storeId,
-        stockItemId,
-        calculatedAt: new Date(calculatedAt),
-        inputJson: {
-          pricing: result.pricing,
-          inventory: result.inventory,
-          config: result.engineConfig as unknown as Prisma.InputJsonObject,
-        } as Prisma.InputJsonObject,
-        metricsJson: {
-          demand: result.demand as unknown as Prisma.InputJsonObject,
-          coverage: result.coverage,
-          confidence: result.confidence,
-        } as Prisma.InputJsonObject,
-        risksJson: result.risk as unknown as Prisma.InputJsonObject,
-        version: config.engineVersion,
-      },
-    });
+    if (shouldPersist) {
+      await this.prisma.decisionSnapshot.create({
+        data: {
+          storeId,
+          stockItemId,
+          calculatedAt: new Date(calculatedAt),
+          inputJson: {
+            pricing: result.pricing,
+            inventory: result.inventory,
+            config: result.engineConfig as unknown as Prisma.InputJsonObject,
+          } as Prisma.InputJsonObject,
+          metricsJson: {
+            demand: result.demand as unknown as Prisma.InputJsonObject,
+            coverage: result.coverage,
+            confidence: result.confidence,
+          } as Prisma.InputJsonObject,
+          risksJson: result.risk as unknown as Prisma.InputJsonObject,
+          version: config.engineVersion,
+        },
+      });
+    }
 
     return result;
   }
@@ -354,7 +362,7 @@ export class DecisionEngineService {
     const analyses: SkuDecisionAnalysisResult[] = [];
     for (const item of stockItems) {
       try {
-        const analyzed = await this.analyzeSku(storeId, item.id);
+        const analyzed = await this.analyzeSku(storeId, item.id, { persist: false });
         analyses.push(analyzed);
       } catch (err) {
         console.error(`Failed to analyze SKU ${item.id}:`, err);
@@ -421,9 +429,9 @@ export class DecisionEngineService {
    * Batch recalculates daily sales summaries and all SKUs for a store.
    */
   async recalculateStore(storeId: number) {
-    const today = new Date();
-    const fromDate = new Date();
-    fromDate.setUTCDate(today.getUTCDate() - 90);
+    const todayKey = toBusinessDateKey(new Date());
+    const fromDate = businessDateKeyToDate(addBusinessDays(todayKey, -89));
+    const today = businessDateKeyToDate(todayKey);
 
     // 1. Rebuild daily sales summaries
     const summaryResult = await this.dailySalesSummaryService.rebuildDailySalesSummary(storeId, fromDate, today);
@@ -453,6 +461,62 @@ export class DecisionEngineService {
       successCount,
       failureCount,
       completedAt: new Date().toISOString(),
+    };
+  }
+
+  private async getHistoryFacts(storeId: number, stockItemId: number): Promise<{
+    earliestActualHistoryAt: Date | null;
+    latestActualSaleAt: Date | null;
+  }> {
+    const [earliestNative, latestNative, earliestHistorical, latestHistorical] = await Promise.all([
+      this.prisma.order.findFirst({
+        where: {
+          storeId,
+          status: 'FULFILLED',
+          fulfilledAt: { not: null },
+          items: { some: { stockItemId, storeId } },
+        },
+        orderBy: { fulfilledAt: 'asc' },
+        select: { fulfilledAt: true },
+      }),
+      this.prisma.order.findFirst({
+        where: {
+          storeId,
+          status: 'FULFILLED',
+          fulfilledAt: { not: null },
+          items: { some: { stockItemId, storeId } },
+        },
+        orderBy: { fulfilledAt: 'desc' },
+        select: { fulfilledAt: true },
+      }),
+      this.prisma.historicalSale.findFirst({
+        where: { storeId, stockItemId },
+        orderBy: { soldAt: 'asc' },
+        select: { soldAt: true },
+      }),
+      this.prisma.historicalSale.findFirst({
+        where: { storeId, stockItemId },
+        orderBy: { soldAt: 'desc' },
+        select: { soldAt: true },
+      }),
+    ]);
+
+    const earliestDates = [earliestNative?.fulfilledAt, earliestHistorical?.soldAt].filter(
+      (date): date is Date => Boolean(date)
+    );
+    const latestDates = [latestNative?.fulfilledAt, latestHistorical?.soldAt].filter(
+      (date): date is Date => Boolean(date)
+    );
+
+    return {
+      earliestActualHistoryAt:
+        earliestDates.length > 0
+          ? new Date(Math.min(...earliestDates.map((date) => date.getTime())))
+          : null,
+      latestActualSaleAt:
+        latestDates.length > 0
+          ? new Date(Math.max(...latestDates.map((date) => date.getTime())))
+          : null,
     };
   }
 }

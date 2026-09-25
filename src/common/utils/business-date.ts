@@ -129,3 +129,15 @@ export function addBusinessDays(dateKey: string, days: number): string {
   const date = new Date(Date.UTC(year, month - 1, day + days));
   return canonicalDateToBusinessDateKey(date);
 }
+
+export function businessDaysInclusiveBetween(fromDateKey: string, toDateKey: string): number {
+  const from = businessDateKeyToDate(fromDateKey);
+  const to = businessDateKeyToDate(toDateKey);
+  const diffMs = to.getTime() - from.getTime();
+  if (diffMs < 0) return 0;
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1;
+}
+
+export function businessDaysElapsed(fromDateKey: string, toDateKey: string): number {
+  return Math.max(0, businessDaysInclusiveBetween(fromDateKey, toDateKey) - 1);
+}

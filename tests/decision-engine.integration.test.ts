@@ -595,6 +595,181 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         })
       );
     });
+
+    it('uses actual source history depth instead of padded 90-day series for confidence and safety stock', async () => {
+      const decisionEngineService = new DecisionEngineService(
+        prisma as any,
+        dailySalesSummaryService,
+        engineConfigService,
+        undefined as any,
+        undefined as any,
+        undefined as any,
+        alertService,
+        pricingService
+      );
+
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue({
+        id: 10,
+        storeId: 1,
+        sku: 'SKU-A',
+        name: 'New SKU',
+        costPrice: 50000,
+        sellingPrice: 100000,
+        minStockLevel: 5,
+        maxStockLevel: 500,
+        product: { category: { name: 'Test' } },
+        balances: [{ quantity: 10, reservedQuantity: 0 }],
+      });
+      (prisma.dailySalesSummary.findMany as jest.Mock).mockResolvedValue([
+        { summaryDate: new Date('2026-09-25'), grossSoldQty: 3, returnQty: 0, netSoldQty: 3, grossRevenue: 300000, refundAmount: 0, netRevenue: 300000, cogs: 150000, grossProfit: 150000, orderCount: 1, historicalCostMissingQty: 0 },
+      ]);
+      (prisma.order.findFirst as jest.Mock)
+        .mockResolvedValueOnce({ fulfilledAt: new Date('2026-09-25T03:00:00.000Z') })
+        .mockResolvedValueOnce({ fulfilledAt: new Date('2026-09-25T03:00:00.000Z') });
+      (prisma.historicalSale.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const analysis = await decisionEngineService.analyzeSku(1, 10, {
+        persist: false,
+        evaluationDate: new Date('2026-09-25T04:00:00.000Z'),
+      });
+
+      expect(analysis.confidence.level).toBe('LOW');
+      expect(analysis.confidence.score).toBeLessThan(40);
+      expect(analysis.coverage.safetyStockMethod).toBe('FALLBACK_SAFETY_DAYS');
+
+    });
+
+    it('uses Order.fulfilledAt, not OrderItem.createdAt, for daysSinceLastSale', async () => {
+      const decisionEngineService = new DecisionEngineService(
+        prisma as any,
+        dailySalesSummaryService,
+        engineConfigService,
+        undefined as any,
+        undefined as any,
+        undefined as any,
+        alertService,
+        pricingService
+      );
+
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue({
+        id: 10,
+        storeId: 1,
+        sku: 'SKU-A',
+        name: 'Fulfilled Today',
+        costPrice: 50000,
+        sellingPrice: 100000,
+        minStockLevel: 5,
+        maxStockLevel: 500,
+        product: { category: { name: 'Test' } },
+        balances: [{ quantity: 10, reservedQuantity: 0 }],
+      });
+      (prisma.dailySalesSummary.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.order.findFirst as jest.Mock)
+        .mockResolvedValueOnce({ fulfilledAt: new Date('2026-09-25T03:00:00.000Z') })
+        .mockResolvedValueOnce({ fulfilledAt: new Date('2026-09-25T03:00:00.000Z') });
+      (prisma.historicalSale.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const analysis = await decisionEngineService.analyzeSku(1, 10, {
+        persist: false,
+        evaluationDate: new Date('2026-09-25T04:00:00.000Z'),
+      });
+
+      expect(analysis.risk.daysSinceLastSale).toBe(0);
+
+    });
+
+    it('uses historical sale as last sale when it is newer than native fulfilled sale', async () => {
+      const decisionEngineService = new DecisionEngineService(
+        prisma as any,
+        dailySalesSummaryService,
+        engineConfigService,
+        undefined as any,
+        undefined as any,
+        undefined as any,
+        alertService,
+        pricingService
+      );
+
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue({
+        id: 10,
+        storeId: 1,
+        sku: 'SKU-A',
+        name: 'Historical Newer',
+        costPrice: 50000,
+        sellingPrice: 100000,
+        minStockLevel: 5,
+        maxStockLevel: 500,
+        product: { category: { name: 'Test' } },
+        balances: [{ quantity: 10, reservedQuantity: 0 }],
+      });
+      (prisma.dailySalesSummary.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.order.findFirst as jest.Mock)
+        .mockResolvedValueOnce({ fulfilledAt: new Date('2026-09-01T03:00:00.000Z') })
+        .mockResolvedValueOnce({ fulfilledAt: new Date('2026-09-01T03:00:00.000Z') });
+      (prisma.historicalSale.findFirst as jest.Mock)
+        .mockResolvedValueOnce({ soldAt: new Date('2026-09-24T17:30:00.000Z') })
+        .mockResolvedValueOnce({ soldAt: new Date('2026-09-24T17:30:00.000Z') });
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const analysis = await decisionEngineService.analyzeSku(1, 10, {
+        persist: false,
+        evaluationDate: new Date('2026-09-25T04:00:00.000Z'),
+      });
+
+      expect(analysis.risk.daysSinceLastSale).toBe(0);
+
+    });
+
+    it('keeps read-only analysis from syncing alerts, pricing recommendations, or snapshots', async () => {
+      const decisionEngineService = new DecisionEngineService(
+        prisma as any,
+        dailySalesSummaryService,
+        engineConfigService,
+        undefined as any,
+        undefined as any,
+        undefined as any,
+        alertService,
+        pricingService
+      );
+
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue({
+        id: 10,
+        storeId: 1,
+        sku: 'SKU-A',
+        name: 'Read Only',
+        costPrice: 50000,
+        sellingPrice: 100000,
+        minStockLevel: 5,
+        maxStockLevel: 500,
+        product: { category: { name: 'Test' } },
+        balances: [{ quantity: 10, reservedQuantity: 0 }],
+      });
+      (prisma.dailySalesSummary.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma.order.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.historicalSale.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null);
+
+      await decisionEngineService.analyzeSku(1, 10, { persist: false });
+
+      expect(prisma.alert.findUnique).not.toHaveBeenCalled();
+      expect(prisma.pricingRecommendation.findFirst).not.toHaveBeenCalled();
+      expect(prisma.decisionSnapshot.create).not.toHaveBeenCalled();
+      expect(prisma.order.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            storeId: 1,
+            items: { some: { stockItemId: 10, storeId: 1 } },
+          }),
+        })
+      );
+      expect(prisma.historicalSale.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { storeId: 1, stockItemId: 10 },
+        })
+      );
+    });
   });
 
   describe('PricingService & AlertService Workflow', () => {

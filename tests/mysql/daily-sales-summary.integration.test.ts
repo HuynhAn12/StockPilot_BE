@@ -4,6 +4,7 @@ import { OrderService } from '../../src/modules/orders/order.service';
 import { ReturnService } from '../../src/modules/returns/return.service';
 import { HistoricalSalesService } from '../../src/modules/historical-sales/historical-sales.service';
 import { runRebuildDailySalesSummaryV10 } from '../../scripts/rebuild-daily-sales-summary-v10';
+import { DecisionEngineService } from '../../src/modules/decision-engine/decision-engine.service';
 
 /**
  * Real MySQL 8.4 DailySalesSummary Integration Test Suite
@@ -49,6 +50,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
   let orderService: OrderService;
   let returnService: ReturnService;
   let historicalSalesService: HistoricalSalesService;
+  let decisionEngineService: DecisionEngineService;
 
   let storeId: number;
   let warehouseId: number;
@@ -63,6 +65,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     orderService = new OrderService(prisma);
     returnService = new ReturnService(prisma);
     historicalSalesService = new HistoricalSalesService(prisma);
+    decisionEngineService = new DecisionEngineService(prisma);
 
     const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
@@ -610,5 +613,122 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     });
 
     expect(staleSummary).toBeNull();
+  });
+
+  it('Real MySQL: Decision Engine uses fulfilledAt last-sale semantics and does not cross tenant boundary', async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const storeBFulfilledToday = new Date('2026-09-25T03:00:00.000Z');
+    const storeAFulfilledEarlier = new Date('2026-09-20T03:00:00.000Z');
+
+    const productA = await prisma.product.create({
+      data: {
+        storeId,
+        name: `DE Store A Product ${suffix}`,
+        code: `DE_A_PRD_${suffix}`,
+      },
+    });
+
+    const stockItemA = await prisma.stockItem.create({
+      data: {
+        storeId,
+        productId: productA.id,
+        sku: `SKU-DE-A-${suffix}`,
+        name: `DE Store A StockItem ${suffix}`,
+        costPrice: 50000,
+        sellingPrice: 100000,
+      },
+    });
+
+    await prisma.inventoryBalance.create({
+      data: {
+        storeId,
+        warehouseId,
+        stockItemId: stockItemA.id,
+        quantity: 10,
+      },
+    });
+
+    const draftOrderA = await orderService.createDraftOrder(storeId, userId, {
+      items: [{ stockItemId: stockItemA.id, quantity: 1 }],
+      discountAmount: 0,
+      taxAmount: 0,
+    });
+    await orderService.confirmOrder(storeId, userId, draftOrderA.id);
+    const fulfilledOrderA = await orderService.fulfillOrder(storeId, draftOrderA.id);
+    await prisma.order.update({
+      where: { id: fulfilledOrderA.id },
+      data: { fulfilledAt: storeAFulfilledEarlier },
+    });
+
+    const storeB = await prisma.store.create({
+      data: {
+        name: `DE Store B ${suffix}`,
+        code: `DE_STORE_B_${suffix}`,
+      },
+    });
+    const warehouseB = await prisma.warehouse.create({
+      data: {
+        storeId: storeB.id,
+        name: 'DE Store B Warehouse',
+        isDefault: true,
+      },
+    });
+    const userB = await prisma.user.create({
+      data: {
+        email: `de_store_b_${suffix}@test.com`,
+        passwordHash: 'dummy_hash',
+        fullName: 'DE Store B User',
+        role: 'SHOP_OWNER',
+        storeId: storeB.id,
+      },
+    });
+    const productB = await prisma.product.create({
+      data: {
+        storeId: storeB.id,
+        name: `DE Store B Product ${suffix}`,
+        code: `DE_B_PRD_${suffix}`,
+      },
+    });
+    const stockItemB = await prisma.stockItem.create({
+      data: {
+        storeId: storeB.id,
+        productId: productB.id,
+        sku: `SKU-DE-B-${suffix}`,
+        name: `DE Store B StockItem ${suffix}`,
+        costPrice: 50000,
+        sellingPrice: 100000,
+      },
+    });
+    await prisma.inventoryBalance.create({
+      data: {
+        storeId: storeB.id,
+        warehouseId: warehouseB.id,
+        stockItemId: stockItemB.id,
+        quantity: 10,
+      },
+    });
+
+    const orderServiceB = new OrderService(prisma);
+    const draftOrderB = await orderServiceB.createDraftOrder(storeB.id, userB.id, {
+      items: [{ stockItemId: stockItemB.id, quantity: 1 }],
+      discountAmount: 0,
+      taxAmount: 0,
+    });
+    await orderServiceB.confirmOrder(storeB.id, userB.id, draftOrderB.id);
+    const fulfilledOrderB = await orderServiceB.fulfillOrder(storeB.id, draftOrderB.id);
+    await prisma.order.update({
+      where: { id: fulfilledOrderB.id },
+      data: { fulfilledAt: storeBFulfilledToday },
+    });
+
+    const analysis = await decisionEngineService.analyzeSku(storeId, stockItemA.id, {
+      persist: false,
+      evaluationDate: new Date('2026-09-25T04:00:00.000Z'),
+    });
+
+    expect(analysis.risk.daysSinceLastSale).toBe(5);
+    expect(analysis.confidence.level).toBe('LOW');
+
+    await prisma.store.delete({ where: { id: storeB.id } }).catch(() => {});
   });
 });

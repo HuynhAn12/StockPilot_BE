@@ -18,7 +18,7 @@ export class DecisionEngineController {
       const storeId = req.user!.storeId!;
       const { stockItemId } = decisionSkuParamsSchema.parse(req.params);
 
-      const result = await this.service.analyzeSku(storeId, stockItemId);
+      const result = await this.service.analyzeSku(storeId, stockItemId, { persist: false });
       return res.status(200).json({
         success: true,
         data: result,
