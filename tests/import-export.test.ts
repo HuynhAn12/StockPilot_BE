@@ -94,6 +94,61 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
       expect(result.previewItems[2].isExistingInDb).toBe(true);
       expect((prisma as any).importJob.create).toHaveBeenCalled();
     });
+
+    it('Rejects ADJUST_STOCK without stockAdjustment and REPLACE_STOCK without countedQuantity', async () => {
+      const baseItem = {
+        categoryName: 'Category',
+        categoryCode: 'CAT',
+        productName: 'Product',
+        productCode: 'PRD',
+        sku: 'SKU-STRICT',
+        costPrice: 50000,
+        sellingPrice: 100000,
+        minStockLevel: 5,
+        maxStockLevel: 500,
+      };
+
+      await expect(
+        service.previewImport(1, 100, {
+          mode: 'ADJUST_STOCK',
+          items: [{ ...baseItem }],
+        })
+      ).rejects.toThrow('ADJUST_STOCK requires stockAdjustment');
+
+      await expect(
+        service.previewImport(1, 100, {
+          mode: 'REPLACE_STOCK',
+          items: [{ ...baseItem }],
+        })
+      ).rejects.toThrow('REPLACE_STOCK requires countedQuantity');
+    });
+
+    it('Rejects stock mutation modes for new SKUs during preview', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([]);
+      (prisma as any).importJob.create.mockResolvedValue({ id: 'job_adjust_new_sku', status: 'PREVIEWED' });
+      (prisma as any).importJobItem.createMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.previewImport(1, 100, {
+        mode: 'ADJUST_STOCK',
+        items: [
+          {
+            categoryName: 'Category',
+            categoryCode: 'CAT',
+            productName: 'Product',
+            productCode: 'PRD',
+            sku: 'SKU-NEW',
+            costPrice: 50000,
+            sellingPrice: 100000,
+            stockAdjustment: 5,
+            minStockLevel: 5,
+            maxStockLevel: 500,
+          },
+        ],
+      });
+
+      expect(result.invalidRows).toBe(1);
+      expect(result.issues[0].message).toContain('requires an existing SKU');
+    });
   });
 
   describe('Step 2: Batch Commit Execution via Job ID', () => {

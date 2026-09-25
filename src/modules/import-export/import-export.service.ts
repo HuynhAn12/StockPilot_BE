@@ -201,6 +201,16 @@ export class ImportExportService {
         });
         warningRowIndices.add(idx + 1);
       }
+      if (!isExisting && (mode === 'ADJUST_STOCK' || mode === 'REPLACE_STOCK')) {
+        issues.push({
+          row: idx + 1,
+          sku: item.sku,
+          field: 'sku',
+          severity: 'ERROR',
+          message: `${mode} requires an existing SKU; ${item.sku} was not found`,
+        });
+        invalidRowIndices.add(idx + 1);
+      }
       return {
         row: idx + 1,
         ...item,
@@ -560,7 +570,10 @@ export class ImportExportService {
                   [{ stockItemId, quantity: item.initialQuantity }]
                 );
               } else if (existingSku && mode === 'ADJUST_STOCK') {
-                const adjQty = item.stockAdjustment !== undefined ? item.stockAdjustment : item.initialQuantity;
+                const adjQty = item.stockAdjustment;
+                if (adjQty === undefined) {
+                  throw new ValidationError('ADJUST_STOCK requires stockAdjustment');
+                }
                 if (adjQty > 0) {
                   await StockLedgerService.atomicAdd(
                     tx,
@@ -593,7 +606,10 @@ export class ImportExportService {
                   );
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
-                const targetQty = item.countedQuantity !== undefined ? item.countedQuantity : item.initialQuantity;
+                const targetQty = item.countedQuantity;
+                if (targetQty === undefined) {
+                  throw new ValidationError('REPLACE_STOCK requires countedQuantity');
+                }
                 await StockLedgerService.replaceWithCount(
                   tx,
                   {

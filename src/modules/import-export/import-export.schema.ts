@@ -38,8 +38,8 @@ export const importPreviewSchema = z.object({
   mode: importModeSchema.optional().default('CREATE_ONLY'),
   warehouseId: z.coerce.number().int().positive().optional(),
 }).superRefine((input, ctx) => {
-  if (input.mode === 'UPSERT_METADATA') {
-    input.items.forEach((item, index) => {
+  input.items.forEach((item, index) => {
+    if (input.mode === 'UPSERT_METADATA') {
       if (item.initialQuantity > 0 || item.stockAdjustment !== undefined || item.countedQuantity !== undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -47,11 +47,44 @@ export const importPreviewSchema = z.object({
           message: 'UPSERT_METADATA cannot include inventory mutation fields',
         });
       }
-    });
-  }
+    }
+
+    if (input.mode === 'ADJUST_STOCK') {
+      if (item.stockAdjustment === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index, 'stockAdjustment'],
+          message: 'ADJUST_STOCK requires stockAdjustment',
+        });
+      }
+      if (item.countedQuantity !== undefined || item.initialQuantity > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index],
+          message: 'ADJUST_STOCK cannot use initialQuantity or countedQuantity',
+        });
+      }
+    }
+
+    if (input.mode === 'REPLACE_STOCK') {
+      if (item.countedQuantity === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index, 'countedQuantity'],
+          message: 'REPLACE_STOCK requires countedQuantity',
+        });
+      }
+      if (item.stockAdjustment !== undefined || item.initialQuantity > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['items', index],
+          message: 'REPLACE_STOCK cannot use initialQuantity or stockAdjustment',
+        });
+      }
+    }
+  });
 });
 
 export const importCommitSchema = z.object({
   jobId: z.string().min(1, 'Mã jobId của bản xem trước (preview) là bắt buộc để commit an toàn'),
 });
-
