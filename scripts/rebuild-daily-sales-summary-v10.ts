@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../src/config/db';
 import { DailySalesSummaryService } from '../src/modules/daily-sales-summary/daily-sales-summary.service';
-import { toBusinessDateKey } from '../src/common/utils/business-date';
+import { businessDateKeyToDate, canonicalDateToBusinessDateKey, toBusinessDateKey } from '../src/common/utils/business-date';
 import { env } from '../src/config/env';
 
 export interface RebuildOptions {
@@ -24,7 +24,11 @@ export async function runRebuildDailySalesSummaryV10(
     updatedDays: number;
     dryRun: boolean;
   }>;
-}> {
+  }> {
+  if (options.storeId !== undefined && !isValidStoreId(options.storeId)) {
+    throw new Error('Invalid storeId. Expected a positive integer.');
+  }
+
   const summaryService = new DailySalesSummaryService(prisma);
   const isDryRun = Boolean(options.dryRun);
 
@@ -39,7 +43,7 @@ export async function runRebuildDailySalesSummaryV10(
   let skippedStores = 0;
 
   for (const store of stores) {
-    // 1. Find earliest and latest dates across Orders, Returns, and HistoricalSales
+    // 1. Find earliest/latest business dates across source facts and existing summaries.
     const [
       earliestOrder,
       latestOrder,
@@ -47,6 +51,8 @@ export async function runRebuildDailySalesSummaryV10(
       latestReturn,
       earliestHistorical,
       latestHistorical,
+      earliestSummary,
+      latestSummary,
     ] = await Promise.all([
       prisma.order.findFirst({
         where: { storeId: store.id, status: 'FULFILLED', fulfilledAt: { not: null } },
@@ -78,34 +84,46 @@ export async function runRebuildDailySalesSummaryV10(
         orderBy: { soldAt: 'desc' },
         select: { soldAt: true },
       }),
+      prisma.dailySalesSummary.findFirst({
+        where: { storeId: store.id },
+        orderBy: { summaryDate: 'asc' },
+        select: { summaryDate: true },
+      }),
+      prisma.dailySalesSummary.findFirst({
+        where: { storeId: store.id },
+        orderBy: { summaryDate: 'desc' },
+        select: { summaryDate: true },
+      }),
     ]);
 
-    const minDates: Date[] = [];
-    const maxDates: Date[] = [];
+    const minKeys: string[] = [];
+    const maxKeys: string[] = [];
 
-    if (earliestOrder?.fulfilledAt) minDates.push(earliestOrder.fulfilledAt);
-    if (latestOrder?.fulfilledAt) maxDates.push(latestOrder.fulfilledAt);
+    if (earliestOrder?.fulfilledAt) minKeys.push(toBusinessDateKey(earliestOrder.fulfilledAt, env.APP_TIMEZONE));
+    if (latestOrder?.fulfilledAt) maxKeys.push(toBusinessDateKey(latestOrder.fulfilledAt, env.APP_TIMEZONE));
 
-    if (earliestReturn?.createdAt) minDates.push(earliestReturn.createdAt);
-    if (latestReturn?.createdAt) maxDates.push(latestReturn.createdAt);
+    if (earliestReturn?.createdAt) minKeys.push(toBusinessDateKey(earliestReturn.createdAt, env.APP_TIMEZONE));
+    if (latestReturn?.createdAt) maxKeys.push(toBusinessDateKey(latestReturn.createdAt, env.APP_TIMEZONE));
 
-    if (earliestHistorical?.soldAt) minDates.push(earliestHistorical.soldAt);
-    if (latestHistorical?.soldAt) maxDates.push(latestHistorical.soldAt);
+    if (earliestHistorical?.soldAt) minKeys.push(toBusinessDateKey(earliestHistorical.soldAt, env.APP_TIMEZONE));
+    if (latestHistorical?.soldAt) maxKeys.push(toBusinessDateKey(latestHistorical.soldAt, env.APP_TIMEZONE));
 
-    if (minDates.length === 0) {
+    if (earliestSummary?.summaryDate) minKeys.push(canonicalDateToBusinessDateKey(earliestSummary.summaryDate));
+    if (latestSummary?.summaryDate) maxKeys.push(canonicalDateToBusinessDateKey(latestSummary.summaryDate));
+
+    if (minKeys.length === 0) {
       skippedStores++;
       continue;
     }
 
-    const minDate = new Date(Math.min(...minDates.map((d) => d.getTime())));
-    const maxDate = new Date(Math.max(...maxDates.map((d) => d.getTime())));
-
-    const fromDateStr = toBusinessDateKey(minDate, env.APP_TIMEZONE);
-    const toDateStr = toBusinessDateKey(maxDate, env.APP_TIMEZONE);
+    const fromDateStr = minKeys.sort()[0];
+    const toDateStr = maxKeys.sort()[maxKeys.length - 1];
+    const fromDate = businessDateKeyToDate(fromDateStr);
+    const toDate = businessDateKeyToDate(toDateStr);
 
     let updatedDays = 0;
     if (!isDryRun) {
-      const res = await summaryService.rebuildDailySalesSummary(store.id, minDate, maxDate);
+      const res = await summaryService.rebuildDailySalesSummary(store.id, fromDate, toDate);
       updatedDays = res.updatedDays;
       totalDaysUpdated += updatedDays;
     }
@@ -128,11 +146,30 @@ export async function runRebuildDailySalesSummaryV10(
   };
 }
 
+function isValidStoreId(value: number): boolean {
+  return Number.isInteger(value) && value > 0;
+}
+
+export function parseStoreIdArg(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new Error('Invalid --storeId value. Use a positive integer, for example --storeId=1.');
+  }
+  return Number(value);
+}
+
 if (require.main === module) {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const storeIdArg = args.find((a) => a.startsWith('--storeId='));
-  const storeId = storeIdArg ? parseInt(storeIdArg.split('=')[1], 10) : undefined;
+  let storeId: number | undefined;
+
+  try {
+    storeId = parseStoreIdArg(storeIdArg ? storeIdArg.split('=')[1] : undefined);
+  } catch (err) {
+    console.error(`[Rebuild V10] ${(err as Error).message}`);
+    process.exit(1);
+  }
 
   runRebuildDailySalesSummaryV10(defaultPrisma, { storeId, dryRun })
     .then(() => {

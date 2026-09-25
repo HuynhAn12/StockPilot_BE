@@ -462,4 +462,153 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     expect(Number(summary.cogs)).toBe(40000);
     expect(summary.historicalCostMissingQty).toBe(0);
   });
+
+  it('Real MySQL: V10 reconciliation deletes stale UTC summary when business date shifts forward', async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const staleUtcSummaryDate = new Date('2026-09-24T00:00:00.000Z');
+    const businessSummaryDate = new Date('2026-09-25T00:00:00.000Z');
+    const firstHourVietnamBusinessDay = new Date('2026-09-24T17:30:00.000Z');
+
+    const product = await prisma.product.create({
+      data: {
+        storeId,
+        name: `Backfill TZ Product ${suffix}`,
+        code: `BF_TZ_PRD_${suffix}`,
+      },
+    });
+
+    const timezoneStockItem = await prisma.stockItem.create({
+      data: {
+        storeId,
+        productId: product.id,
+        sku: `SKU-BF-TZ-${suffix}`,
+        name: `Backfill TZ StockItem ${suffix}`,
+        costPrice: 40000,
+        sellingPrice: 100000,
+      },
+    });
+
+    await prisma.inventoryBalance.create({
+      data: {
+        storeId,
+        warehouseId,
+        stockItemId: timezoneStockItem.id,
+        quantity: 10,
+      },
+    });
+
+    const draftOrder = await orderService.createDraftOrder(storeId, userId, {
+      items: [{ stockItemId: timezoneStockItem.id, quantity: 1 }],
+      discountAmount: 0,
+      taxAmount: 0,
+    });
+    await orderService.confirmOrder(storeId, userId, draftOrder.id);
+    const fulfilledOrder = await orderService.fulfillOrder(storeId, draftOrder.id);
+
+    await prisma.order.update({
+      where: { id: fulfilledOrder.id },
+      data: { fulfilledAt: firstHourVietnamBusinessDay },
+    });
+
+    await prisma.dailySalesSummary.create({
+      data: {
+        storeId,
+        stockItemId: timezoneStockItem.id,
+        summaryDate: staleUtcSummaryDate,
+        grossSoldQty: 1,
+        returnQty: 0,
+        netSoldQty: 1,
+        grossRevenue: 100000,
+        refundAmount: 0,
+        netRevenue: 100000,
+        cogs: 40000,
+        grossProfit: 60000,
+        orderCount: 1,
+        historicalCostMissingQty: 0,
+      },
+    });
+
+    const backfillRes = await runRebuildDailySalesSummaryV10(prisma, { storeId });
+    expect(backfillRes.processedStores).toBe(1);
+
+    const staleSummary = await prisma.dailySalesSummary.findUnique({
+      where: {
+        storeId_stockItemId_summaryDate: {
+          storeId,
+          stockItemId: timezoneStockItem.id,
+          summaryDate: staleUtcSummaryDate,
+        },
+      },
+    });
+    const businessSummary = await prisma.dailySalesSummary.findUniqueOrThrow({
+      where: {
+        storeId_stockItemId_summaryDate: {
+          storeId,
+          stockItemId: timezoneStockItem.id,
+          summaryDate: businessSummaryDate,
+        },
+      },
+    });
+
+    expect(staleSummary).toBeNull();
+    expect(businessSummary.grossSoldQty).toBe(1);
+    expect(businessSummary.netSoldQty).toBe(1);
+    expect(Number(businessSummary.grossRevenue)).toBe(100000);
+  });
+
+  it('Real MySQL: V10 reconciliation deletes existing stale summary when no authoritative facts remain', async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const staleSummaryDate = new Date('2026-01-15T00:00:00.000Z');
+
+    const product = await prisma.product.create({
+      data: {
+        storeId,
+        name: `No Source Product ${suffix}`,
+        code: `NO_SRC_PRD_${suffix}`,
+      },
+    });
+
+    const orphanStockItem = await prisma.stockItem.create({
+      data: {
+        storeId,
+        productId: product.id,
+        sku: `SKU-NO-SRC-${suffix}`,
+        name: `No Source StockItem ${suffix}`,
+        costPrice: 50000,
+        sellingPrice: 90000,
+      },
+    });
+
+    await prisma.dailySalesSummary.create({
+      data: {
+        storeId,
+        stockItemId: orphanStockItem.id,
+        summaryDate: staleSummaryDate,
+        grossSoldQty: 3,
+        returnQty: 0,
+        netSoldQty: 3,
+        grossRevenue: 270000,
+        refundAmount: 0,
+        netRevenue: 270000,
+        cogs: 150000,
+        grossProfit: 120000,
+        orderCount: 1,
+        historicalCostMissingQty: 0,
+      },
+    });
+
+    await runRebuildDailySalesSummaryV10(prisma, { storeId });
+
+    const staleSummary = await prisma.dailySalesSummary.findUnique({
+      where: {
+        storeId_stockItemId_summaryDate: {
+          storeId,
+          stockItemId: orphanStockItem.id,
+          summaryDate: staleSummaryDate,
+        },
+      },
+    });
+
+    expect(staleSummary).toBeNull();
+  });
 });

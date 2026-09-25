@@ -8,6 +8,7 @@
     "build": "tsc",
     "lint": "eslint src/ tests/",
     "start": "node dist/server.js",
+    "maintenance:rebuild-summary-v10": "tsx scripts/rebuild-daily-sales-summary-v10.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
