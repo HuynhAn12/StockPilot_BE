@@ -1,0 +1,109 @@
+{
+  "info": {
+    "_postman_id": "stockpilot-backend-handoff",
+    "name": "StockPilot Backend API",
+    "description": "Verified route collection for StockPilot backend handoff. Uses variables only; no real credentials.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000/api/v1", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "storeId", "value": "1", "type": "string" },
+    { "key": "stockItemId", "value": "1", "type": "string" },
+    { "key": "orderId", "value": "1", "type": "string" },
+    { "key": "recommendationId", "value": "1", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        { "name": "Health", "request": { "method": "GET", "url": "{{baseUrl}}/health" } },
+        { "name": "Live", "request": { "method": "GET", "url": "{{baseUrl}}/health/live" } },
+        { "name": "Ready", "request": { "method": "GET", "url": "{{baseUrl}}/health/ready" } }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        { "name": "Register", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/auth/register", "body": { "mode": "raw", "raw": "{\n  \"fullName\": \"Owner\",\n  \"email\": \"owner@example.com\",\n  \"password\": \"Password123!\",\n  \"storeName\": \"Demo Store\",\n  \"storeCode\": \"DEMO\"\n}" } } },
+        { "name": "Login", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/auth/login", "body": { "mode": "raw", "raw": "{\n  \"email\": \"owner@example.com\",\n  \"password\": \"Password123!\"\n}" } } },
+        { "name": "Refresh", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/auth/refresh", "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" } } },
+        { "name": "Me", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/auth/me" } },
+        { "name": "Logout", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}"}, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/auth/logout", "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" } } }
+      ]
+    },
+    {
+      "name": "Catalog",
+      "item": [
+        { "name": "List Users", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/users" } },
+        { "name": "Create Staff", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/users", "body": { "mode": "raw", "raw": "{\n  \"fullName\": \"Staff\",\n  \"email\": \"staff@example.com\",\n  \"password\": \"Password123!\"\n}" } } },
+        { "name": "List Categories", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/categories" } },
+        { "name": "Create Category", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/categories", "body": { "mode": "raw", "raw": "{\n  \"name\": \"Default\",\n  \"code\": \"DEFAULT\"\n}" } } },
+        { "name": "Get Category", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/categories/1" } },
+        { "name": "Update Category", "request": { "method": "PUT", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/categories/1", "body": { "mode": "raw", "raw": "{\n  \"name\": \"Default Updated\"\n}" } } },
+        { "name": "Delete Category", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/categories/1" } },
+        { "name": "List Products", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/products" } },
+        { "name": "Get Product", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/products/1" } },
+        { "name": "Create Product", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/products", "body": { "mode": "raw", "raw": "{\n  \"name\": \"Demo Product\",\n  \"categoryId\": 1,\n  \"items\": []\n}" } } },
+        { "name": "Update Product", "request": { "method": "PUT", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/products/1", "body": { "mode": "raw", "raw": "{\n  \"name\": \"Demo Product Updated\"\n}" } } }
+      ]
+    },
+    {
+      "name": "Inventory Orders Returns",
+      "item": [
+        { "name": "Inventory Balances", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/inventory/balances" } },
+        { "name": "Inventory Movements", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/inventory/movements" } },
+        { "name": "Inventory Inflow", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/inventory/inflow", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Inventory Outflow", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/inventory/outflow", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Inventory Audit", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/inventory/audit", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "List Orders", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/orders" } },
+        { "name": "Get Order", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/orders/{{orderId}}" } },
+        { "name": "Create Order", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/orders", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Confirm Order", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }], "url": "{{baseUrl}}/orders/{{orderId}}/confirm" } },
+        { "name": "Fulfill Order", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/orders/{{orderId}}/fulfill" } },
+        { "name": "Cancel Order", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/orders/{{orderId}}/cancel", "body": { "mode": "raw", "raw": "{\n  \"reason\": \"customer_cancelled\"\n}" } } },
+        { "name": "List Returns", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/returns" } },
+        { "name": "Create Return", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/returns", "body": { "mode": "raw", "raw": "{}" } } }
+      ]
+    },
+    {
+      "name": "Intelligence",
+      "item": [
+        { "name": "Decision SKU", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/decision-engine/sku/{{stockItemId}}" } },
+        { "name": "Decision Overview", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/decision-engine/overview" } },
+        { "name": "Recalculate", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/decision-engine/recalculate" } },
+        { "name": "Get Engine Config", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/decision-engine/config" } },
+        { "name": "Update Engine Config", "request": { "method": "PUT", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/decision-engine/config", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Alerts", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/alerts" } },
+        { "name": "Acknowledge Alert", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/alerts/1/acknowledge" } },
+        { "name": "Resolve Alert", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/alerts/1/resolve" } },
+        { "name": "Pricing List", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/pricing" } },
+        { "name": "Accept Pricing", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/pricing/{{recommendationId}}/accept", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Reject Pricing", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/pricing/{{recommendationId}}/reject" } },
+        { "name": "Modify Pricing", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/pricing/{{recommendationId}}/modify", "body": { "mode": "raw", "raw": "{\n  \"customPrice\": 100000\n}" } } },
+        { "name": "Assistant SKU", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/assistant/sku/{{stockItemId}}" } },
+        { "name": "Assistant Overview", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/assistant/overview" } }
+      ]
+    },
+    {
+      "name": "Import Export Analytics",
+      "item": [
+        { "name": "Analytics Dashboard", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/analytics/dashboard" } },
+        { "name": "Import Preview", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/import/preview", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Import Commit", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/import/commit", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Historical Preview", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/historical-sales/preview", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Historical Commit", "request": { "method": "POST", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }, { "key": "Idempotency-Key", "value": "{{$guid}}" }, { "key": "Content-Type", "value": "application/json" }], "url": "{{baseUrl}}/historical-sales/commit", "body": { "mode": "raw", "raw": "{}" } } },
+        { "name": "Historical List", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/historical-sales" } },
+        { "name": "Export Products", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/products" } },
+        { "name": "Export Inventory", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/inventory" } },
+        { "name": "Export Orders", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/orders" } },
+        { "name": "Export Sales", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/sales" } },
+        { "name": "Export Returns", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/returns" } },
+        { "name": "Export Decision Report", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/decision-report" } },
+        { "name": "Export Alerts", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/alerts" } },
+        { "name": "Export Recommendations", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }], "url": "{{baseUrl}}/export/recommendations" } }
+      ]
+    }
+  ]
+}

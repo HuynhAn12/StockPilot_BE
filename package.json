@@ -9,12 +9,14 @@
     "lint": "eslint src/ tests/",
     "start": "node dist/server.js",
     "maintenance:rebuild-summary-v10": "tsx scripts/rebuild-daily-sales-summary-v10.ts",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm test",
+    "handoff:check": "tsx scripts/handoff-check.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:push": "prisma db push",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
-    "test:coverage": "jest --coverage --runInBand --detectOpenHandles --forceExit"
+    "test:coverage": "jest --coverage --coverageReporters=text --runInBand --detectOpenHandles --forceExit"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
