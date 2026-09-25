@@ -52,8 +52,8 @@ const migrationCount = readdirSync(join(root, 'prisma/migrations'), { withFileTy
   entry.isDirectory()
 ).length;
 
-if (migrationCount < 11) {
-  fail(`expected at least 11 migrations, found ${migrationCount}`);
+if (migrationCount < 12) {
+  fail(`expected at least 12 migrations, found ${migrationCount}`);
 }
 
 console.log(`HANDOFF_CHECK_OK: required files present, env example has required keys, migrations=${migrationCount}`);

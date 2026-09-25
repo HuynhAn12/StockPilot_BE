@@ -45,7 +45,10 @@ interface DecisionEngineOutput {
 ### 2.1. Phân loại Alert
 - `LOW_STOCK`: Tồn kho `<= minStockLevel` hoặc `<= ROP`.
 - `STOCKOUT`: Tồn kho `= 0`.
-- `OVERSTOCK_DEADSTOCK`: Tồn kho quá ngưỡng `maxStockLevel` hoặc không bán được trong 90 ngày.
+- `OVERSTOCK`: Tồn kho quá ngưỡng `maxStockLevel`.
+- `SLOW_MOVING`: Bán chậm theo ngưỡng cấu hình.
+- `DEAD_STOCK`: Không bán được trong ngưỡng dead-stock, mặc định 90 ngày.
+- `UNUSUAL_DEMAND`: Nhu cầu bất thường theo phân tích demand.
 
 ### 2.2. Phân biệt Alert và Notification
 - **Alert:** Bản ghi nghiệp vụ độc lập được sinh ra bởi Job định kỳ hoặc Event thay đổi tồn kho.

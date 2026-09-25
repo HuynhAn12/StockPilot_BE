@@ -36,7 +36,9 @@ enum ReturnStatus {
 enum AlertType {
   LOW_STOCK
   STOCKOUT
-  OVERSTOCK_DEADSTOCK
+  OVERSTOCK
+  SLOW_MOVING
+  DEAD_STOCK
   UNUSUAL_DEMAND
 }
 
@@ -88,6 +90,19 @@ enum IdempotencyStatus {
   FAILED
 }
 
+enum StockTakeStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+}
+
+enum AiInteractionStatus {
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
 model Store {
   id        Int      @id @default(autoincrement())
   name      String   @db.VarChar(255)
@@ -117,6 +132,12 @@ model Store {
   pricingRecommendations PricingRecommendation[]
   priceHistories         PriceHistory[]
   decisionSnapshots      DecisionSnapshot[]
+  stockTakes             StockTake[]
+  stockTakeItems         StockTakeItem[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  aiInteractions         AiInteraction[]
+  idempotencyRequests    IdempotencyRequest[]
 
   @@map("stores")
 }
@@ -140,6 +161,11 @@ model User {
   importJobsCreated ImportJob[]
   pricingDecided    PricingRecommendation[]
   priceHistories    PriceHistory[]
+  stockTakesCreated StockTake[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  aiInteractions    AiInteraction[]
+  systemSettingsUpdated SystemSetting[]
 
   @@index([storeId])
   @@map("users")
@@ -176,6 +202,8 @@ model Warehouse {
   store     Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
   balances  InventoryBalance[]
   movements StockMovement[]
+  stockTakes StockTake[]
+  restockReturnItems ReturnItem[]
 
   @@index([storeId])
   @@map("warehouses")
@@ -247,6 +275,8 @@ model StockItem {
   pricingRecommendations PricingRecommendation[]
   priceHistories         PriceHistory[]
   decisionSnapshots      DecisionSnapshot[]
+  stockTakeItems         StockTakeItem[]
+  importJobItems         ImportJobItem[]
 
   @@unique([storeId, sku])
   @@index([storeId])
@@ -292,6 +322,7 @@ model StockMovement {
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
   stockItem StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
   createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  stockTakeAdjustments StockTakeItem[]
 
   @@index([storeId, stockItemId, createdAt])
   @@index([warehouseId])
@@ -398,9 +429,11 @@ model ReturnItem {
   returnOrder ReturnOrder @relation(fields: [returnOrderId], references: [id], onDelete: Cascade)
   orderItem   OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
   stockItem   StockItem   @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  restockWarehouse Warehouse? @relation(fields: [restockWarehouseId], references: [id], onDelete: SetNull)
 
   @@index([storeId, returnOrderId])
   @@index([orderItemId])
+  @@index([restockWarehouseId])
   @@map("return_items")
 }
 
@@ -443,9 +476,11 @@ model ImportJobItem {
   updatedAt   DateTime            @updatedAt
 
   importJob ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  stockItem StockItem? @relation(fields: [stockItemId], references: [id], onDelete: SetNull)
 
   @@unique([importJobId, rowNumber])
   @@index([importJobId, status])
+  @@index([stockItemId])
   @@map("import_job_items")
 }
 
@@ -460,6 +495,8 @@ model IdempotencyRequest {
   responseJson Json?
   expiresAt    DateTime
   createdAt    DateTime          @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, operation, key])
   @@index([storeId, expiresAt])
@@ -656,4 +693,133 @@ model DecisionSnapshot {
 
   @@index([storeId, stockItemId, calculatedAt])
   @@map("decision_snapshots")
+}
+
+model StockTake {
+  id            Int             @id @default(autoincrement())
+  storeId       Int
+  warehouseId   Int
+  status        StockTakeStatus @default(DRAFT)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  note          String?         @db.Text
+  createdById   Int?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  store      Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  warehouse  Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdBy  User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items      StockTakeItem[]
+
+  @@index([storeId, warehouseId, status, createdAt])
+  @@index([createdById])
+  @@map("stock_takes")
+}
+
+model StockTakeItem {
+  id                   Int      @id @default(autoincrement())
+  storeId              Int
+  stockTakeId          Int
+  stockItemId          Int
+  expectedQuantity     Int
+  countedQuantity      Int
+  varianceQuantity     Int
+  adjustmentMovementId Int?
+  note                 String?  @db.Text
+  createdAt            DateTime @default(now())
+
+  store              Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  stockTake          StockTake      @relation(fields: [stockTakeId], references: [id], onDelete: Cascade)
+  stockItem          StockItem      @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  adjustmentMovement StockMovement? @relation(fields: [adjustmentMovementId], references: [id], onDelete: SetNull)
+
+  @@unique([stockTakeId, stockItemId])
+  @@index([storeId])
+  @@index([stockItemId])
+  @@index([adjustmentMovementId])
+  @@map("stock_take_items")
+}
+
+model Notification {
+  id         Int      @id @default(autoincrement())
+  storeId    Int
+  userId     Int?
+  type       String   @db.VarChar(50)
+  title      String   @db.VarChar(255)
+  message    String   @db.Text
+  entityType String?  @db.VarChar(50)
+  entityId   String?  @db.VarChar(100)
+  isRead     Boolean  @default(false)
+  readAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, userId, isRead, createdAt])
+  @@index([storeId, createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  storeId    Int?
+  userId     Int?
+  action     String   @db.VarChar(100)
+  entityType String   @db.VarChar(50)
+  entityId   String?  @db.VarChar(100)
+  beforeJson Json?
+  afterJson  Json?
+  ipAddress  String?  @db.VarChar(50)
+  userAgent  String?  @db.VarChar(255)
+  createdAt  DateTime @default(now())
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([userId, createdAt])
+  @@index([entityType, entityId, createdAt])
+  @@map("audit_logs")
+}
+
+model AiInteraction {
+  id                 BigInt              @id @default(autoincrement())
+  storeId            Int
+  userId             Int?
+  conversationId     String?             @db.VarChar(191)
+  requestId          String?             @unique @db.VarChar(191)
+  model              String              @db.VarChar(100)
+  questionText       String?             @db.Text
+  responseText       String?             @db.MediumText
+  contextSummaryJson Json?
+  inputTokens        Int                 @default(0)
+  outputTokens       Int                 @default(0)
+  latencyMs          Int?
+  status             AiInteractionStatus
+  createdAt          DateTime            @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, userId, createdAt])
+  @@index([conversationId, createdAt])
+  @@map("ai_interactions")
+}
+
+model SystemSetting {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique @db.VarChar(100)
+  valueJson   Json
+  description String?  @db.VarChar(255)
+  isPublic    Boolean  @default(false)
+  updatedById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedById])
+  @@map("system_settings")
 }

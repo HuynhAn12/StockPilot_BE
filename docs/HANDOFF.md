@@ -4,7 +4,7 @@
 
 - Branch: `Sang`
 - Version: `v1.0.0`
-- Evidence status: `LOCAL_AND_MYSQL_VERIFIED` after the commands listed in `docs/TESTING.md` pass locally.
+- Evidence status: `LOCAL_AND_MYSQL_VERIFIED` for Database Design v1.1 core alignment after the commands listed below passed locally on 2026-09-25.
 - Production observed: `NO`
 - Handoff label: `BACKEND_HANDOFF_CANDIDATE`, not production ready.
 
@@ -22,6 +22,8 @@
 
 The backend is a modular monolith. Modules under `src/modules` own auth, users, categories, products, inventory, orders, returns, analytics, import/export, historical sales, daily summary accounting, alerts, pricing, Decision Engine, and AI explanations.
 
+The executable Prisma schema is aligned with Database Design v1.1 at the core foundation level: 29 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, and SystemSetting foundations. Advanced workflows for those new foundations are intentionally deferred.
+
 Store tenancy is enforced through authenticated store scope. Business queries should include `storeId` unless the model is explicitly global.
 
 The Decision Engine is deterministic TypeScript logic. AI endpoints may explain already authorized deterministic outputs, but AI does not mutate inventory, pricing, orders, returns, alerts, or recommendations.
@@ -30,11 +32,13 @@ The Decision Engine is deterministic TypeScript logic. AI endpoints may explain 
 
 - Schema: `prisma/schema.prisma`
 - Migrations: `prisma/migrations`
-- Current migration count: 11
+- Current migration count: 12
+- Current Prisma model count: 29
+- Latest migration: `20260925213000_v12_core_architecture_alignment`
 - Clean deployment command: `npm run prisma:migrate:deploy`
 - Client generation: `npm run prisma:generate`
 
-Never rewrite reviewed historical migrations. Add a new V11+ migration for future schema changes.
+Never rewrite reviewed historical migrations. Add a new V13+ migration for future schema changes.
 
 ## Environment
 
@@ -57,14 +61,29 @@ Production startup requires `DATABASE_URL`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, 
 
 ```bash
 npm ci
+npx prisma validate
 npm run prisma:generate
 npm run prisma:migrate:deploy
+npm run typecheck
+npm run lint
 npm run dev
 npm run build
 npm test
 npm run test:coverage
 npm run handoff:check
 ```
+
+Latest local evidence for this handoff pass:
+
+- `npm ci`: passed, 0 vulnerabilities; dependency deprecation warnings only.
+- `npx prisma validate`: passed.
+- `npm run prisma:generate`: passed.
+- `npx prisma migrate deploy`: passed on `stockpilot_dev`; clean reset/deploy also passed on isolated `stockpilot_test`.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`.
+- `npm run build`: passed.
+- `npm test`: 20 suites / 129 tests passed.
+- `npm run handoff:check`: passed; reported `HANDOFF_CHECK_OK` with expected local `.env` warning.
 
 Maintenance:
 

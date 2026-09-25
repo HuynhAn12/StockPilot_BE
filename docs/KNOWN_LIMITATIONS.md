@@ -28,3 +28,15 @@ The repository contains a GitHub Actions workflow for MySQL 8.4, Prisma validati
 ## Production Evidence
 
 No production deployment, traffic, backup/restore drill, or observability evidence is included in this handoff. Do not label the backend production ready from repository tests alone.
+
+## Database Design v1.1 Deferred Features
+
+The executable schema now includes the v1.1 foundation tables, but the following features are intentionally not implemented in this phase:
+
+- Full StockTake workflow is not implemented.
+- Notification realtime delivery and notification center behavior are not implemented.
+- Full audit coverage across all business mutations is not implemented.
+- SystemSetting admin API is not implemented.
+- AI conversation history UI/API is not implemented.
+
+These foundations should not be described as production-ready feature implementations until their business workflows, authorization paths, and operational tests are added.

@@ -103,7 +103,7 @@ export class AlertService {
     if (isDeadStock) {
       const sev: AlertSeverity = deadStockSeverity === 'CRITICAL' ? 'CRITICAL' : 'WARNING';
       overstockTrigger = {
-        type: 'OVERSTOCK_DEADSTOCK',
+        type: 'DEAD_STOCK',
         severity: sev,
         riskScore: overstockScore,
         title: `Hàng tồn kho ứ đọng (Dead Stock): SKU ${sku}`,
@@ -112,7 +112,7 @@ export class AlertService {
       };
     } else if (overstockScore >= 50) {
       overstockTrigger = {
-        type: 'OVERSTOCK_DEADSTOCK',
+        type: 'OVERSTOCK',
         severity: overstockScore >= 75 ? 'WARNING' : 'INFO',
         riskScore: overstockScore,
         title: `Cảnh báo thừa hàng: SKU ${sku}`,
@@ -196,7 +196,14 @@ export class AlertService {
     }
 
     // Auto-resolve alerts of types that are no longer active
-    const allPossibleTypes: AlertType[] = ['LOW_STOCK', 'STOCKOUT', 'OVERSTOCK_DEADSTOCK', 'UNUSUAL_DEMAND'];
+    const allPossibleTypes: AlertType[] = [
+      'LOW_STOCK',
+      'STOCKOUT',
+      'OVERSTOCK',
+      'SLOW_MOVING',
+      'DEAD_STOCK',
+      'UNUSUAL_DEMAND',
+    ];
     for (const type of allPossibleTypes) {
       // If STOCKOUT is active, make sure LOW_STOCK is resolved
       if (type === 'LOW_STOCK' && activeTriggerTypes.has('STOCKOUT')) {

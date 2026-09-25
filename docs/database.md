@@ -1,5 +1,14 @@
 # Đặc tả Cơ sở Dữ liệu StockPilot (MySQL 8.4 / InnoDB)
 
+## Current Executable Schema Status
+
+- Current executable Prisma schema: 29 models aligned with Database Design v1.1.
+- Current migration count: 12.
+- Latest migration: `20260925213000_v12_core_architecture_alignment`.
+- The v1.1 alignment adds `stock_takes`, `stock_take_items`, `notifications`, `audit_logs`, `ai_interactions`, and `system_settings`.
+- Alert taxonomy is now `LOW_STOCK`, `STOCKOUT`, `OVERSTOCK`, `SLOW_MOVING`, `DEAD_STOCK`, and `UNUSUAL_DEMAND`.
+- This phase provides database/model foundations only. Full StockTake workflow, realtime notification delivery, full audit coverage, SystemSetting admin API, and AI conversation history UI/API are not implemented.
+
 Hệ thống sử dụng cơ chế lưu trữ **Multi-tenant theo mô hình Shared Database / Shared Schema**, trong đó mọi bảng dữ liệu liên quan tới nghiệp vụ đều có trường khóa ngoại `store_id` để phân lập dữ liệu.
 
 ---
