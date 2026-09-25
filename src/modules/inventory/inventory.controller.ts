@@ -9,7 +9,7 @@ export class InventoryController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const result = await inventoryService.inflow(storeId, userId, req.body);
+      const result = await inventoryService.inflow(storeId, userId, req.body, (req as any).idempotencyContext?.effectKey);
       const masked = maskSensitiveFields(result, req.user?.role);
       return res.status(200).json({ success: true, message: 'Nhập hàng vào kho thành công', data: masked });
     } catch (error) {
@@ -21,7 +21,7 @@ export class InventoryController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const result = await inventoryService.outflow(storeId, userId, req.body);
+      const result = await inventoryService.outflow(storeId, userId, req.body, (req as any).idempotencyContext?.effectKey);
       const masked = maskSensitiveFields(result, req.user?.role);
       return res.status(200).json({ success: true, message: 'Xuất hàng thủ công thành công', data: masked });
     } catch (error) {
@@ -33,7 +33,7 @@ export class InventoryController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const result = await inventoryService.audit(storeId, userId, req.body);
+      const result = await inventoryService.audit(storeId, userId, req.body, (req as any).idempotencyContext?.effectKey);
       const masked = maskSensitiveFields(result, req.user?.role);
       return res.status(200).json({ success: true, message: 'Kiểm kê kho thành công', data: masked });
     } catch (error) {

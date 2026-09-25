@@ -28,7 +28,7 @@ export class InventoryService {
     return defaultWh;
   }
 
-  async inflow(storeId: number, userId: number, input: z.infer<typeof inflowSchema>) {
+  async inflow(storeId: number, userId: number, input: z.infer<typeof inflowSchema>, idempotencyKey?: string) {
     const warehouse = await this.getTargetWarehouse(storeId, input.warehouseId);
     const refId = input.referenceId || `INFLOW-${Date.now()}`;
 
@@ -41,6 +41,7 @@ export class InventoryService {
           userId,
           referenceType: 'GOODS_RECEIPT',
           referenceId: refId,
+          idempotencyKey,
           note: input.note || 'Nhập hàng vào kho',
         },
         'INFLOW',
@@ -51,7 +52,7 @@ export class InventoryService {
     });
   }
 
-  async outflow(storeId: number, userId: number, input: z.infer<typeof outflowSchema>) {
+  async outflow(storeId: number, userId: number, input: z.infer<typeof outflowSchema>, idempotencyKey?: string) {
     const warehouse = await this.getTargetWarehouse(storeId, input.warehouseId);
     const refId = input.referenceId || `OUTFLOW-${Date.now()}`;
 
@@ -64,6 +65,7 @@ export class InventoryService {
           userId,
           referenceType: 'MANUAL_OUTFLOW',
           referenceId: refId,
+          idempotencyKey,
           note: input.note || 'Xuất hàng thủ công',
         },
         'OUTFLOW',
@@ -74,7 +76,7 @@ export class InventoryService {
     });
   }
 
-  async audit(storeId: number, userId: number, input: z.infer<typeof auditSchema>) {
+  async audit(storeId: number, userId: number, input: z.infer<typeof auditSchema>, idempotencyKey?: string) {
     const warehouse = await this.getTargetWarehouse(storeId, input.warehouseId);
     const refId = input.referenceId || `AUDIT-${Date.now()}`;
 
@@ -143,6 +145,7 @@ export class InventoryService {
             afterQuantity,
             referenceType: 'STOCK_AUDIT',
             referenceId: refId,
+            idempotencyKey: idempotencyKey ? `${idempotencyKey}:${stockItem.id}` : undefined,
             note: input.note || `Kiểm kê điều chỉnh kho: ${delta >= 0 ? '+' : ''}${delta}`,
             createdById: userId,
           },

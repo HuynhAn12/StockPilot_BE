@@ -12,7 +12,12 @@ export class OrderService {
     this.prisma = customPrisma || defaultPrisma;
   }
 
-  async createDraftOrder(storeId: number, userId: number, input: z.infer<typeof createOrderSchema>) {
+  async createDraftOrder(
+    storeId: number,
+    userId: number,
+    input: z.infer<typeof createOrderSchema>,
+    clientRequestKey?: string
+  ) {
     const orderNumber = `ORD-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
     // Normalize and aggregate any duplicate stockItemId entries in input
@@ -119,6 +124,7 @@ export class OrderService {
         taxAmount: tax,
         totalAmount,
         note: input.note,
+        clientRequestKey,
         createdById: userId,
         items: {
           create: orderItemsData,

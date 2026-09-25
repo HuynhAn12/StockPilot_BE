@@ -315,6 +315,7 @@ model Order {
   fulfilledAt     DateTime?
   canceledAt      DateTime?
   cancelReason    String?     @db.Text
+  clientRequestKey String?     @db.VarChar(200)
   createdById     Int?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
@@ -325,6 +326,7 @@ model Order {
   returns   ReturnOrder[]
 
   @@unique([storeId, orderNumber])
+  @@unique([storeId, clientRequestKey])
   @@index([storeId, status, createdAt])
   @@map("orders")
 }
@@ -363,6 +365,7 @@ model ReturnOrder {
   status            ReturnStatus @default(COMPLETED)
   totalRefundAmount Decimal      @default(0.00) @db.Decimal(15, 2)
   reason            String?      @db.Text
+  clientRequestKey  String?      @db.VarChar(200)
   createdById       Int?
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
@@ -373,6 +376,7 @@ model ReturnOrder {
   items     ReturnItem[]
 
   @@unique([storeId, returnNumber])
+  @@unique([storeId, clientRequestKey])
   @@index([storeId, orderId])
   @@map("return_orders")
 }

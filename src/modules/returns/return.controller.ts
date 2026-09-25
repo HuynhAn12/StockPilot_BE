@@ -8,7 +8,12 @@ export class ReturnController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const result = await returnService.createReturn(storeId, userId, req.body);
+      const result = await returnService.createReturn(
+        storeId,
+        userId,
+        req.body,
+        (req as any).idempotencyContext?.effectKey
+      );
       return res.status(201).json({ success: true, message: 'Tạo phiếu trả hàng thành công', data: result });
     } catch (error) {
       next(error);

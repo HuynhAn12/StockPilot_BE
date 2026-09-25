@@ -13,7 +13,12 @@ export class ReturnService {
     this.prisma = customPrisma || defaultPrisma;
   }
 
-  async createReturn(storeId: number, userId: number, input: z.infer<typeof createReturnSchema>) {
+  async createReturn(
+    storeId: number,
+    userId: number,
+    input: z.infer<typeof createReturnSchema>,
+    clientRequestKey?: string
+  ) {
     const returnNumber = `RET-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
     const defaultWarehouse = await this.prisma.warehouse.findFirst({
@@ -211,6 +216,7 @@ export class ReturnService {
             userId,
             referenceType: 'RETURN',
             referenceId: returnNumber,
+            idempotencyKey: clientRequestKey,
             note: `Nhập kho trả hàng từ đơn #${order.orderNumber}`,
           },
           'RETURN_RESTOCK',
@@ -227,6 +233,7 @@ export class ReturnService {
           status: 'COMPLETED',
           totalRefundAmount,
           reason: input.reason,
+          clientRequestKey,
           createdById: userId,
           items: {
             create: returnItemsData,

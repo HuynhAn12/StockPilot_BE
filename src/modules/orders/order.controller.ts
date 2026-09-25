@@ -34,7 +34,12 @@ export class OrderController {
     try {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
-      const order = await orderService.createDraftOrder(storeId, userId, req.body);
+      const order = await orderService.createDraftOrder(
+        storeId,
+        userId,
+        req.body,
+        (req as any).idempotencyContext?.effectKey
+      );
       const masked = maskSensitiveFields(order, req.user?.role);
       return res.status(201).json({ success: true, message: 'Tạo đơn hàng nháp thành công', data: masked });
     } catch (error) {

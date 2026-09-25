@@ -8,6 +8,13 @@ export interface IdempotencyOptions {
   ttlSeconds?: number;
 }
 
+export interface IdempotencyContext {
+  operation: string;
+  key: string;
+  requestHash: string;
+  effectKey: string;
+}
+
 export function canonicalJsonStringify(obj: any): string {
   if (obj === null || typeof obj !== 'object') {
     return JSON.stringify(obj);
@@ -53,6 +60,8 @@ export function idempotency(options: IdempotencyOptions) {
       .createHash('sha256')
       .update(canonicalJsonStringify(identity))
       .digest('hex');
+    const effectKey = `${operation}:${storeId}:${key}`;
+    (req as any).idempotencyContext = { operation, key, requestHash, effectKey } satisfies IdempotencyContext;
 
     const prisma = req.app.get('prisma') || defaultPrisma;
 
@@ -78,7 +87,39 @@ export function idempotency(options: IdempotencyOptions) {
         }
 
         if (existing.status === 'PROCESSING') {
-          throw new ConflictError('REQUEST_IN_PROGRESS: request is processing or has an unknown outcome; it will not be replayed automatically');
+          if (existing.expiresAt > now) {
+            throw new ConflictError('REQUEST_IN_PROGRESS: request is processing');
+          }
+
+          const recovered = await recoverCommittedOutcome(prisma, storeId, operation, effectKey, req);
+          if (recovered) {
+            await prisma.idempotencyRequest.update({
+              where: { id: existing.id },
+              data: {
+                status: 'COMPLETED',
+                statusCode: recovered.statusCode,
+                responseJson: recovered.responseJson,
+                expiresAt,
+              },
+            });
+            return res.status(recovered.statusCode).json(recovered.responseJson);
+          }
+
+          const reclaimed = await prisma.idempotencyRequest.updateMany({
+            where: {
+              id: existing.id,
+              status: 'PROCESSING',
+              requestHash,
+              expiresAt: { lte: now },
+            },
+            data: { expiresAt },
+          });
+
+          if (reclaimed.count !== 1) {
+            throw new ConflictError('REQUEST_IN_PROGRESS: request is processing');
+          }
+
+          return installCompletionHooks(prisma, existing.id, res, next);
         }
 
         if (existing.status === 'FAILED') {
@@ -97,41 +138,7 @@ export function idempotency(options: IdempotencyOptions) {
         },
       });
 
-      const originalJson = res.json.bind(res);
-      const originalSend = res.send.bind(res);
-
-      res.json = (body: any) => {
-        const statusCode = res.statusCode || 200;
-        const responseJson = JSON.parse(JSON.stringify(body));
-        const completion = statusCode < 400
-          ? prisma.idempotencyRequest.update({
-              where: { id: record.id },
-              data: {
-                status: 'COMPLETED',
-                statusCode,
-                responseJson,
-              },
-            })
-          : prisma.idempotencyRequest.update({
-              where: { id: record.id },
-              data: {
-                status: 'FAILED',
-                statusCode,
-              },
-            });
-
-        completion
-          .then(() => originalJson(body))
-          .catch(next);
-
-        return res;
-      };
-
-      res.send = (body: any) => {
-        return originalSend(body);
-      };
-
-      next();
+      installCompletionHooks(prisma, record.id, res, next);
     } catch (err: any) {
       if (err.code === 'P2002') {
         const concurrentRecord = await prisma.idempotencyRequest.findUnique({
@@ -144,8 +151,28 @@ export function idempotency(options: IdempotencyOptions) {
           },
         });
 
+        if (concurrentRecord && concurrentRecord.requestHash !== requestHash) {
+          return next(new ConflictError('IDEMPOTENCY_KEY_REUSED: Idempotency-Key was used with a different request identity'));
+        }
+
         if (concurrentRecord?.status === 'COMPLETED' && concurrentRecord.responseJson) {
           return res.status(concurrentRecord.statusCode || 200).json(concurrentRecord.responseJson);
+        }
+
+        if (concurrentRecord?.status === 'PROCESSING' && concurrentRecord.expiresAt <= now) {
+          const recovered = await recoverCommittedOutcome(prisma, storeId, operation, effectKey, req);
+          if (recovered) {
+            await prisma.idempotencyRequest.update({
+              where: { id: concurrentRecord.id },
+              data: {
+                status: 'COMPLETED',
+                statusCode: recovered.statusCode,
+                responseJson: recovered.responseJson,
+                expiresAt,
+              },
+            });
+            return res.status(recovered.statusCode).json(recovered.responseJson);
+          }
         }
 
         return next(new ConflictError('REQUEST_IN_PROGRESS: request is processing'));
@@ -153,4 +180,103 @@ export function idempotency(options: IdempotencyOptions) {
       next(err);
     }
   };
+}
+
+function installCompletionHooks(prisma: any, recordId: string, res: Response, next: NextFunction) {
+  const originalJson = res.json.bind(res);
+  const originalSend = res.send.bind(res);
+
+  res.json = (body: any) => {
+    const statusCode = res.statusCode || 200;
+    const responseJson = JSON.parse(JSON.stringify(body));
+    const completion = statusCode < 400
+      ? prisma.idempotencyRequest.update({
+          where: { id: recordId },
+          data: {
+            status: 'COMPLETED',
+            statusCode,
+            responseJson,
+          },
+        })
+      : prisma.idempotencyRequest.update({
+          where: { id: recordId },
+          data: {
+            status: 'FAILED',
+            statusCode,
+          },
+        });
+
+    completion
+      .then(() => originalJson(body))
+      .catch(next);
+
+    return res;
+  };
+
+  res.send = (body: any) => originalSend(body);
+  next();
+}
+
+async function recoverCommittedOutcome(
+  prisma: any,
+  storeId: number,
+  operation: string,
+  effectKey: string,
+  req: Request
+): Promise<{ statusCode: number; responseJson: any } | null> {
+  if (operation === 'ORDER_CREATE') {
+    const order = await prisma.order.findFirst({
+      where: { storeId, clientRequestKey: effectKey },
+      include: { items: true },
+    });
+    return order
+      ? { statusCode: 201, responseJson: { success: true, message: 'Order create recovered', data: order } }
+      : null;
+  }
+
+  if (operation === 'RETURN_CREATE') {
+    const returnOrder = await prisma.returnOrder.findFirst({
+      where: { storeId, clientRequestKey: effectKey },
+      include: { items: true, order: true },
+    });
+    return returnOrder
+      ? { statusCode: 201, responseJson: { success: true, message: 'Return create recovered', data: returnOrder } }
+      : null;
+  }
+
+  if (operation.startsWith('INVENTORY_')) {
+    const movements = await prisma.stockMovement.findMany({
+      where: { storeId, idempotencyKey: { startsWith: effectKey } },
+      orderBy: { id: 'asc' },
+    });
+    if (movements.length === 0) return null;
+
+    const warehouse = await prisma.warehouse.findFirst({
+      where: { id: movements[0].warehouseId, storeId },
+    });
+    return {
+      statusCode: 200,
+      responseJson: {
+        success: true,
+        message: 'Inventory operation recovered',
+        data: { warehouse, movements },
+      },
+    };
+  }
+
+  if (operation === 'ORDER_CONFIRM' || operation === 'ORDER_CANCEL') {
+    const orderId = Number(req.params?.id);
+    if (!Number.isInteger(orderId) || orderId <= 0) return null;
+
+    const status = operation === 'ORDER_CONFIRM' ? ['CONFIRMED', 'FULFILLED'] : ['CANCELED'];
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, storeId, status: { in: status } },
+      include: { items: true },
+    });
+    return order
+      ? { statusCode: 200, responseJson: { success: true, message: 'Order operation recovered', data: order } }
+      : null;
+  }
+
+  return null;
 }
