@@ -8,7 +8,7 @@ This document describes the repository as inspected from the working tree. It is
 - Package version: `v1.0.0`
 - Handoff label: backend handoff candidate
 - Production evidence: none observed in this repository
-- CI evidence: GitHub Actions workflow exists, but the latest remote run was not verified during this documentation pass
+- CI evidence: GitHub Actions passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
 
 ## Stack
 
@@ -80,17 +80,19 @@ The schema foundations exist, but these workflows are not implemented as complet
 
 ## Test State
 
-Latest local evidence from this documentation pass:
+Latest verified evidence:
 
 - `npm run typecheck`: passed
 - `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`
 - `npm run build`: passed
-- `npm test`: 20 suites / 129 tests passed
+- `npm test`: 20 suites / 135 tests passed
+- GitHub Actions: passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
+- MySQL 8.4 migration deploy: passed in CI
 
 The test suite includes unit tests, API integration tests, real MySQL integration tests, and concurrency tests. MySQL tests require `TEST_DATABASE_URL` to point at a disposable test database.
 
 ## Current Constraints
 
 - Do not call the backend production ready from repository tests alone.
-- Do not mark CI as verified without checking GitHub Actions for the exact commit.
+- CI is verified for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84` only.
 - Do not describe v1.1 foundation tables as full feature implementations.

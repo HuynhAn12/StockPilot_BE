@@ -43,4 +43,6 @@ Do not label the backend production ready from repository tests alone.
 
 The repository contains a GitHub Actions workflow for MySQL 8.4, Prisma validation/generation, migration deploy, lint, build, and tests.
 
-Local evidence is not the same as a passed GitHub Actions run for a final SHA. Mark CI as `CI_VERIFIED` only after checking the exact commit in GitHub Actions.
+Commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84` is `CI_VERIFIED`: GitHub Actions passed with MySQL 8.4 migration deploy and 20 suites / 135 tests.
+
+Future commits must be checked independently before carrying this label forward.

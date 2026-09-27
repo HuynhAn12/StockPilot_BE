@@ -4,7 +4,7 @@
 
 - Branch: `Sang`
 - Version: `v1.0.0`
-- Evidence status: `LOCAL_AND_MYSQL_VERIFIED` for Database Design v1.1 core alignment. Documentation governance validation commands also passed locally on 2026-09-27.
+- Evidence status: `CI_VERIFIED` for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
 - Production observed: `NO`
 - Handoff label: `BACKEND_HANDOFF_CANDIDATE`, not production ready.
 
@@ -90,7 +90,16 @@ Latest documentation governance validation on 2026-09-27:
 - `npm run typecheck`: passed.
 - `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`.
 - `npm run build`: passed.
-- `npm test`: 20 suites / 129 tests passed.
+- `npm test`: 20 suites / 135 tests passed.
+
+Latest CI evidence:
+
+- Verified commit: `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
+- GitHub Actions: passed.
+- Database: 29 Prisma models, 12 migrations, MySQL 8.4 migration deploy passed.
+- Tests: 20 suites / 135 tests passed.
+- API compatibility: no breaking route/schema changes.
+- Production: not production-observed.
 
 Maintenance:
 
@@ -121,7 +130,7 @@ npm run maintenance:rebuild-summary-v10 -- --storeId=1
 - Idempotency: `UNIT_TESTED`, `MYSQL_INTEGRATION_TESTED`
 - Import: `UNIT_TESTED`, `MYSQL_INTEGRATION_TESTED`
 - Auth refresh rotation: `UNIT_TESTED`, `MYSQL_INTEGRATION_TESTED`
-- CI: `CI_VERIFIED` only if GitHub Actions passes for the exact handoff SHA.
+- CI: `CI_VERIFIED` for `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
 - Production: `PRODUCTION_OBSERVED` only with real production evidence.
 
 ## Known Limitations
