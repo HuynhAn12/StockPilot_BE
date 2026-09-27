@@ -1,7 +1,7 @@
 import { HistoricalSalesService } from '../src/modules/historical-sales/historical-sales.service';
 import { DailySalesSummaryService } from '../src/modules/daily-sales-summary/daily-sales-summary.service';
 import { DecisionEngineService } from '../src/modules/decision-engine/decision-engine.service';
-import { AlertService } from '../src/modules/alerts/alert.service';
+import { AlertEvaluationInput, AlertService } from '../src/modules/alerts/alert.service';
 import { PricingService } from '../src/modules/pricing/pricing.service';
 import { AssistantService } from '../src/modules/assistant/assistant.service';
 import { EngineConfigService } from '../src/modules/decision-engine/engine-config.service';
@@ -776,6 +776,29 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
   describe('PricingService & AlertService Workflow', () => {
     const pricingService = new PricingService(prisma as any);
     const alertService = new AlertService(prisma as any);
+    const baseAlertInput: AlertEvaluationInput = {
+      storeId: 1,
+      stockItemId: 10,
+      sku: 'SKU-A',
+      productName: 'Product A',
+      availableStock: 20,
+      reorderPoint: 5,
+      stockoutScore: 0,
+      stockoutSeverity: 'LOW',
+      overstockScore: 0,
+      overstockSeverity: 'LOW',
+      isSlowMoving: false,
+      isDeadStock: false,
+      deadStockSeverity: 'NONE',
+      daysSinceLastSale: 30,
+      confidenceScore: 80,
+      engineVersion: 'DECISION_ENGINE_V1',
+      unusualDemand: {
+        isAnomaly: false,
+        type: 'NONE',
+        zScore: 0,
+      },
+    };
 
     it('generates pricing recommendation with strict gross margin price floor clamp', async () => {
       (prisma.pricingRecommendation.findFirst as jest.Mock).mockResolvedValue(null);
@@ -845,6 +868,152 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
           }),
         })
       );
+    });
+
+    it('creates a SLOW_MOVING alert when the engine marks a SKU as slow moving but not dead stock', async () => {
+      (prisma.alert.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.alert.create as jest.Mock).mockResolvedValue({ id: 11, type: 'SLOW_MOVING' });
+      (prisma.alert.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await alertService.syncAlertsForSku({
+        ...baseAlertInput,
+        isSlowMoving: true,
+        daysSinceLastSale: 65,
+      });
+
+      expect(prisma.alert.create).toHaveBeenCalledTimes(1);
+      expect(prisma.alert.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: 'SLOW_MOVING',
+            severity: 'WARNING',
+            riskScore: expect.anything(),
+            reasonJson: expect.objectContaining({
+              isSlowMoving: true,
+              daysSinceLastSale: 65,
+              overstockScore: 0,
+            }),
+          }),
+        })
+      );
+    });
+
+    it('does not create a SLOW_MOVING alert when slow-moving condition is false', async () => {
+      (prisma.alert.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await alertService.syncAlertsForSku({
+        ...baseAlertInput,
+        isSlowMoving: false,
+        daysSinceLastSale: 10,
+      });
+
+      expect(prisma.alert.create).not.toHaveBeenCalled();
+      expect(prisma.alert.update).not.toHaveBeenCalled();
+    });
+
+    it('auto-resolves an existing SLOW_MOVING alert when slow-moving condition disappears', async () => {
+      (prisma.alert.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      await alertService.syncAlertsForSku({
+        ...baseAlertInput,
+        isSlowMoving: false,
+        daysSinceLastSale: 10,
+      });
+
+      const slowMovingFingerprint = AlertService.computeFingerprint(1, 10, 'SLOW_MOVING');
+      expect(prisma.alert.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            storeId: 1,
+            fingerprint: slowMovingFingerprint,
+            status: { in: ['OPEN', 'ACKNOWLEDGED'] },
+          },
+          data: expect.objectContaining({ status: 'RESOLVED' }),
+        })
+      );
+    });
+
+    it('keeps DEAD_STOCK active and suppresses SLOW_MOVING when both flags are true', async () => {
+      (prisma.alert.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.alert.create as jest.Mock).mockResolvedValue({ id: 12, type: 'DEAD_STOCK' });
+      (prisma.alert.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await alertService.syncAlertsForSku({
+        ...baseAlertInput,
+        overstockScore: 70,
+        isSlowMoving: true,
+        isDeadStock: true,
+        deadStockSeverity: 'WARNING',
+        daysSinceLastSale: 100,
+      });
+
+      expect(prisma.alert.create).toHaveBeenCalledTimes(1);
+      expect(prisma.alert.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ type: 'DEAD_STOCK' }),
+        })
+      );
+      expect(prisma.alert.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ type: 'SLOW_MOVING' }),
+        })
+      );
+    });
+
+    it('resolves SLOW_MOVING and activates DEAD_STOCK on a slow-moving to dead-stock transition', async () => {
+      (prisma.alert.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.alert.create as jest.Mock).mockResolvedValue({ id: 13, type: 'DEAD_STOCK' });
+      (prisma.alert.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+
+      await alertService.syncAlertsForSku({
+        ...baseAlertInput,
+        overstockScore: 80,
+        isSlowMoving: true,
+        isDeadStock: true,
+        deadStockSeverity: 'CRITICAL',
+        daysSinceLastSale: 190,
+      });
+
+      const slowMovingFingerprint = AlertService.computeFingerprint(1, 10, 'SLOW_MOVING');
+      expect(prisma.alert.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ type: 'DEAD_STOCK', severity: 'CRITICAL' }),
+        })
+      );
+      expect(prisma.alert.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            storeId: 1,
+            fingerprint: slowMovingFingerprint,
+            status: { in: ['OPEN', 'ACKNOWLEDGED'] },
+          },
+          data: expect.objectContaining({ status: 'RESOLVED' }),
+        })
+      );
+    });
+
+    it('keeps existing stockout, overstock, and unusual-demand alert generation unchanged', async () => {
+      (prisma.alert.findUnique as jest.Mock).mockResolvedValue(null);
+      (prisma.alert.create as jest.Mock).mockResolvedValue({ id: 14 });
+      (prisma.alert.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+
+      await alertService.syncAlertsForSku({
+        ...baseAlertInput,
+        availableStock: 0,
+        reorderPoint: 5,
+        stockoutScore: 100,
+        stockoutSeverity: 'CRITICAL',
+        overstockScore: 60,
+        overstockSeverity: 'HIGH',
+        unusualDemand: {
+          isAnomaly: true,
+          type: 'HIGH_SPIKE',
+          zScore: 2.5,
+        },
+      });
+
+      const createdTypes = (prisma.alert.create as jest.Mock).mock.calls.map((call) => call[0].data.type);
+      expect(createdTypes).toEqual(['STOCKOUT', 'OVERSTOCK', 'UNUSUAL_DEMAND']);
     });
 
     it('acknowledges and resolves alerts', async () => {

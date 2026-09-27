@@ -49,6 +49,7 @@ export class AlertService {
       stockoutScore,
       stockoutSeverity,
       overstockScore,
+      isSlowMoving,
       isDeadStock,
       deadStockSeverity,
       daysSinceLastSale,
@@ -121,6 +122,26 @@ export class AlertService {
       };
     }
 
+    let slowMovingTrigger: {
+      type: AlertType;
+      severity: AlertSeverity;
+      riskScore: number;
+      title: string;
+      message: string;
+      reasonJson: Record<string, unknown>;
+    } | null = null;
+
+    if (!isDeadStock && isSlowMoving) {
+      slowMovingTrigger = {
+        type: 'SLOW_MOVING',
+        severity: 'WARNING',
+        riskScore: 0,
+        title: `Slow-moving inventory: SKU ${sku}`,
+        message: `SKU ${sku} has not recorded a sale for ${daysSinceLastSale ?? 'multiple'} days.`,
+        reasonJson: { isSlowMoving, daysSinceLastSale, overstockScore },
+      };
+    }
+
     // Unusual Demand Trigger
     let anomalyTrigger: {
       type: AlertType;
@@ -146,7 +167,7 @@ export class AlertService {
       };
     }
 
-    const triggers = [stockoutTrigger, overstockTrigger, anomalyTrigger].filter(Boolean) as Array<
+    const triggers = [stockoutTrigger, overstockTrigger, slowMovingTrigger, anomalyTrigger].filter(Boolean) as Array<
       NonNullable<typeof stockoutTrigger>
     >;
 
