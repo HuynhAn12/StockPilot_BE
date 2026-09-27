@@ -1,5 +1,6 @@
 FROM node:24-bookworm-slim AS deps
 WORKDIR /app
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package*.json ./
 RUN npm ci
 
@@ -14,6 +15,7 @@ RUN npm prune --omit=dev
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+RUN apt-get update -y && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 USER node
 COPY --chown=node:node package*.json ./
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
