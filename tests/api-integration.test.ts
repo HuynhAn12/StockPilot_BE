@@ -38,6 +38,7 @@ describe('API Integration & Cross-Store Security', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (prisma.$queryRaw as jest.Mock).mockResolvedValue([{ 1: 1 }]);
     (prisma.user.findUnique as jest.Mock).mockImplementation(({ where }) => {
       if (where.id === 1) {
         return Promise.resolve({
@@ -77,6 +78,23 @@ describe('API Integration & Cross-Store Security', () => {
     const res = await request(app).get('/api/v1/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('OK');
+    expect(res.headers['x-request-id']).toBeDefined();
+  });
+
+  it('GET /api/v1/health/live returns liveness without database dependency', async () => {
+    const res = await request(app).get('/api/v1/health/live');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ALIVE');
+  });
+
+  it('GET /api/v1/health/ready returns 503 when database probe fails', async () => {
+    (prisma.$queryRaw as jest.Mock).mockRejectedValueOnce(new Error('database unavailable'));
+
+    const res = await request(app).get('/api/v1/health/ready');
+
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('UNREADY');
+    expect(res.body.database).toBe('DISCONNECTED');
     expect(res.headers['x-request-id']).toBeDefined();
   });
 

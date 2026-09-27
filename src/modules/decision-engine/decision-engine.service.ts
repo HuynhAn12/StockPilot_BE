@@ -8,6 +8,7 @@ import { RiskEvaluator, SafetyStockResult } from './risk-evaluator';
 import { PricingEvaluator, PricingEvaluationResult } from './pricing-evaluator';
 import { AlertService } from '../alerts/alert.service';
 import { PricingService } from '../pricing/pricing.service';
+import { logger } from '../../common/logger';
 import {
   addBusinessDays,
   businessDateKeyToDate,
@@ -365,7 +366,11 @@ export class DecisionEngineService {
         const analyzed = await this.analyzeSku(storeId, item.id, { persist: false });
         analyses.push(analyzed);
       } catch (err) {
-        console.error(`Failed to analyze SKU ${item.id}:`, err);
+        logger.warn('decision_engine_sku_analysis_failed', {
+          storeId,
+          stockItemId: item.id,
+          error: err,
+        });
       }
     }
 

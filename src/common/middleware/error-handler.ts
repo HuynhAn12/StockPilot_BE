@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../errors/app-error';
 import { env } from '../../config/env';
+import { logger } from '../logger';
 
 export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction) {
   const requestId = (req as any).requestId || req.headers['x-request-id'] || 'unknown';
@@ -40,10 +41,10 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   }
 
   // Log unexpected errors
-  console.error('[UNHANDLED_ERROR]', {
+  logger.error('unhandled_request_error', {
     requestId,
     message: err.message,
-    stack: err.stack,
+    error: err,
   });
 
   return res.status(500).json({

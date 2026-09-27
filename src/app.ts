@@ -7,6 +7,8 @@ import { prisma } from './config/db';
 import { requestIdMiddleware } from './common/middleware/request-id';
 import { sensitiveFieldsMiddleware } from './common/middleware/sensitive-fields';
 import { errorHandler } from './common/middleware/error-handler';
+import { requestLoggerMiddleware } from './common/middleware/request-logger';
+import { logger } from './common/logger';
 
 // Routers
 import { authRouter } from './modules/auth/auth.routes';
@@ -28,13 +30,17 @@ import { assistantRouter } from './modules/assistant/assistant.routes';
 export function createApp(): Express {
   const app = express();
 
+  app.set('trust proxy', env.TRUST_PROXY);
+
   // Security Headers
   app.use(helmet());
+
+  const corsOrigins = env.CORS_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean);
 
   // CORS Policy
   app.use(
     cors({
-      origin: env.NODE_ENV === 'production' ? env.CORS_ORIGIN : true,
+      origin: env.NODE_ENV === 'production' ? corsOrigins : true,
       credentials: true,
     })
   );
@@ -43,27 +49,44 @@ export function createApp(): Express {
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-  // Request ID & Sensitive Data Masking
+  // Request ID, request telemetry, and sensitive data masking
   app.use(requestIdMiddleware);
+  app.use(requestLoggerMiddleware);
   app.use(sensitiveFieldsMiddleware);
 
   // Rate Limiting (Skip in test environment)
   if (env.NODE_ENV !== 'test') {
     const generalLimiter = rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 300,
+      windowMs: env.GENERAL_RATE_LIMIT_WINDOW_MS,
+      max: env.GENERAL_RATE_LIMIT_MAX,
       standardHeaders: true,
       legacyHeaders: false,
-      message: { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Quá nhiều yêu cầu, vui lòng thử lại sau 15 phút' } },
+      handler: (req, res) =>
+        res.status(429).json({
+          success: false,
+          error: {
+            code: 'RATE_LIMIT_EXCEEDED',
+            message: 'Too many requests, please try again later.',
+            requestId: (req as any).requestId,
+          },
+        }),
     });
     app.use('/api/', generalLimiter);
 
     const authLimiter = rateLimit({
-      windowMs: 60 * 1000, // 1 minute
-      max: 10,
+      windowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+      max: env.AUTH_RATE_LIMIT_MAX,
       standardHeaders: true,
       legacyHeaders: false,
-      message: { success: false, error: { code: 'AUTH_RATE_LIMIT_EXCEEDED', message: 'Quá nhiều lần thử đăng nhập/làm mới token, vui lòng thử lại sau 1 phút' } },
+      handler: (req, res) =>
+        res.status(429).json({
+          success: false,
+          error: {
+            code: 'AUTH_RATE_LIMIT_EXCEEDED',
+            message: 'Too many authentication attempts, please try again later.',
+            requestId: (req as any).requestId,
+          },
+        }),
     });
     app.use('/api/v1/auth/login', authLimiter);
     app.use('/api/v1/auth/refresh', authLimiter);
@@ -87,7 +110,11 @@ export function createApp(): Express {
     try {
       await prisma.$queryRaw`SELECT 1`;
       return res.status(200).json({ status: 'READY', database: 'CONNECTED' });
-    } catch {
+    } catch (error) {
+      logger.warn('readiness_check_failed', {
+        requestId: (req as any).requestId,
+        error,
+      });
       return res.status(503).json({ status: 'UNREADY', database: 'DISCONNECTED' });
     }
   });

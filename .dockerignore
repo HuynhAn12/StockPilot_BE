@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+.git
+.github
+coverage
+dist
+node_modules
+backups
+*.log
+npm-debug.log*
+docs
+tests
+prisma/migrations/**/migration_lock.toml
