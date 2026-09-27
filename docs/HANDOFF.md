@@ -4,7 +4,7 @@
 
 - Branch: `Sang`
 - Version: `v1.0.0`
-- Evidence status: `LOCAL_AND_MYSQL_VERIFIED` for Database Design v1.1 core alignment after the commands listed below passed locally on 2026-09-25.
+- Evidence status: `LOCAL_AND_MYSQL_VERIFIED` for Database Design v1.1 core alignment. Documentation governance validation commands also passed locally on 2026-09-27.
 - Production observed: `NO`
 - Handoff label: `BACKEND_HANDOFF_CANDIDATE`, not production ready.
 
@@ -73,7 +73,7 @@ npm run test:coverage
 npm run handoff:check
 ```
 
-Latest local evidence for this handoff pass:
+Latest backend handoff evidence from the Database Design v1.1 alignment pass:
 
 - `npm ci`: passed, 0 vulnerabilities; dependency deprecation warnings only.
 - `npx prisma validate`: passed.
@@ -84,6 +84,13 @@ Latest local evidence for this handoff pass:
 - `npm run build`: passed.
 - `npm test`: 20 suites / 129 tests passed.
 - `npm run handoff:check`: passed; reported `HANDOFF_CHECK_OK` with expected local `.env` warning.
+
+Latest documentation governance validation on 2026-09-27:
+
+- `npm run typecheck`: passed.
+- `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`.
+- `npm run build`: passed.
+- `npm test`: 20 suites / 129 tests passed.
 
 Maintenance:
 
@@ -120,6 +127,16 @@ npm run maintenance:rebuild-summary-v10 -- --storeId=1
 ## Known Limitations
 
 See `docs/KNOWN_LIMITATIONS.md`.
+
+## AI / Contributor Context
+
+Future AI or human contributors should start with:
+
+1. `AGENTS.md`
+2. `docs/CURRENT_STATE.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/BUSINESS_RULES.md`
+5. Relevant API, database, security, testing, and limitation docs
 
 ## Ownership / Next Work
 

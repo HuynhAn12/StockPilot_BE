@@ -113,12 +113,31 @@ The maintenance script is not run during server startup.
 
 ## Documentation
 
-Start with [docs/HANDOFF.md](docs/HANDOFF.md), then use:
+Start with [AGENTS.md](AGENTS.md), then use:
 
+- [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/BUSINESS_RULES.md](docs/BUSINESS_RULES.md)
+- [docs/HANDOFF.md](docs/HANDOFF.md)
 - [docs/api.md](docs/api.md)
+- [docs/database.md](docs/database.md)
+- [docs/security.md](docs/security.md)
 - [docs/RUNBOOK.md](docs/RUNBOOK.md)
 - [docs/TESTING.md](docs/TESTING.md)
 - [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
+- [docs/ROADMAP.md](docs/ROADMAP.md)
+
+## AI / Contributor Onboarding
+
+Read in order:
+
+1. [AGENTS.md](AGENTS.md)
+2. [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md)
+3. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+4. [docs/BUSINESS_RULES.md](docs/BUSINESS_RULES.md)
+5. Relevant domain docs for the change, especially API, database, security, testing, and known limitations.
+
+After reading docs, inspect the real source under `src/**`, `prisma/**`, and `tests/**` before coding.
 
 ## Troubleshooting
 

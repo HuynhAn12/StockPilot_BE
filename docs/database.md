@@ -1,90 +1,83 @@
-# Đặc tả Cơ sở Dữ liệu StockPilot (MySQL 8.4 / InnoDB)
+# StockPilot Database
 
-## Current Executable Schema Status
+## Source Of Truth
 
-- Current executable Prisma schema: 29 models aligned with Database Design v1.1.
-- Current migration count: 12.
-- Latest migration: `20260925213000_v12_core_architecture_alignment`.
-- The v1.1 alignment adds `stock_takes`, `stock_take_items`, `notifications`, `audit_logs`, `ai_interactions`, and `system_settings`.
-- Alert taxonomy is now `LOW_STOCK`, `STOCKOUT`, `OVERSTOCK`, `SLOW_MOVING`, `DEAD_STOCK`, and `UNUSUAL_DEMAND`.
-- This phase provides database/model foundations only. Full StockTake workflow, realtime notification delivery, full audit coverage, SystemSetting admin API, and AI conversation history UI/API are not implemented.
+- Target database: Database Design v1.1
+- Executable schema: `prisma/schema.prisma`
+- Migration history: `prisma/migrations/`
+- Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.1_Complete_Design.sql`
 
-Hệ thống sử dụng cơ chế lưu trữ **Multi-tenant theo mô hình Shared Database / Shared Schema**, trong đó mọi bảng dữ liệu liên quan tới nghiệp vụ đều có trường khóa ngoại `store_id` để phân lập dữ liệu.
+The consolidated SQL is a reference artifact for design comparison. It does not replace Prisma migration history.
 
----
+## Current Schema Alignment
 
-## 1. Sơ đồ Thực thể - Quan hệ (ERD Overview)
+- Target physical table count: 29
+- Executable Prisma model count: 29
+- Current migration count: 12
+- Latest migration: `20260925213000_v12_core_architecture_alignment`
+- Current status: executable Prisma schema is aligned with Database Design v1.1 at the database/model foundation level
 
-```
-[Store] 1 ──── * [User]
-[Store] 1 ──── * [Warehouse]
-[Store] 1 ──── * [Category]
-[Store] 1 ──── * [Product] 1 ──── * [StockItem]
-[Warehouse] 1 ──── * [InventoryBalance] * ──── 1 [StockItem]
-[Warehouse] 1 ──── * [StockMovement] * ──── 1 [StockItem]
-[Store] 1 ──── * [Order] 1 ──── * [OrderItem] * ──── 1 [StockItem]
-[Order] 1 ──── * [ReturnOrder] 1 ──── * [ReturnItem] * ──── 1 [OrderItem]
-```
+The v1.1 foundation models exist:
 
----
+- `StockTake`
+- `StockTakeItem`
+- `Notification`
+- `AuditLog`
+- `AiInteraction`
+- `SystemSetting`
 
-## 2. Danh mục Bảng và Ràng buộc Chi tiết
+These are database foundations only unless an API/workflow is documented in `docs/api.md` and implemented in `src/modules`.
 
-### 2.1. Bảng `stores`
-- **Mục đích:** Lưu trữ thông tin từng cửa hàng độc lập.
-- **Khóa chính:** `id` (INT AUTO_INCREMENT)
-- **Ràng buộc duy nhất:** `code` (VARCHAR(50) UNIQUE)
-- **Các trường:** `name`, `code`, `phone`, `address`, `isActive`, `createdAt`, `updatedAt`.
+## Migration Policy
 
-### 2.2. Bảng `users`
-- **Mục đích:** Tài khoản người dùng (Shop Owner, Warehouse Staff, Admin).
-- **Khóa chính:** `id` (INT AUTO_INCREMENT)
-- **Khóa ngoại:** `store_id` -> `stores(id)` (ON DELETE SET NULL)
-- **Ràng buộc duy nhất:** `email` (VARCHAR(255) UNIQUE)
-- **Enum Role:** `SHOP_OWNER`, `WAREHOUSE_STAFF`, `ADMIN`
+- Historical migrations are immutable.
+- Do not edit reviewed/applied migration SQL.
+- Every database schema change must create a new migration after the latest migration.
+- `prisma db push` is not the deployment workflow.
+- Clean deployment should work with `npx prisma migrate deploy`.
 
-### 2.3. Bảng `warehouses`
-- **Mục đích:** Kho lưu trữ vật lý của cửa hàng (MVP: mỗi store 1 warehouse mặc định).
-- **Khóa ngoại:** `store_id` -> `stores(id)` (ON DELETE CASCADE)
-- **Chỉ mục:** `INDEX(store_id)`
+## Money
 
-### 2.4. Bảng `categories`
-- **Khóa ngoại:** `store_id` -> `stores(id)` (ON DELETE CASCADE)
-- **Ràng buộc duy nhất:** `UNIQUE(store_id, code)`
-- **Chỉ mục:** `INDEX(store_id)`
+- Money columns use `DECIMAL(15,2)`.
+- Do not use float/double for money.
+- Sale and refund calculations must use persisted snapshots where available.
 
-### 2.5. Bảng `products` & `stock_items`
-- **Bảng `products`:** Lưu thông tin chung của sản phẩm (`name`, `code`, `description`, `category_id`). Ràng buộc duy nhất `UNIQUE(store_id, code)`.
-- **Bảng `stock_items`:** Lưu đơn vị biến thể/SKU trực tiếp giữ tồn kho.
-  - `sku` (VARCHAR(100))
-  - `cost_price` (DECIMAL(15, 2)) - Giá vốn nhập
-  - `selling_price` (DECIMAL(15, 2)) - Giá niêm yết bán lẻ
-  - `min_stock_level`, `max_stock_level` (INT)
-  - Ràng buộc duy nhất: `UNIQUE(store_id, sku)`
+## Tenant / Store Isolation
 
-### 2.6. Bảng `inventory_balances`
-- **Mục đích:** Lưu trữ số dư tồn kho tức thời tại mỗi kho cho từng SKU để truy vấn nhanh.
-- **Ràng buộc duy nhất:** `UNIQUE(warehouse_id, stock_item_id)`
-- **Ràng buộc dữ liệu:** `quantity >= 0` (được bảo vệ bằng conditional query và database transaction).
+StockPilot uses a shared database and shared schema. Store-owned tables include `storeId` and application code must enforce same-store ownership before reads or writes.
 
-### 2.7. Bảng `stock_movements`
-- **Mục đích:** Sổ nhật ký biến động kho bất biến (Immutable Audit Log).
-- **Enum MovementType:** `INFLOW`, `OUTFLOW`, `AUDIT_ADJUSTMENT`, `ORDER_FULFILL`, `ORDER_CANCEL_RESTOCK`, `RETURN_RESTOCK`.
-- **Các trường kiểm toán:** `delta` (+ hoặc -), `before_quantity`, `after_quantity`, `reference_type`, `reference_id`, `idempotency_key` (UNIQUE), `note`, `created_by_id`, `created_at`.
+Do not rely on a bare `id` lookup for tenant-owned resources.
 
-### 2.8. Bảng `orders` & `order_items`
-- **Bảng `orders`:**
-  - `status`: `DRAFT`, `CONFIRMED`, `FULFILLED`, `CANCELED`.
-  - `subtotal_amount`, `discount_amount`, `tax_amount`, `total_amount` (DECIMAL(15, 2)).
-  - Ràng buộc duy nhất: `UNIQUE(store_id, order_number)`
-- **Bảng `order_items`:**
-  - Lưu snapshot: `sku_snapshot`, `name_snapshot`, `unit_price_snapshot`, `cost_price_snapshot`, `quantity`, `subtotal`.
+## Key Invariants
 
-### 2.9. Bảng `return_orders` & `return_items`
-- **Bảng `return_orders`:**
-  - `order_id`: Tham chiếu đơn gốc.
-  - `total_refund_amount`: Tổng tiền hoàn được ghi nhận.
-  - Ràng buộc duy nhất: `UNIQUE(store_id, return_number)`
-- **Bảng `return_items`:**
-  - `is_restockable` (BOOLEAN): Xác định hàng có được nhập lại kho hay không (hàng lỗi/hỏng = false).
-  - `restock_warehouse_id`: Kho nhập lại nếu `is_restockable = true`.
+- `inventory_balances.quantity >= 0`
+- `inventory_balances.reservedQuantity >= 0`
+- `inventory_balances.reservedQuantity <= inventory_balances.quantity`
+- `stock_take_items.expectedQuantity >= 0`
+- `stock_take_items.countedQuantity >= 0`
+- `stock_take_items.varianceQuantity = countedQuantity - expectedQuantity`
+- Inventory mutations must create `stock_movements`
+- Return quantities and refund amounts are capped by persisted order item values
+- Alert taxonomy is `LOW_STOCK`, `STOCKOUT`, `OVERSTOCK`, `SLOW_MOVING`, `DEAD_STOCK`, `UNUSUAL_DEMAND`
+
+## Core Tables
+
+Primary implemented domains:
+
+- Access: `stores`, `users`, `auth_sessions`
+- Catalog: `categories`, `products`, `stock_items`
+- Inventory: `warehouses`, `inventory_balances`, `stock_movements`
+- Orders and returns: `orders`, `order_items`, `return_orders`, `return_items`
+- Import/idempotency/history: `import_jobs`, `import_job_items`, `idempotency_requests`, `historical_sales`, `daily_sales_summaries`
+- Decision support: `engine_configs`, `alerts`, `pricing_recommendations`, `price_histories`, `decision_snapshots`
+- v1.1 foundations: `stock_takes`, `stock_take_items`, `notifications`, `audit_logs`, `ai_interactions`, `system_settings`
+
+## Deferred Database-Backed Features
+
+The following tables exist but full application workflows are deferred:
+
+- StockTake workflow
+- Notification delivery and notification center
+- Full audit coverage
+- SystemSetting admin API
+- AI conversation history UI/API

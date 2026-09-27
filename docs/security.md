@@ -1,40 +1,93 @@
-# Hướng Dẫn & Tiêu Chuẩn Bảo Mật StockPilot Backend (Security Policy)
+# Security
 
----
+## Authentication
 
-## 1. Xác Thực & Quản Lý Phiên (Session Management & Tokens)
+- Access tokens are JWTs.
+- JWT payload includes user identity, role, and store context.
+- Authenticated requests check that the user is active.
+- Store-scoped requests also require a valid active store context.
 
-1. **Access Token:**
-   - Định dạng: JSON Web Token (JWT) có thời hạn ngắn (15 phút - 1 ngày).
-   - Nội dung payload: `{ userId, email, role, storeId }`.
-   - Thu hồi/Khóa tức thời: `authMiddleware` truy vấn CSDL để xác thực trạng thái `user.isActive = true` và `store.isActive = true` cho mọi request được xác thực.
-2. **Refresh Token & AuthSession:**
-   - Refresh token được lưu trữ dưới dạng mã băm **SHA-256** (`refreshTokenHash`) trong bảng `auth_sessions`.
-   - **Xoay vòng token (Token Rotation):** Mỗi khi gọi `POST /api/v1/auth/refresh`, phiên cũ sẽ bị đánh dấu thu hồi (`revokedAt = new Date()`) và cấp một phiên mới kèm refresh token mới.
-   - **Phát hiện tái sử dụng (Replay Attack Detection):** Nếu một refresh token đã bị thu hồi được gửi lại, hệ thống lập tức thu hồi toàn bộ các phiên hoạt động còn lại của người dùng đó.
-   - **Đăng xuất (Logout):** Endpoint `POST /api/v1/auth/logout` đánh dấu `revokedAt` cho phiên tương ứng.
+## Refresh Tokens
 
----
+- Refresh tokens are not stored in plaintext.
+- Persisted sessions store `refreshTokenHash`.
+- Refresh uses token rotation.
+- Reuse of a revoked refresh token is treated as a replay signal and revokes remaining active sessions for that user.
 
-## 2. Phân Quyền & Cô Lập Dữ Liệu Cửa Hàng (Store Scope Isolation)
+## Passwords
 
-1. **Store Scoping:**
-   - Mọi truy vấn đọc/ghi tài nguyên của cửa hàng đều bắt buộc ràng buộc điều kiện `where: { storeId }`.
-2. **Chặn Giả Quyền Admin:**
-   - Tài khoản `ADMIN` bị chặn hoàn toàn trên các API cửa hàng (`requireStoreScope` trả về `403 FORBIDDEN` nếu cố ý truyền `x-store-id` hoặc `?storeId=`). Admin phải sử dụng các API quản trị hệ thống riêng biệt (`/api/v1/admin/*`).
-3. **Ẩn Dữ Liệu Nhạy Cảm (Data Masking - OWASP API3):**
-   - Middleware `sensitiveFieldsMiddleware` thực hiện duyệt đệ quy sâu (Deep Traversal) trên toàn bộ dữ liệu trả về và loại bỏ `costPrice`, `costPriceSnapshot`, `profitMargin` đối với vai trò `WAREHOUSE_STAFF`.
+- Passwords are hashed before persistence.
+- Passwords must never be logged or returned.
+- Documentation and examples must not include real passwords.
 
----
+## RBAC
 
-## 3. Bảo Vệ Tầng Mạng & Ứng Dụng (Network & Middleware Protections)
+Implemented roles:
 
-1. **HTTP Security Headers (`helmet`):**
-   - Tự động thiết lập các HTTP headers bảo mật (X-DNS-Prefetch-Control, X-Frame-Options, Strict-Transport-Security, X-Download-Options, X-Content-Type-Options, X-XSS-Protection).
-2. **Giới Hạn Tần Suất Yêu Cầu (`express-rate-limit`):**
-   - **Auth Endpoints:** Giới hạn tối đa 10 requests / phút đối với `POST /api/v1/auth/login` và `POST /api/v1/auth/refresh` để chống brute-force mật khẩu.
-   - **General API:** Giới hạn tối đa 300 requests / 15 phút cho toàn bộ các API `/api/`.
-3. **Giới Hạn Kích Thước Body:**
-   - Cắt giảm payload JSON parser xuống tối đa `1mb` để ngăn chặn tấn công từ chối dịch vụ (DoS).
-4. **CORS Policy:**
-   - Môi trường `production` bắt buộc khai báo `CORS_ORIGIN` cụ thể (không chấp nhận wildcard `*`).
+- `SHOP_OWNER`
+- `WAREHOUSE_STAFF`
+- `ADMIN`
+
+Store-scoped APIs are for store users. `ADMIN` must not operate store data through store-scoped APIs unless a dedicated admin API is implemented and documented.
+
+## Store Isolation
+
+Every tenant-owned resource must be authorized by `storeId`.
+
+Security rule: do not fetch or mutate a store-owned entity by primary key alone.
+
+## Request Validation
+
+HTTP inputs use Zod schemas in module schema files. Keep validation close to the route/controller boundary and reject invalid inputs before service writes.
+
+## Rate Limiting
+
+`express-rate-limit` is enabled outside the test environment:
+
+- General `/api/` requests: 300 requests per 15 minutes
+- Auth login and refresh: 10 requests per minute
+
+## CORS
+
+Production requires an explicit `CORS_ORIGIN`. Wildcard production CORS is not acceptable.
+
+## HTTP Hardening
+
+The app uses `helmet` for common security headers.
+JSON and URL-encoded body size is limited to `1mb`.
+Request IDs are assigned for traceability.
+
+## Sensitive Fields
+
+The sensitive fields middleware masks cost and margin fields for `WAREHOUSE_STAFF` responses where applicable.
+
+## Secrets
+
+Secrets must never be committed.
+
+Do not log:
+
+- passwords
+- JWTs
+- refresh tokens
+- database credentials
+- API keys
+- unnecessary customer PII
+
+## AI Data Minimization
+
+Assistant context must contain only authorized data needed to explain deterministic output.
+Do not send secrets, credentials, raw tokens, or unnecessary customer PII to external AI providers.
+
+AI is explanation-only and must not mutate business state.
+
+## Audit Logging Principles
+
+`AuditLog` is an append-only foundation table. Full audit coverage is not implemented yet.
+
+When adding audit events:
+
+- avoid secrets and tokens
+- avoid unnecessary PII
+- prefer compact before/after metadata
+- preserve store/user context when available
