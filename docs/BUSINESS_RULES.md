@@ -24,6 +24,36 @@ Inventory balance changes and stock movements must be consistent in the same tra
 
 Product CRUD must not directly edit stock quantity.
 
+## StockTake
+
+### STK-001
+
+StockTake lifecycle is `DRAFT -> IN_PROGRESS -> COMPLETED`, with `DRAFT -> CANCELED` and `IN_PROGRESS -> CANCELED`. `COMPLETED` and `CANCELED` are terminal.
+
+### STK-002
+
+Starting a StockTake snapshots current warehouse balances into StockTakeItem rows. Initial counted quantity equals expected quantity.
+
+### STK-003
+
+Counting does not mutate inventory. It only updates counted quantity and the server-derived variance.
+
+### STK-004
+
+StockTake variance is always `countedQuantity - expectedQuantity` and must not be accepted from the client.
+
+### STK-005
+
+Completing a StockTake is atomic: inventory balances, stock movements, StockTakeItem adjustment links, and StockTake status must commit or roll back together.
+
+### STK-006
+
+Every non-zero StockTake inventory adjustment must create an `AUDIT_ADJUSTMENT` StockMovement linked by `StockTakeItem.adjustmentMovementId`.
+
+### STK-007
+
+StockTake completion must preserve inventory invariants, including `quantity >= 0` and `reservedQuantity <= quantity`.
+
 ## Store Isolation
 
 ### TEN-001
@@ -160,20 +190,16 @@ Do not send passwords, JWTs, refresh tokens, database credentials, or unnecessar
 
 ### DEF-001
 
-StockTake tables exist, but the full StockTake workflow is deferred.
+Notification tables exist, but realtime delivery and notification center behavior are deferred.
 
 ### DEF-002
 
-Notification tables exist, but realtime delivery and notification center behavior are deferred.
+AuditLog tables exist, but full mutation coverage is deferred.
 
 ### DEF-003
 
-AuditLog tables exist, but full mutation coverage is deferred.
-
-### DEF-004
-
 SystemSetting tables exist, but the admin API is deferred.
 
-### DEF-005
+### DEF-004
 
 AiInteraction tables exist, but conversation management UI/API is deferred.

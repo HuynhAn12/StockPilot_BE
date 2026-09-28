@@ -26,6 +26,7 @@ import { decisionEngineRouter } from './modules/decision-engine/decision-engine.
 import { alertRouter } from './modules/alerts/alert.routes';
 import { pricingRouter } from './modules/pricing/pricing.routes';
 import { assistantRouter } from './modules/assistant/assistant.routes';
+import { stockTakeRouter } from './modules/stock-takes/stock-take.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -137,6 +138,7 @@ export function createApp(): Express {
   app.use('/api/v1/recommendations', pricingRouter);
   app.use('/api/v1/pricing', pricingRouter);
   app.use('/api/v1/assistant', assistantRouter);
+  app.use('/api/v1/stock-takes', stockTakeRouter);
 
   // Centralized Error Handling
   app.use(errorHandler);

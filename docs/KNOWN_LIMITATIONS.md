@@ -25,7 +25,6 @@ The Decision Engine overview loads active SKUs for a store and analyzes them in 
 
 The executable schema includes the v1.1 foundation tables, but the following workflows are intentionally not complete feature implementations:
 
-- Full StockTake workflow is not implemented.
 - Notification realtime delivery and notification center behavior are not implemented.
 - Full audit coverage across all business mutations is not implemented.
 - SystemSetting admin API is not implemented.

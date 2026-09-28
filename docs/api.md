@@ -69,6 +69,13 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | POST | `/inventory/inflow` | Bearer | Store user | Yes | `{ warehouseId?, items: [{ stockItemId, quantity }], referenceId?, note? }` | ledger mutation result | Yes |
 | POST | `/inventory/outflow` | Bearer | Store user | Yes | `{ warehouseId?, items: [{ stockItemId, quantity }], referenceId?, note? }` | ledger mutation result | Yes |
 | POST | `/inventory/audit` | Bearer | Store user | Yes | `{ warehouseId?, items: [{ stockItemId, countedQuantity }], referenceId?, note? }` | audit adjustment result | Yes |
+| POST | `/stock-takes` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ warehouseId, note? }` | created DRAFT stock take | Yes |
+| GET | `/stock-takes` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ status?, warehouseId?, page?, limit? }` | stock take page | No |
+| GET | `/stock-takes/:id` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | stock take detail with items | No |
+| POST | `/stock-takes/:id/start` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | IN_PROGRESS stock take with snapshotted items | Yes |
+| PUT | `/stock-takes/:id/counts` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ items: [{ stockItemId, countedQuantity, note? }] }` | updated stock take detail | Yes |
+| POST | `/stock-takes/:id/complete` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | COMPLETED stock take with adjustment movement links | Yes |
+| POST | `/stock-takes/:id/cancel` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | CANCELED stock take | Yes |
 | GET | `/orders` | Bearer | Store user | Yes | query filters/pagination if supported | order list | No |
 | GET | `/orders/:id` | Bearer | Store user | Yes | path `id` | order detail | No |
 | POST | `/orders` | Bearer | Store user | Yes | `{ customerName?, customerPhone?, customerAddress?, discountAmount?, taxAmount?, note?, items[] }` | created order | Yes |
@@ -121,3 +128,14 @@ Supported mutation endpoints accept `Idempotency-Key`.
 - Do not break existing request/response contracts without an explicit API task.
 - Keep compatibility aliases documented while they remain mounted in `src/app.ts`.
 - Update this file whenever an endpoint, request shape, response shape, auth rule, role rule, or idempotency rule changes.
+
+## StockTake Workflow
+
+StockTake lifecycle is `DRAFT -> IN_PROGRESS -> COMPLETED`, with `DRAFT -> CANCELED` and `IN_PROGRESS -> CANCELED`. `COMPLETED` and `CANCELED` are terminal.
+
+- `POST /stock-takes` creates only the StockTake header. It does not snapshot or mutate inventory.
+- `POST /stock-takes/:id/start` snapshots current `InventoryBalance` rows for the selected warehouse into `StockTakeItem` rows. Initial `countedQuantity` equals `expectedQuantity`, so initial `varianceQuantity` is `0`.
+- `PUT /stock-takes/:id/counts` updates counted quantities only while the StockTake is `IN_PROGRESS`. The server derives `varianceQuantity = countedQuantity - expectedQuantity`.
+- `POST /stock-takes/:id/complete` atomically applies final physical counts to inventory. Non-zero balance adjustments create `AUDIT_ADJUSTMENT` `StockMovement` rows with `referenceType = STOCK_TAKE`, and each movement is linked from `StockTakeItem.adjustmentMovementId`.
+- Completion rejects counts that would violate inventory invariants such as `reservedQuantity <= quantity`.
+- `POST /stock-takes/:id/cancel` never mutates inventory and never creates stock movements.

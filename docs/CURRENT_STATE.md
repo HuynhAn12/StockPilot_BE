@@ -61,6 +61,7 @@ The executable schema includes the v1.1 foundation models:
 - Import / export
 - Historical sales import and listing
 - Daily sales summary services
+- StockTake workflow
 - Decision Engine
 - Alerts
 - Pricing recommendations
@@ -70,7 +71,6 @@ The executable schema includes the v1.1 foundation models:
 
 The schema foundations exist, but these workflows are not implemented as complete production features:
 
-- Full StockTake workflow
 - Realtime notification delivery and notification center behavior
 - Full audit coverage across all business mutations
 - SystemSetting admin API
@@ -82,10 +82,12 @@ The schema foundations exist, but these workflows are not implemented as complet
 
 Latest verified evidence:
 
+- `npm run prisma:generate`: passed
+- `npx prisma validate`: passed
 - `npm run typecheck`: passed
-- `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`
+- `npm run lint`: passed
 - `npm run build`: passed
-- `npm test`: 20 suites / 135 tests passed
+- `npm test`: 22 suites / 150 tests passed, including StockTake unit/API coverage and real MySQL StockTake integration
 - GitHub Actions: passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
 - MySQL 8.4 migration deploy: passed in CI
 

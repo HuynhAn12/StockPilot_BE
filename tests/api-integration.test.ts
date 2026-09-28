@@ -123,6 +123,51 @@ describe('API Integration & Cross-Store Security', () => {
     expect(res.body.error.code).toBe('FORBIDDEN');
   });
 
+  it('Admin cannot access StockTake store workflow endpoints', async () => {
+    const res = await request(app)
+      .get('/api/v1/stock-takes')
+      .set('Authorization', `Bearer ${tokenAdmin}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('POST /api/v1/stock-takes creates a DRAFT stock take for an authenticated store operator', async () => {
+    (prisma as any).warehouse = {
+      findFirst: jest.fn().mockResolvedValue({ id: 1, storeId: 1, isActive: true }),
+    };
+    (prisma as any).stockTake = {
+      create: jest.fn().mockResolvedValue({
+        id: 1,
+        storeId: 1,
+        warehouseId: 1,
+        status: 'DRAFT',
+        note: 'monthly count',
+        items: [],
+      }),
+    };
+    (prisma as any).idempotencyRequest = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'idem-stocktake-1' }),
+      update: jest.fn().mockResolvedValue({ id: 'idem-stocktake-1' }),
+    };
+
+    const res = await request(app)
+      .post('/api/v1/stock-takes')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .set('Idempotency-Key', 'stocktake-create-1')
+      .send({ warehouseId: 1, note: 'monthly count' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('DRAFT');
+    expect((prisma as any).stockTake.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ storeId: 1, warehouseId: 1, createdById: 1 }),
+      })
+    );
+  });
+
   it('access token for a locked user is rejected', async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValueOnce({
       id: 1,

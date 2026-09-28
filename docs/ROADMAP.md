@@ -47,9 +47,12 @@ Notes:
 
 Status: `DEFERRED`
 
+Evidence:
+
+- StockTake backend workflow is implemented with store-scoped REST endpoints, lifecycle transitions, inventory adjustment completion, and focused unit/API/MySQL tests.
+
 Planned work:
 
-- Full StockTake workflow
 - Notification delivery and notification center
 - Full audit coverage across business mutations
 - SystemSetting admin API

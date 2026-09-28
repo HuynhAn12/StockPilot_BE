@@ -76,7 +76,6 @@ Primary implemented domains:
 
 The following tables exist but full application workflows are deferred:
 
-- StockTake workflow
 - Notification delivery and notification center
 - Full audit coverage
 - SystemSetting admin API

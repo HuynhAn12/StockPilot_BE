@@ -20,9 +20,9 @@
 
 ## Architecture
 
-The backend is a modular monolith. Modules under `src/modules` own auth, users, categories, products, inventory, orders, returns, analytics, import/export, historical sales, daily summary accounting, alerts, pricing, Decision Engine, and AI explanations.
+The backend is a modular monolith. Modules under `src/modules` own auth, users, categories, products, inventory, orders, returns, analytics, import/export, historical sales, daily summary accounting, StockTake, alerts, pricing, Decision Engine, and AI explanations.
 
-The executable Prisma schema is aligned with Database Design v1.1 at the core foundation level: 29 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, and SystemSetting foundations. Advanced workflows for those new foundations are intentionally deferred.
+The executable Prisma schema is aligned with Database Design v1.1 at the core foundation level: 29 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, and SystemSetting foundations. StockTake has a backend workflow implementation; Notification, full AuditLog coverage, AiInteraction conversation management, and SystemSetting admin workflows remain deferred.
 
 Store tenancy is enforced through authenticated store scope. Business queries should include `storeId` unless the model is explicitly global.
 
@@ -91,6 +91,16 @@ Latest documentation governance validation on 2026-09-27:
 - `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`.
 - `npm run build`: passed.
 - `npm test`: 20 suites / 135 tests passed.
+
+Latest local StockTake workflow validation on 2026-09-28:
+
+- `npm run prisma:generate`: passed.
+- `npx prisma validate`: passed.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed.
+- `npm run build`: passed.
+- `npm test`: 22 suites / 150 tests passed.
+- Real MySQL StockTake workflow integration: 4 tests passed with `TEST_DATABASE_URL` targeting a safe test database.
 
 Latest CI evidence:
 
