@@ -158,6 +158,20 @@ Pricing recommendation approval is serialized and guards stale current prices.
 
 Warehouse staff must not receive sensitive cost or margin fields.
 
+## Notifications
+
+### NOT-001
+
+Notification Center inbox queries are per-user and store-scoped: `storeId` and `userId` must match the authenticated user.
+
+### NOT-002
+
+Minimal Notification Center APIs do not expose `userId = null` notification rows because broadcast read-state is deferred.
+
+### NOT-003
+
+Marking notifications as read is idempotent and only changes the authenticated user's own notification rows.
+
 ## Decision Engine
 
 ### DEC-001
@@ -190,7 +204,7 @@ Do not send passwords, JWTs, refresh tokens, database credentials, or unnecessar
 
 ### DEF-001
 
-Notification tables exist, but realtime delivery and notification center behavior are deferred.
+Notification realtime delivery and broadcast/read-receipt behavior are deferred.
 
 ### DEF-002
 

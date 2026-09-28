@@ -76,6 +76,9 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | PUT | `/stock-takes/:id/counts` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ items: [{ stockItemId, countedQuantity, note? }] }` | updated stock take detail | Yes |
 | POST | `/stock-takes/:id/complete` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | COMPLETED stock take with adjustment movement links | Yes |
 | POST | `/stock-takes/:id/cancel` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | CANCELED stock take | Yes |
+| GET | `/notifications` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ isRead?, page?, limit? }` | current user's notification page | No |
+| POST | `/notifications/:id/read` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | notification marked read | No |
+| POST | `/notifications/read-all` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | none | current user's unread count marked read | No |
 | GET | `/orders` | Bearer | Store user | Yes | query filters/pagination if supported | order list | No |
 | GET | `/orders/:id` | Bearer | Store user | Yes | path `id` | order detail | No |
 | POST | `/orders` | Bearer | Store user | Yes | `{ customerName?, customerPhone?, customerAddress?, discountAmount?, taxAmount?, note?, items[] }` | created order | Yes |
@@ -139,3 +142,14 @@ StockTake lifecycle is `DRAFT -> IN_PROGRESS -> COMPLETED`, with `DRAFT -> CANCE
 - `POST /stock-takes/:id/complete` atomically applies final physical counts to inventory. Non-zero balance adjustments create `AUDIT_ADJUSTMENT` `StockMovement` rows with `referenceType = STOCK_TAKE`, and each movement is linked from `StockTakeItem.adjustmentMovementId`.
 - Completion rejects counts that would violate inventory invariants such as `reservedQuantity <= quantity`.
 - `POST /stock-takes/:id/cancel` never mutates inventory and never creates stock movements.
+
+## Notification Center
+
+The minimal Notification Center is a per-user inbox over existing `Notification` rows.
+
+- `GET /notifications` returns only rows where `storeId` and `userId` match the authenticated user.
+- `isRead=true|false` filters by read state when supplied.
+- `POST /notifications/:id/read` marks one owned notification as read and sets `readAt`.
+- `POST /notifications/read-all` marks unread rows for the authenticated user as read.
+- `userId = null` notification rows are not exposed by the minimal inbox because broadcast read-state is deferred.
+- Realtime delivery, push/SSE/WebSocket, broadcast recipient expansion, and read-receipt tables are not part of this API.

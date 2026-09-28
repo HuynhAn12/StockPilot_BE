@@ -27,6 +27,7 @@ import { alertRouter } from './modules/alerts/alert.routes';
 import { pricingRouter } from './modules/pricing/pricing.routes';
 import { assistantRouter } from './modules/assistant/assistant.routes';
 import { stockTakeRouter } from './modules/stock-takes/stock-take.routes';
+import { notificationRouter } from './modules/notifications/notification.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -139,6 +140,7 @@ export function createApp(): Express {
   app.use('/api/v1/pricing', pricingRouter);
   app.use('/api/v1/assistant', assistantRouter);
   app.use('/api/v1/stock-takes', stockTakeRouter);
+  app.use('/api/v1/notifications', notificationRouter);
 
   // Centralized Error Handling
   app.use(errorHandler);

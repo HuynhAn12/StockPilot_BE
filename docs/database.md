@@ -76,7 +76,7 @@ Primary implemented domains:
 
 The following tables exist but full application workflows are deferred:
 
-- Notification delivery and notification center
+- Notification realtime delivery and broadcast/read-receipt behavior
 - Full audit coverage
 - SystemSetting admin API
 - AI conversation history UI/API

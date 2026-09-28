@@ -36,6 +36,7 @@ The current backend is one deployable Node.js process. There is no implemented m
 - `historical-sales`: historical sales preview/commit/listing
 - `daily-sales-summary`: summary rebuild and accounting helpers
 - `stock-takes`: physical count lifecycle and inventory adjustment completion
+- `notifications`: per-user notification inbox listing and read state
 - `decision-engine`: deterministic inventory/pricing analysis
 - `alerts`: alert listing and lifecycle actions
 - `pricing`: recommendation listing and decision actions

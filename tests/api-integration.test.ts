@@ -132,6 +132,91 @@ describe('API Integration & Cross-Store Security', () => {
     expect(res.body.error.code).toBe('FORBIDDEN');
   });
 
+  it('Admin cannot access Notification Center store workflow endpoints', async () => {
+    const res = await request(app)
+      .get('/api/v1/notifications')
+      .set('Authorization', `Bearer ${tokenAdmin}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('GET /api/v1/notifications without a token returns 401 UNAUTHENTICATED', async () => {
+    const res = await request(app).get('/api/v1/notifications');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('GET /api/v1/notifications rejects invalid read-state filters', async () => {
+    const res = await request(app)
+      .get('/api/v1/notifications?isRead=invalid')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('GET /api/v1/notifications lists current user notifications with read filtering', async () => {
+    (prisma as any).notification = {
+      findMany: jest.fn().mockResolvedValue([{ id: 1, storeId: 1, userId: 1, isRead: false }]),
+      count: jest.fn().mockResolvedValue(1),
+    };
+
+    const res = await request(app)
+      .get('/api/v1/notifications?isRead=false&page=1&limit=10')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toHaveLength(1);
+    expect((prisma as any).notification.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { storeId: 1, userId: 1, isRead: false },
+        take: 10,
+      })
+    );
+  });
+
+  it('POST /api/v1/notifications/:id/read marks only current user notification as read', async () => {
+    (prisma as any).notification = {
+      findFirst: jest.fn().mockResolvedValue({ id: 7, storeId: 1, userId: 1, isRead: false }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findFirstOrThrow: jest.fn().mockResolvedValue({ id: 7, storeId: 1, userId: 1, isRead: true }),
+    };
+
+    const res = await request(app)
+      .post('/api/v1/notifications/7/read')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isRead).toBe(true);
+    expect((prisma as any).notification.findFirst).toHaveBeenCalledWith({
+      where: { id: 7, storeId: 1, userId: 1 },
+    });
+    expect((prisma as any).notification.updateMany).toHaveBeenCalledWith({
+      where: { id: 7, storeId: 1, userId: 1, isRead: false },
+      data: { isRead: true, readAt: expect.any(Date) },
+    });
+  });
+
+  it('POST /api/v1/notifications/read-all marks current user unread notifications as read', async () => {
+    (prisma as any).notification = {
+      updateMany: jest.fn().mockResolvedValue({ count: 2 }),
+    };
+
+    const res = await request(app)
+      .post('/api/v1/notifications/read-all')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.updatedCount).toBe(2);
+    expect((prisma as any).notification.updateMany).toHaveBeenCalledWith({
+      where: { storeId: 1, userId: 1, isRead: false },
+      data: { isRead: true, readAt: expect.any(Date) },
+    });
+  });
+
   it('POST /api/v1/stock-takes creates a DRAFT stock take for an authenticated store operator', async () => {
     (prisma as any).warehouse = {
       findFirst: jest.fn().mockResolvedValue({ id: 1, storeId: 1, isActive: true }),

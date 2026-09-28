@@ -62,6 +62,7 @@ The executable schema includes the v1.1 foundation models:
 - Historical sales import and listing
 - Daily sales summary services
 - StockTake workflow
+- Minimal per-user Notification Center
 - Decision Engine
 - Alerts
 - Pricing recommendations
@@ -71,7 +72,7 @@ The executable schema includes the v1.1 foundation models:
 
 The schema foundations exist, but these workflows are not implemented as complete production features:
 
-- Realtime notification delivery and notification center behavior
+- Realtime notification delivery and broadcast/read-receipt notification behavior
 - Full audit coverage across all business mutations
 - SystemSetting admin API
 - AI conversation history UI/API
@@ -87,7 +88,7 @@ Latest verified evidence:
 - `npm run typecheck`: passed
 - `npm run lint`: passed
 - `npm run build`: passed
-- `npm test`: 22 suites / 150 tests passed, including StockTake unit/API coverage and real MySQL StockTake integration
+- `npm test`: 24 suites / 164 tests passed, including StockTake and Notification Center unit/API coverage plus real MySQL integration
 - GitHub Actions: passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
 - MySQL 8.4 migration deploy: passed in CI
 

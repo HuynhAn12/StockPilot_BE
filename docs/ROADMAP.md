@@ -50,10 +50,11 @@ Status: `DEFERRED`
 Evidence:
 
 - StockTake backend workflow is implemented with store-scoped REST endpoints, lifecycle transitions, inventory adjustment completion, and focused unit/API/MySQL tests.
+- Minimal per-user Notification Center backend is implemented with inbox listing and read-state APIs.
 
 Planned work:
 
-- Notification delivery and notification center
+- Notification realtime delivery and broadcast/read-receipt behavior
 - Full audit coverage across business mutations
 - SystemSetting admin API
 - AI conversation history API/UI
