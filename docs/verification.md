@@ -49,4 +49,12 @@ Latest local database evidence on 2026-09-29:
 
 Do not mark `CI_VERIFIED` until the workflow passes for the exact commit being handed off.
 
-Current Sprint 1 backend closeout changes have not yet been exact-SHA CI verified in this repository.
+Latest Sprint 1 backend closeout CI evidence:
+
+- Workflow: `StockPilot Backend CI`
+- Run: #27
+- Exact commit: `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e`
+- Status: completed
+- Conclusion: success
+
+Sprint 1 backend is `BACKEND_SPRINT_1_COMPLETE` at this verified implementation commit. This is not production deployment evidence.

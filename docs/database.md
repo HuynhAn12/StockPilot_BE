@@ -12,6 +12,7 @@ The consolidated SQL is a reference artifact for design comparison. It does not 
 ## Current Schema Alignment
 
 - Database Design v1.1 target physical table count: 29
+- Executable physical table count: 30
 - Executable Prisma model count: 30
 - Current migration count: 13
 - Latest migration: `20260929100000_v13_password_reset_tokens`

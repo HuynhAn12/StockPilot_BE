@@ -6,9 +6,10 @@ This document describes the repository as inspected from the working tree. It is
 
 - Active branch: `Sang`
 - Package version: `v1.0.0`
+- Sprint 1 Backend: `BACKEND_SPRINT_1_COMPLETE`
 - Handoff label: backend handoff candidate
 - Production evidence: none observed in this repository
-- CI evidence: GitHub Actions passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`; newer local changes require a fresh exact-SHA CI run before reusing `CI_VERIFIED`.
+- CI evidence: GitHub Actions `StockPilot Backend CI` run #27 passed for exact commit `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e`.
 
 ## Stack
 
@@ -96,7 +97,7 @@ Latest verified evidence:
 - `npm run test:coverage`: passed, 25 suites / 177 tests.
 - `npm run handoff:check`: passed with `HANDOFF_CHECK_OK` and the expected local `.env` warning.
 - `npm audit`: passed with 0 vulnerabilities.
-- GitHub Actions: passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
+- GitHub Actions: `StockPilot Backend CI` run #27 passed for commit `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e`.
 - MySQL migration deploy: passed locally against canonical app schema `stockpilot` and guarded local test schema `stockpilot_test` with 13 migrations applied.
 
 The test suite includes unit tests, API integration tests, real MySQL integration tests, and concurrency tests. MySQL tests require `TEST_DATABASE_URL` to point at a disposable test database.
@@ -104,5 +105,5 @@ The test suite includes unit tests, API integration tests, real MySQL integratio
 ## Current Constraints
 
 - Do not call the backend production ready from repository tests alone.
-- CI is verified for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84` only.
+- Sprint 1 backend is complete and CI verified, but production deployment has not been observed.
 - Do not describe v1.1 foundation tables as full feature implementations.

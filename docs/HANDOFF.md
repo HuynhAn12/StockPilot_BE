@@ -4,7 +4,8 @@
 
 - Branch: `Sang`
 - Version: `v1.0.0`
-- Evidence status: `CI_VERIFIED` for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`; current Sprint 1 closeout changes require fresh exact-SHA CI verification.
+- Sprint 1 Backend: `BACKEND_SPRINT_1_COMPLETE`
+- Evidence status: `CI_VERIFIED` for `StockPilot Backend CI` run #27 on exact commit `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e`.
 - Production observed: `NO`
 - Handoff label: `BACKEND_HANDOFF_CANDIDATE`, not production ready.
 
@@ -119,10 +120,10 @@ Latest local Sprint 1 backend closeout validation on 2026-09-29:
 
 Latest CI evidence:
 
-- Verified commit: `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
-- GitHub Actions: passed.
-- Database: 29 Prisma models, 12 migrations, MySQL 8.4 migration deploy passed for the verified commit. Current local closeout has 30 models and 13 migrations pending fresh exact-SHA CI.
-- Tests: 20 suites / 135 tests passed.
+- Current Sprint 1 verified commit: `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e`.
+- GitHub Actions: `StockPilot Backend CI` run #27 passed with conclusion `success`.
+- Database: 30 Prisma models, 13 migrations, MySQL 8.4 migration deploy passed in CI.
+- Tests: 25 suites / 177 tests passed locally before CI; CI test gate passed for the exact Sprint 1 closeout commit.
 - API compatibility: no breaking route/schema changes.
 - Production: not production-observed.
 
@@ -155,7 +156,7 @@ npm run maintenance:rebuild-summary-v10 -- --storeId=1
 - Idempotency: `UNIT_TESTED`, `MYSQL_INTEGRATION_TESTED`
 - Import: `UNIT_TESTED`, `MYSQL_INTEGRATION_TESTED`
 - Auth refresh rotation: `UNIT_TESTED`, `MYSQL_INTEGRATION_TESTED`
-- CI: `CI_VERIFIED` for `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
+- CI: `CI_VERIFIED` for `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e` by `StockPilot Backend CI` run #27.
 - Production: `PRODUCTION_OBSERVED` only with real production evidence.
 
 ## Known Limitations
