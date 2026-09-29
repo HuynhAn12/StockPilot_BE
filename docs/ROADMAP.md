@@ -14,7 +14,7 @@ Evidence:
 Notes:
 
 - The repository is a backend handoff candidate, not production evidence.
-- Sprint 1 closeout added `PasswordResetToken` storage after Database Design v1.1, so the executable schema now has 30 models and 13 migrations.
+- Sprint 1 closeout added `PasswordResetToken` storage, and the executable schema now matches Database Design v1.2 with 30 models and 13 migrations.
 
 ## Phase 2 - Decision Support
 
@@ -29,14 +29,14 @@ Notes:
 
 - Decision Engine overview scalability remains a limitation for very large catalogs.
 
-## Phase 3 - Database Design v1.1 Core Alignment
+## Phase 3 - Database Design v1.2 Core Alignment
 
 Status: `DONE`
 
 Evidence:
 
-- Database Design v1.1 alignment was completed at 29 models and 12 migrations.
-- Sprint 1 password recovery now brings `prisma/schema.prisma` to 30 models and `prisma/migrations/` to 13 migrations.
+- Database Design v1.2 alignment is complete at 30 models and 13 migrations.
+- Password recovery storage is part of the current v1.2 schema through `password_reset_tokens`.
 - Latest migration: `20260929100000_v13_password_reset_tokens`.
 - Foundation tables exist for StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, and SystemSetting.
 

@@ -40,7 +40,7 @@ Run database gates against MySQL 8.4 with safe non-production database URLs.
 
 Latest local database evidence on 2026-09-29:
 
-- `npm run prisma:migrate:deploy`: passed against canonical local app schema `stockpilot` after baselining existing v1.1 migrations.
+- `npm run prisma:migrate:deploy`: passed against canonical local app schema `stockpilot` after baselining existing migrations.
 - `npm run prisma:migrate:deploy`: passed with `DATABASE_URL` overridden to guarded local `stockpilot_test`.
 
 ## CI Gates

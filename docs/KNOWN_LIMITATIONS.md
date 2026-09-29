@@ -21,9 +21,9 @@ Affected exports:
 
 The Decision Engine overview loads active SKUs for a store and analyzes them in process. It is deterministic and store-scoped, but it is not optimized for very large catalogs.
 
-## Database Design v1.1 Deferred Features
+## Database Design v1.2 Deferred Features
 
-The executable schema includes the v1.1 foundation tables, but the following workflows are intentionally not complete feature implementations:
+The executable schema includes the v1.2 foundation tables, but the following workflows are intentionally not complete feature implementations:
 
 - Notification realtime delivery and broadcast/read-receipt behavior are not implemented.
 - Full audit coverage across all business mutations is not implemented.

@@ -23,7 +23,7 @@
 
 The backend is a modular monolith. Modules under `src/modules` own auth, users, categories, products, inventory, orders, returns, analytics, import/export, historical sales, daily summary accounting, StockTake, alerts, pricing, Decision Engine, and AI explanations.
 
-The executable Prisma schema is aligned with Database Design v1.1 plus Sprint 1 password recovery storage: 30 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, SystemSetting foundations, and PasswordResetToken. StockTake has a backend workflow implementation; Notification, full AuditLog coverage, AiInteraction conversation management, and SystemSetting admin workflows remain deferred.
+The executable Prisma schema is aligned with Database Design v1.2: 30 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, SystemSetting foundations, and PasswordResetToken. StockTake has a backend workflow implementation; Notification, full AuditLog coverage, AiInteraction conversation management, and SystemSetting admin workflows remain deferred.
 
 Store tenancy is enforced through authenticated store scope. Business queries should include `storeId` unless the model is explicitly global.
 
@@ -39,7 +39,7 @@ The Decision Engine is deterministic TypeScript logic. AI endpoints may explain 
 - Clean deployment command: `npm run prisma:migrate:deploy`
 - Client generation: `npm run prisma:generate`
 
-Never rewrite reviewed historical migrations. Add a new V13+ migration for future schema changes.
+Never rewrite reviewed historical migrations. Add a new V14+ migration for future schema changes.
 
 ## Environment
 
@@ -74,7 +74,7 @@ npm run test:coverage
 npm run handoff:check
 ```
 
-Latest backend handoff evidence from the Database Design v1.1 alignment pass:
+Latest backend handoff evidence from the Database Design v1.2 alignment pass:
 
 - `npm ci`: passed, 0 vulnerabilities; dependency deprecation warnings only.
 - `npx prisma validate`: passed.
@@ -113,7 +113,7 @@ Latest local Sprint 1 backend closeout validation on 2026-09-29:
 - `npm run build`: passed.
 - `npm test`: 25 suites / 177 tests passed.
 - `npm run test:coverage`: passed, 25 suites / 177 tests.
-- `npm run prisma:migrate:deploy`: passed locally against canonical app schema `stockpilot` after baselining the existing v1.1 schema history.
+- `npm run prisma:migrate:deploy`: passed locally against canonical app schema `stockpilot` after baselining the existing schema history.
 - `npm run prisma:migrate:deploy`: passed with `DATABASE_URL` overridden to guarded local `stockpilot_test`.
 - `npm run handoff:check`: passed; reported `HANDOFF_CHECK_OK` with expected local `.env` warning.
 - `npm audit`: passed, 0 vulnerabilities.

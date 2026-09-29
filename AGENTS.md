@@ -35,12 +35,12 @@ Read these first, then inspect the real source code before editing:
 ## Source Of Truth
 
 - Target architecture: architecture and roadmap docs in `docs/`
-- Target database: Database Design v1.1
+- Target database: Database Design v1.2
 - Executable database schema: `prisma/schema.prisma`
 - Migration history: `prisma/migrations/`
 - Current implementation: `src/**`
 - Tests: `tests/**`
-- Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.1_Complete_Design.sql` as reference only
+- Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql` as reference only
 
 If sources conflict, report the conflict instead of guessing.
 

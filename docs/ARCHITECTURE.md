@@ -62,7 +62,7 @@ Assistant endpoints are read-only explanation wrappers around already authorized
 
 ## Database
 
-The executable database schema is `prisma/schema.prisma`; migration history is `prisma/migrations/`. Database Design v1.1 is the target design, while the consolidated target SQL is a reference artifact rather than the migration ledger.
+The executable database schema is `prisma/schema.prisma`; migration history is `prisma/migrations/`. Database Design v1.2 is the target design, while the consolidated target SQL is a reference artifact rather than the migration ledger.
 
 ## Background Jobs
 

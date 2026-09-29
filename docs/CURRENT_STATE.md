@@ -33,14 +33,14 @@ This document describes the repository as inspected from the working tree. It is
 
 ## Database State
 
-- Target database design: Database Design v1.1
+- Target database design: Database Design v1.2
 - Executable physical table count: 30
 - Executable Prisma model count: 30
 - Migration count: 13
 - Latest migration: `20260929100000_v13_password_reset_tokens`
-- Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.1_Complete_Design.sql` is reference only
+- Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql` is reference only
 
-The executable schema includes the v1.1 foundation models:
+The executable schema includes the v1.2 foundation models:
 
 - `StockTake`
 - `StockTakeItem`
@@ -106,4 +106,4 @@ The test suite includes unit tests, API integration tests, real MySQL integratio
 
 - Do not call the backend production ready from repository tests alone.
 - Sprint 1 backend is complete and CI verified, but production deployment has not been observed.
-- Do not describe v1.1 foundation tables as full feature implementations.
+- Do not describe v1.2 foundation tables as full feature implementations.

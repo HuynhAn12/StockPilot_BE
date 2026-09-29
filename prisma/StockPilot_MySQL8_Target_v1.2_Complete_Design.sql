@@ -1,22 +1,23 @@
 -- ============================================================================
--- STOCKPILOT - CONSOLIDATED TARGET MYSQL 8.4 DATABASE DESIGN (v1.1)
+-- STOCKPILOT - CONSOLIDATED TARGET MYSQL 8.4 DATABASE DESIGN (v1.2)
 -- ============================================================================
 -- Project      : StockPilot - Smart Inventory and Pricing Decision Support System
 -- Repository   : HuynhAn12/StockPilot_BE
--- Version      : Database Design Target v1.1 (29 Tables)
+-- Version      : Database Design Target v1.2 (30 Tables)
 -- DBMS         : MySQL 8.4 / InnoDB / utf8mb4 / utf8mb4_unicode_ci
--- Target Schema: 29 Physical Tables
+-- Target Schema: 30 Physical Tables
 -- Generated for: MySQL Workbench / phpMyAdmin / DBeaver / Production DB Setup
 --
 -- IMPORTANT ARCHITECTURAL NOTES:
 -- 1) This is a CONSOLIDATED TARGET SCHEMA for system design, documentation,
 --    and direct database initialization/import. It does NOT replace the
 --    repository's historical Prisma migration ledger.
--- 2) Target count is exactly 29 physical tables (23 baseline + 6 newly added).
+-- 2) Target count is exactly 30 physical tables.
 -- 3) Strict MySQL 8.4 compliance: InnoDB engine, utf8mb4 character set,
 --    DATETIME(3) precision, explicit CHECK constraints, and exact foreign keys.
--- 4) Store Isolation Rule: Service/Data-Access layer MUST enforce same-store
---    ownership across all relational entities before COMMIT.
+-- 4) Store Isolation Rule: store-owned business data uses `storeId`, and the
+--    service/data-access layer MUST enforce same-store ownership before COMMIT.
+--    Global/system-level data and user-scoped auth data are documented below.
 -- 5) MVP Warehouse Rule: Each store operates with one default warehouse in MVP;
 --    the schema retains native multi-warehouse physical capability for scaling.
 -- ============================================================================
@@ -33,7 +34,7 @@ USE `stockpilot`;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ============================================================================
--- DROP TABLE IN REVERSE DEPENDENCY ORDER (29 TABLES)
+-- DROP TABLE IN REVERSE DEPENDENCY ORDER (30 TABLES)
 -- ============================================================================
 DROP TABLE IF EXISTS `ai_interactions`;
 DROP TABLE IF EXISTS `audit_logs`;
@@ -61,6 +62,7 @@ DROP TABLE IF EXISTS `products`;
 DROP TABLE IF EXISTS `categories`;
 DROP TABLE IF EXISTS `warehouses`;
 DROP TABLE IF EXISTS `system_settings`;
+DROP TABLE IF EXISTS `password_reset_tokens`;
 DROP TABLE IF EXISTS `auth_sessions`;
 DROP TABLE IF EXISTS `users`;
 DROP TABLE IF EXISTS `stores`;
@@ -133,7 +135,26 @@ CREATE TABLE `auth_sessions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 4: system_settings (NEW)
+-- Table 4: password_reset_tokens
+CREATE TABLE `password_reset_tokens` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `userId` INT NOT NULL,
+  `tokenHash` VARCHAR(64) NOT NULL,
+  `expiresAt` DATETIME(3) NOT NULL,
+  `usedAt` DATETIME(3) NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `password_reset_tokens_tokenHash_key` (`tokenHash`),
+  KEY `password_reset_tokens_userId_expiresAt_idx` (`userId`, `expiresAt`),
+
+  CONSTRAINT `password_reset_tokens_userId_fkey`
+    FOREIGN KEY (`userId`) REFERENCES `users` (`id`)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- Table 5: system_settings
 CREATE TABLE `system_settings` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `key` VARCHAR(100) NOT NULL,
@@ -159,7 +180,7 @@ CREATE TABLE `system_settings` (
 -- 2. WAREHOUSES & CATALOG
 -- ============================================================================
 
--- Table 5: warehouses
+-- Table 6: warehouses
 -- MVP Rule: One Store -> one default Warehouse enforced by application layer.
 CREATE TABLE `warehouses` (
   `id` INT NOT NULL AUTO_INCREMENT,
@@ -181,7 +202,7 @@ CREATE TABLE `warehouses` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 6: categories
+-- Table 7: categories
 CREATE TABLE `categories` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -203,7 +224,7 @@ CREATE TABLE `categories` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 7: products
+-- Table 8: products
 CREATE TABLE `products` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -231,7 +252,7 @@ CREATE TABLE `products` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 8: stock_items
+-- Table 9: stock_items
 CREATE TABLE `stock_items` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -279,7 +300,7 @@ CREATE TABLE `stock_items` (
 -- 3. INVENTORY & STOCK MOVEMENTS
 -- ============================================================================
 
--- Table 9: inventory_balances
+-- Table 10: inventory_balances
 CREATE TABLE `inventory_balances` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -319,7 +340,7 @@ CREATE TABLE `inventory_balances` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 10: stock_movements
+-- Table 11: stock_movements
 CREATE TABLE `stock_movements` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -381,7 +402,7 @@ CREATE TABLE `stock_movements` (
 -- 4. STOCK TAKES (INVENTORY AUDITING)
 -- ============================================================================
 
--- Table 11: stock_takes (NEW)
+-- Table 12: stock_takes
 CREATE TABLE `stock_takes` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -415,7 +436,7 @@ CREATE TABLE `stock_takes` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 12: stock_take_items (NEW)
+-- Table 13: stock_take_items
 CREATE TABLE `stock_take_items` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -466,7 +487,7 @@ CREATE TABLE `stock_take_items` (
 -- 5. ORDERS & RETURNS
 -- ============================================================================
 
--- Table 13: orders
+-- Table 14: orders
 CREATE TABLE `orders` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -485,6 +506,7 @@ CREATE TABLE `orders` (
   `fulfilledAt` DATETIME(3) NULL,
   `canceledAt` DATETIME(3) NULL,
   `cancelReason` TEXT NULL,
+  `clientRequestKey` VARCHAR(200) NULL,
   `createdById` INT NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
@@ -492,6 +514,8 @@ CREATE TABLE `orders` (
 
   PRIMARY KEY (`id`),
   UNIQUE KEY `orders_storeId_orderNumber_key` (`storeId`, `orderNumber`),
+  UNIQUE KEY `orders_storeId_clientRequestKey_key`
+    (`storeId`, `clientRequestKey`),
   KEY `orders_storeId_status_createdAt_idx` (`storeId`, `status`, `createdAt`),
   KEY `orders_createdById_idx` (`createdById`),
 
@@ -517,7 +541,7 @@ CREATE TABLE `orders` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 14: order_items
+-- Table 15: order_items
 CREATE TABLE `order_items` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -576,7 +600,7 @@ CREATE TABLE `order_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 15: return_orders
+-- Table 16: return_orders
 CREATE TABLE `return_orders` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -585,6 +609,7 @@ CREATE TABLE `return_orders` (
   `status` ENUM('COMPLETED') NOT NULL DEFAULT 'COMPLETED',
   `totalRefundAmount` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
   `reason` TEXT NULL,
+  `clientRequestKey` VARCHAR(200) NULL,
   `createdById` INT NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
@@ -593,6 +618,8 @@ CREATE TABLE `return_orders` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `return_orders_storeId_returnNumber_key`
     (`storeId`, `returnNumber`),
+  UNIQUE KEY `return_orders_storeId_clientRequestKey_key`
+    (`storeId`, `clientRequestKey`),
   KEY `return_orders_storeId_orderId_idx` (`storeId`, `orderId`),
   KEY `return_orders_createdById_idx` (`createdById`),
 
@@ -613,7 +640,7 @@ CREATE TABLE `return_orders` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 16: return_items
+-- Table 17: return_items
 CREATE TABLE `return_items` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -666,7 +693,7 @@ CREATE TABLE `return_items` (
 -- 6. DATA IMPORT & IDEMPOTENCY
 -- ============================================================================
 
--- Table 17: import_jobs
+-- Table 18: import_jobs
 CREATE TABLE `import_jobs` (
   `id` VARCHAR(191) NOT NULL,
   `storeId` INT NOT NULL,
@@ -709,7 +736,7 @@ CREATE TABLE `import_jobs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 18: import_job_items
+-- Table 19: import_job_items
 CREATE TABLE `import_job_items` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `importJobId` VARCHAR(191) NOT NULL,
@@ -744,7 +771,7 @@ CREATE TABLE `import_job_items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 19: idempotency_requests
+-- Table 20: idempotency_requests
 CREATE TABLE `idempotency_requests` (
   `id` VARCHAR(191) NOT NULL,
   `storeId` INT NOT NULL,
@@ -773,7 +800,7 @@ CREATE TABLE `idempotency_requests` (
 -- 7. HISTORICAL SALES & DAILY ANALYTICS
 -- ============================================================================
 
--- Table 20: historical_sales
+-- Table 21: historical_sales
 CREATE TABLE `historical_sales` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -782,6 +809,7 @@ CREATE TABLE `historical_sales` (
   `quantity` INT NOT NULL,
   `unitPrice` DECIMAL(15,2) NOT NULL,
   `totalAmount` DECIMAL(15,2) NOT NULL,
+  `costPriceSnapshot` DECIMAL(15,2) NULL,
   `soldAt` DATETIME(3) NOT NULL,
   `source` VARCHAR(50) NOT NULL,
   `externalOrderId` VARCHAR(100) NULL,
@@ -811,11 +839,14 @@ CREATE TABLE `historical_sales` (
     CHECK (`unitPrice` >= 0),
 
   CONSTRAINT `chk_historical_sale_total_non_negative`
-    CHECK (`totalAmount` >= 0)
+    CHECK (`totalAmount` >= 0),
+
+  CONSTRAINT `historical_sales_costPriceSnapshot_non_negative`
+    CHECK (`costPriceSnapshot` IS NULL OR `costPriceSnapshot` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 21: daily_sales_summaries
+-- Table 22: daily_sales_summaries
 CREATE TABLE `daily_sales_summaries` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -829,6 +860,7 @@ CREATE TABLE `daily_sales_summaries` (
   `netRevenue` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
   `cogs` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
   `grossProfit` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+  `historicalCostMissingQty` INT NOT NULL DEFAULT 0,
   `orderCount` INT NOT NULL DEFAULT 0,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
@@ -839,6 +871,8 @@ CREATE TABLE `daily_sales_summaries` (
     (`storeId`, `stockItemId`, `summaryDate`),
   KEY `daily_sales_summaries_storeId_summaryDate_idx`
     (`storeId`, `summaryDate`),
+  KEY `daily_sales_summaries_storeId_stockItemId_summaryDate_idx`
+    (`storeId`, `stockItemId`, `summaryDate`),
 
   CONSTRAINT `daily_sales_summaries_storeId_fkey`
     FOREIGN KEY (`storeId`) REFERENCES `stores` (`id`)
@@ -861,7 +895,10 @@ CREATE TABLE `daily_sales_summaries` (
     CHECK (`refundAmount` >= 0),
 
   CONSTRAINT `chk_daily_order_count_non_negative`
-    CHECK (`orderCount` >= 0)
+    CHECK (`orderCount` >= 0),
+
+  CONSTRAINT `daily_sales_summaries_historicalCostMissingQty_non_negative`
+    CHECK (`historicalCostMissingQty` >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
@@ -869,7 +906,7 @@ CREATE TABLE `daily_sales_summaries` (
 -- 8. DECISION ENGINE CONFIG & SMART ALERTS
 -- ============================================================================
 
--- Table 22: engine_configs
+-- Table 23: engine_configs
 CREATE TABLE `engine_configs` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -938,7 +975,7 @@ CREATE TABLE `engine_configs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 23: alerts
+-- Table 24: alerts
 -- Updated ENUM aligns with Proposal: LOW_STOCK, STOCKOUT, OVERSTOCK, SLOW_MOVING, DEAD_STOCK, UNUSUAL_DEMAND
 CREATE TABLE `alerts` (
   `id` INT NOT NULL AUTO_INCREMENT,
@@ -995,7 +1032,7 @@ CREATE TABLE `alerts` (
 -- 9. PRICING DECISION SUPPORT & SNAPSHOTS
 -- ============================================================================
 
--- Table 24: pricing_recommendations
+-- Table 25: pricing_recommendations
 CREATE TABLE `pricing_recommendations` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -1058,7 +1095,7 @@ CREATE TABLE `pricing_recommendations` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 25: price_histories
+-- Table 26: price_histories
 CREATE TABLE `price_histories` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -1101,7 +1138,7 @@ CREATE TABLE `price_histories` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 26: decision_snapshots
+-- Table 27: decision_snapshots
 CREATE TABLE `decision_snapshots` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -1131,7 +1168,7 @@ CREATE TABLE `decision_snapshots` (
 -- 10. NOTIFICATIONS, AUDIT LOGS & AI INTERACTIONS
 -- ============================================================================
 
--- Table 27: notifications (NEW)
+-- Table 28: notifications
 CREATE TABLE `notifications` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `storeId` INT NOT NULL,
@@ -1161,7 +1198,7 @@ CREATE TABLE `notifications` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 28: audit_logs (NEW - IMMUTABLE AUDIT TRAIL)
+-- Table 29: audit_logs
 CREATE TABLE `audit_logs` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
   `storeId` INT NULL,
@@ -1191,7 +1228,7 @@ CREATE TABLE `audit_logs` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
--- Table 29: ai_interactions (NEW - AI DECISION ASSISTANT LOGS)
+-- Table 30: ai_interactions
 -- SECURITY NOTE: Strictly prohibited from storing credentials, raw tokens, or customer PII.
 CREATE TABLE `ai_interactions` (
   `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -1232,7 +1269,8 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- ============================================================================
 -- 1) SAME-STORE OWNERSHIP VALIDATION:
 --    The application service/data-access layer MUST explicitly assert identical
---    `storeId` consistency before committing transactions across related models:
+--    `storeId` consistency before committing transactions across store-owned
+--    business models:
 --      - Product -> StockItem
 --      - Warehouse -> InventoryBalance
 --      - Order -> OrderItem
@@ -1244,6 +1282,9 @@ SET FOREIGN_KEY_CHECKS = 1;
 --      - Notification -> Target User & Store
 --      - AI Interaction -> Requesting User & Store
 --    Any cross-store entity reference must be aborted and rejected immediately.
+--    `system_settings` is global/system-level, `users.storeId` is nullable for
+--    system/admin users, and `password_reset_tokens` is user-scoped through
+--    `userId` with ON DELETE CASCADE.
 --
 -- 2) MVP WAREHOUSE GOVERNANCE:
 --    - For MVP, each store is bound to one default active Warehouse (`isDefault = TRUE`).

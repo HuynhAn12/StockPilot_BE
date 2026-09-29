@@ -216,7 +216,7 @@ AI must not replace business formulas, thresholds, or deterministic scoring.
 
 ### DEC-003
 
-Alerts use the v1.1 taxonomy: `LOW_STOCK`, `STOCKOUT`, `OVERSTOCK`, `SLOW_MOVING`, `DEAD_STOCK`, and `UNUSUAL_DEMAND`.
+Alerts use the current taxonomy: `LOW_STOCK`, `STOCKOUT`, `OVERSTOCK`, `SLOW_MOVING`, `DEAD_STOCK`, and `UNUSUAL_DEMAND`.
 
 ## AI
 
