@@ -11,11 +11,11 @@ The consolidated SQL is a reference artifact for design comparison. It does not 
 
 ## Current Schema Alignment
 
-- Target physical table count: 29
-- Executable Prisma model count: 29
-- Current migration count: 12
-- Latest migration: `20260925213000_v12_core_architecture_alignment`
-- Current status: executable Prisma schema is aligned with Database Design v1.1 at the database/model foundation level
+- Database Design v1.1 target physical table count: 29
+- Executable Prisma model count: 30
+- Current migration count: 13
+- Latest migration: `20260929100000_v13_password_reset_tokens`
+- Current status: executable Prisma schema is aligned with Database Design v1.1 at the database/model foundation level, plus the Sprint 1 password recovery `password_reset_tokens` table.
 
 The v1.1 foundation models exist:
 
@@ -25,6 +25,10 @@ The v1.1 foundation models exist:
 - `AuditLog`
 - `AiInteraction`
 - `SystemSetting`
+
+Sprint 1 closeout adds:
+
+- `PasswordResetToken`
 
 These are database foundations only unless an API/workflow is documented in `docs/api.md` and implemented in `src/modules`.
 
@@ -65,6 +69,7 @@ Do not rely on a bare `id` lookup for tenant-owned resources.
 Primary implemented domains:
 
 - Access: `stores`, `users`, `auth_sessions`
+- Password recovery: `password_reset_tokens`
 - Catalog: `categories`, `products`, `stock_items`
 - Inventory: `warehouses`, `inventory_balances`, `stock_movements`
 - Orders and returns: `orders`, `order_items`, `return_orders`, `return_items`

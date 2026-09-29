@@ -8,7 +8,7 @@ This document describes the repository as inspected from the working tree. It is
 - Package version: `v1.0.0`
 - Handoff label: backend handoff candidate
 - Production evidence: none observed in this repository
-- CI evidence: GitHub Actions passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
+- CI evidence: GitHub Actions passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`; newer local changes require a fresh exact-SHA CI run before reusing `CI_VERIFIED`.
 
 ## Stack
 
@@ -33,10 +33,10 @@ This document describes the repository as inspected from the working tree. It is
 ## Database State
 
 - Target database design: Database Design v1.1
-- Target physical table count: 29
-- Executable Prisma model count: 29
-- Migration count: 12
-- Latest migration: `20260925213000_v12_core_architecture_alignment`
+- Executable physical table count: 30
+- Executable Prisma model count: 30
+- Migration count: 13
+- Latest migration: `20260929100000_v13_password_reset_tokens`
 - Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.1_Complete_Design.sql` is reference only
 
 The executable schema includes the v1.1 foundation models:
@@ -47,11 +47,14 @@ The executable schema includes the v1.1 foundation models:
 - `AuditLog`
 - `AiInteraction`
 - `SystemSetting`
+- `PasswordResetToken`
 
 ## Implemented Modules
 
 - Auth and refresh-token rotation
+- Profile update and secure password recovery
 - Users / staff management
+- Staff update and disable
 - Categories
 - Products and stock items
 - Inventory balances and stock ledger
@@ -88,9 +91,13 @@ Latest verified evidence:
 - `npm run typecheck`: passed
 - `npm run lint`: passed
 - `npm run build`: passed
-- `npm test`: 24 suites / 164 tests passed, including StockTake and Notification Center unit/API coverage plus real MySQL integration
+- Focused Sprint 1 closeout tests: `npm test -- tests/auth.test.ts tests/api-integration.test.ts tests/order-flow.test.ts` passed, 3 suites / 37 tests.
+- `npm test`: 25 suites / 177 tests passed, including unit, API integration, real MySQL integration, and concurrency tests.
+- `npm run test:coverage`: passed, 25 suites / 177 tests.
+- `npm run handoff:check`: passed with `HANDOFF_CHECK_OK` and the expected local `.env` warning.
+- `npm audit`: passed with 0 vulnerabilities.
 - GitHub Actions: passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
-- MySQL 8.4 migration deploy: passed in CI
+- MySQL migration deploy: passed locally against `stockpilot_dev` and guarded local `stockpilot_test` with 13 migrations applied.
 
 The test suite includes unit tests, API integration tests, real MySQL integration tests, and concurrency tests. MySQL tests require `TEST_DATABASE_URL` to point at a disposable test database.
 

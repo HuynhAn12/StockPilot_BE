@@ -20,6 +20,7 @@ jest.mock('../src/config/db', () => ({
       upsert: jest.fn(),
     },
     stockMovement: { create: jest.fn() },
+    auditLog: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
   },
 }));
@@ -141,5 +142,24 @@ describe('OrderService - Vòng đời đơn hàng & Trừ tồn kho', () => {
       })
     );
   });
-});
+  it('rejects new orders for stock items whose parent product is archived', async () => {
+    (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([]);
 
+    await expect(
+      orderService.createDraftOrder(1, 100, {
+        items: [{ stockItemId: 10, quantity: 1 }],
+        discountAmount: 0,
+        taxAmount: 0,
+      })
+    ).rejects.toThrow();
+
+    expect(prisma.stockItem.findMany).toHaveBeenCalledWith({
+      where: {
+        storeId: 1,
+        id: { in: [10] },
+        isActive: true,
+        product: { isActive: true },
+      },
+    });
+  });
+});

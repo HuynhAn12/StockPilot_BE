@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import crypto from 'crypto';
 import { prisma as defaultPrisma } from '../../config/db';
 import { hashPassword, comparePassword } from '../../common/utils/password';
 import {
@@ -8,9 +9,10 @@ import {
   hashToken,
   getRefreshTokenExpiry,
 } from '../../common/utils/jwt';
-import { ConflictError, UnauthenticatedError } from '../../common/errors/app-error';
+import { ConflictError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
-import { registerSchema, loginSchema } from './auth.schema';
+import { registerSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, resetPasswordSchema } from './auth.schema';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export class AuthService {
   private prisma: PrismaClient;
@@ -88,6 +90,38 @@ export class AuthService {
           userAgent: meta?.userAgent,
           ipAddress: meta?.ipAddress,
         },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId: store.id,
+        userId: user.id,
+        action: 'STORE_REGISTERED',
+        entityType: 'STORE',
+        entityId: store.id,
+        afterJson: {
+          storeId: store.id,
+          storeCode: store.code,
+          ownerUserId: user.id,
+        },
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
+      });
+
+      await AuditLogService.create(tx, {
+        storeId: store.id,
+        userId: user.id,
+        action: 'USER_CREATED',
+        entityType: 'USER',
+        entityId: user.id,
+        afterJson: {
+          userId: user.id,
+          role: user.role,
+          storeId: user.storeId,
+          storeCode: store.code,
+          isActive: user.isActive,
+        },
+        ipAddress: meta?.ipAddress,
+        userAgent: meta?.userAgent,
       });
 
       return {
@@ -313,6 +347,113 @@ export class AuthService {
     }
 
     return user;
+  }
+
+  async updateMe(userId: number, input: z.infer<typeof updateProfileSchema>) {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(input.fullName !== undefined ? { fullName: input.fullName.trim() } : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        isActive: true,
+        storeId: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user.isActive) {
+      throw new UnauthenticatedError('Khong tim thay thong tin tai khoan');
+    }
+
+    return user;
+  }
+
+  async forgotPassword(input: z.infer<typeof forgotPasswordSchema>) {
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const publicResult: { expiresAt: Date; resetToken?: string } = { expiresAt };
+    const email = input.email.toLowerCase().trim();
+
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, isActive: true },
+    });
+
+    if (!user || !user.isActive) {
+      return publicResult;
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashToken(rawToken);
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    if (process.env.NODE_ENV !== 'production') {
+      publicResult.resetToken = rawToken;
+    }
+
+    return publicResult;
+  }
+
+  async resetPassword(input: z.infer<typeof resetPasswordSchema>) {
+    const tokenHash = hashToken(input.token);
+    const now = new Date();
+    const newPasswordHash = await hashPassword(input.newPassword);
+
+    return this.prisma.$transaction(async (tx) => {
+      const token = await tx.passwordResetToken.findUnique({
+        where: { tokenHash },
+        include: { user: { include: { store: true } } },
+      });
+
+      if (!token || token.usedAt || token.expiresAt <= now || !token.user.isActive || (token.user.storeId && !token.user.store?.isActive)) {
+        throw new ValidationError('Reset token khong hop le hoac da het han');
+      }
+
+      const consumeResult = await tx.passwordResetToken.updateMany({
+        where: {
+          id: token.id,
+          usedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+
+      if (consumeResult.count !== 1) {
+        throw new ValidationError('Reset token khong hop le hoac da duoc su dung');
+      }
+
+      await tx.user.update({
+        where: { id: token.userId },
+        data: { passwordHash: newPasswordHash },
+      });
+
+      await tx.authSession.updateMany({
+        where: { userId: token.userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId: token.user.storeId,
+        userId: token.userId,
+        action: 'PASSWORD_RESET',
+        entityType: 'USER',
+        entityId: token.userId,
+        afterJson: { sessionsRevoked: true },
+      });
+
+      return { success: true };
+    });
   }
 }
 

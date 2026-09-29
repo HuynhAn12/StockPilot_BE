@@ -23,6 +23,7 @@ jest.mock('../src/config/db', () => ({
     pricingRecommendation: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findMany: jest.fn(), count: jest.fn() },
     priceHistory: { create: jest.fn(), findMany: jest.fn() },
     decisionSnapshot: { create: jest.fn() },
+    auditLog: { create: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn((callback) => callback(prisma)),
   },

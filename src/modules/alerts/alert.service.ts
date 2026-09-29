@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { PrismaClient, Prisma, AlertType, AlertSeverity, AlertStatus } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError } from '../../common/errors/app-error';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export interface AlertEvaluationInput {
   storeId: number;
@@ -294,8 +295,9 @@ export class AlertService {
     };
   }
 
-  async acknowledgeAlert(storeId: number, alertId: number) {
-    const alert = await this.prisma.alert.findUnique({
+  async acknowledgeAlert(storeId: number, alertId: number, userId?: number) {
+    return this.prisma.$transaction(async (tx) => {
+    const alert = await tx.alert.findUnique({
       where: { id: alertId },
     });
 
@@ -303,16 +305,32 @@ export class AlertService {
       throw new NotFoundError('Không tìm thấy cảnh báo');
     }
 
-    const updated = await this.prisma.alert.update({
+    const updated = await tx.alert.update({
       where: { id: alertId },
       data: { status: 'ACKNOWLEDGED' },
     });
 
+    await AuditLogService.create(tx, {
+      storeId,
+      userId: userId ?? null,
+      action: 'ALERT_ACKNOWLEDGED',
+      entityType: 'ALERT',
+      entityId: alertId,
+      beforeJson: { status: alert.status },
+      afterJson: {
+        status: updated.status,
+        type: updated.type,
+        stockItemId: updated.stockItemId,
+      },
+    });
+
     return updated;
+    });
   }
 
-  async resolveAlert(storeId: number, alertId: number) {
-    const alert = await this.prisma.alert.findUnique({
+  async resolveAlert(storeId: number, alertId: number, userId?: number) {
+    return this.prisma.$transaction(async (tx) => {
+    const alert = await tx.alert.findUnique({
       where: { id: alertId },
     });
 
@@ -320,11 +338,27 @@ export class AlertService {
       throw new NotFoundError('Không tìm thấy cảnh báo');
     }
 
-    const updated = await this.prisma.alert.update({
+    const updated = await tx.alert.update({
       where: { id: alertId },
       data: { status: 'RESOLVED', resolvedAt: new Date() },
     });
 
+    await AuditLogService.create(tx, {
+      storeId,
+      userId: userId ?? null,
+      action: 'ALERT_RESOLVED',
+      entityType: 'ALERT',
+      entityId: alertId,
+      beforeJson: { status: alert.status },
+      afterJson: {
+        status: updated.status,
+        type: updated.type,
+        stockItemId: updated.stockItemId,
+        resolvedAt: updated.resolvedAt,
+      },
+    });
+
     return updated;
+    });
   }
 }

@@ -11,6 +11,7 @@ jest.mock('../src/config/db', () => ({
     inventoryBalance: { findUnique: jest.fn(), update: jest.fn(), upsert: jest.fn() },
     stockMovement: { create: jest.fn() },
     returnOrder: { create: jest.fn() },
+    auditLog: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
   },
 }));

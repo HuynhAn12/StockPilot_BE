@@ -12,6 +12,7 @@ import {
 import { toDecimal } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export interface ImportIssue {
   row: number;
@@ -407,12 +408,27 @@ export class ImportExportService {
           },
         };
 
-        await this.prisma.importJob.update({
-          where: { id: job.id },
-          data: {
-            status: 'COMPLETED',
-            resultJson: result,
-          },
+        await this.prisma.$transaction(async (tx) => {
+          await tx.importJob.update({
+            where: { id: job.id },
+            data: {
+              status: 'COMPLETED',
+              resultJson: result,
+            },
+          });
+
+          await AuditLogService.create(tx, {
+            storeId,
+            userId,
+            action: 'IMPORT_COMMITTED',
+            entityType: 'IMPORT_JOB',
+            entityId: job.id,
+            afterJson: {
+              jobId: job.id,
+              mode,
+              summary: result.summary,
+            },
+          });
         });
 
         return result;
@@ -683,12 +699,27 @@ export class ImportExportService {
       };
 
       // Mark ImportJob as COMPLETED with saved result
-      await this.prisma.importJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'COMPLETED',
-          resultJson: result,
-        },
+      await this.prisma.$transaction(async (tx) => {
+        await tx.importJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'COMPLETED',
+            resultJson: result,
+          },
+        });
+
+        await AuditLogService.create(tx, {
+          storeId,
+          userId,
+          action: 'IMPORT_COMMITTED',
+          entityType: 'IMPORT_JOB',
+          entityId: job.id,
+          afterJson: {
+            jobId: job.id,
+            mode,
+            summary: result.summary,
+          },
+        });
       });
 
       return result;

@@ -7,8 +7,24 @@ jest.mock('../src/config/db', () => ({
   prisma: {
     user: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      update: jest.fn(),
     },
+    passwordResetToken: {
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    authSession: {
+      updateMany: jest.fn(),
+    },
+    product: {
+      findMany: jest.fn(),
+      count: jest.fn(),
+    },
+    auditLog: { create: jest.fn() },
     $queryRaw: jest.fn(),
+    $transaction: jest.fn((callback) => callback(prisma)),
   },
 }));
 
@@ -27,6 +43,13 @@ describe('API Integration & Cross-Store Security', () => {
     email: 'staff2@store2.com',
     role: 'WAREHOUSE_STAFF',
     storeId: 2,
+  });
+
+  const tokenStore1Staff = generateAccessToken({
+    userId: 4,
+    email: 'staff1@store1.com',
+    role: 'WAREHOUSE_STAFF',
+    storeId: 1,
   });
 
   const tokenAdmin = generateAccessToken({
@@ -68,6 +91,16 @@ describe('API Integration & Cross-Store Security', () => {
           storeId: null,
           isActive: true,
           store: null,
+        });
+      }
+      if (where.id === 4) {
+        return Promise.resolve({
+          id: 4,
+          email: 'staff1@store1.com',
+          role: 'WAREHOUSE_STAFF',
+          storeId: 1,
+          isActive: true,
+          store: { isActive: true },
         });
       }
       return Promise.resolve(null);
@@ -349,5 +382,172 @@ describe('API Integration & Cross-Store Security', () => {
     const createManyCall = (prisma as any).historicalSale.createMany.mock.calls[0][0];
     expect(Number(createManyCall.data[0].costPriceSnapshot)).toBe(60000);
     expect(createManyCall.data[0].externalSku).toBe('SKU-A');
+  });
+  it('PATCH /api/v1/auth/me updates only allowed profile fields and masks sensitive fields', async () => {
+    (prisma.user.update as jest.Mock).mockResolvedValue({
+      id: 1,
+      email: 'owner1@store1.com',
+      fullName: 'Owner Updated',
+      role: 'SHOP_OWNER',
+      isActive: true,
+      storeId: 1,
+      updatedAt: new Date(),
+    });
+
+    const res = await request(app)
+      .patch('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .send({ fullName: 'Owner Updated' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.fullName).toBe('Owner Updated');
+    expect(res.body.data.passwordHash).toBeUndefined();
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 1 },
+        data: { fullName: 'Owner Updated' },
+      })
+    );
+  });
+
+  it('PATCH /api/v1/auth/me rejects unauthenticated and privilege escalation payloads', async () => {
+    const unauthenticated = await request(app)
+      .patch('/api/v1/auth/me')
+      .send({ fullName: 'No Token' });
+
+    expect(unauthenticated.status).toBe(401);
+
+    const roleEscalation = await request(app)
+      .patch('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .send({ fullName: 'Owner Updated', role: 'ADMIN' });
+
+    expect(roleEscalation.status).toBe(400);
+
+    const storeChange = await request(app)
+      .patch('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .send({ fullName: 'Owner Updated', storeId: 2 });
+
+    expect(storeChange.status).toBe(400);
+  });
+
+  it('POST /api/v1/auth/forgot-password returns a generic response for known and unknown emails', async () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValueOnce({ id: 1, isActive: true });
+    (prisma.passwordResetToken.create as jest.Mock).mockResolvedValueOnce({ id: 1 });
+
+    const known = await request(app)
+      .post('/api/v1/auth/forgot-password')
+      .send({ email: 'owner1@store1.com' });
+
+    (prisma.user.findUnique as jest.Mock).mockResolvedValueOnce(null);
+
+    const unknown = await request(app)
+      .post('/api/v1/auth/forgot-password')
+      .send({ email: 'unknown@example.com' });
+
+    expect(known.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(known.body.message).toBe(unknown.body.message);
+    expect(prisma.passwordResetToken.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /api/v1/auth/reset-password rejects weak passwords at validation', async () => {
+    const res = await request(app)
+      .post('/api/v1/auth/reset-password')
+      .send({ token: 'a'.repeat(64), newPassword: 'short' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PATCH /api/v1/users/:id updates and disables same-store staff only', async () => {
+    (prisma.user.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 4,
+      email: 'staff1@store1.com',
+      fullName: 'Staff One',
+      role: 'WAREHOUSE_STAFF',
+      isActive: true,
+      storeId: 1,
+    });
+    (prisma.user.update as jest.Mock).mockResolvedValueOnce({
+      id: 4,
+      email: 'staff1@store1.com',
+      fullName: 'Staff Disabled',
+      role: 'WAREHOUSE_STAFF',
+      isActive: false,
+      storeId: 1,
+      updatedAt: new Date(),
+    });
+    (prisma.authSession.updateMany as jest.Mock).mockResolvedValueOnce({ count: 1 });
+
+    const res = await request(app)
+      .patch('/api/v1/users/4')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .send({ fullName: 'Staff Disabled', isActive: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.isActive).toBe(false);
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith({
+      where: { userId: 4, revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('PATCH /api/v1/users/:id denies warehouse staff callers, cross-store targets, and owner targets', async () => {
+    const staffCaller = await request(app)
+      .patch('/api/v1/users/4')
+      .set('Authorization', `Bearer ${tokenStore1Staff}`)
+      .send({ fullName: 'Nope' });
+
+    expect(staffCaller.status).toBe(403);
+
+    (prisma.user.findFirst as jest.Mock).mockResolvedValueOnce(null);
+    const crossStore = await request(app)
+      .patch('/api/v1/users/999')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .send({ fullName: 'Nope' });
+
+    expect(crossStore.status).toBe(404);
+
+    (prisma.user.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 1,
+      email: 'owner1@store1.com',
+      fullName: 'Owner',
+      role: 'SHOP_OWNER',
+      isActive: true,
+      storeId: 1,
+    });
+    const ownerTarget = await request(app)
+      .patch('/api/v1/users/1')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`)
+      .send({ isActive: false });
+
+    expect(ownerTarget.status).toBe(403);
+  });
+
+  it('GET /api/v1/products defaults to active catalog and supports explicit archived listing', async () => {
+    (prisma.product.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.product.count as jest.Mock).mockResolvedValue(0);
+
+    await request(app)
+      .get('/api/v1/products')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`);
+
+    expect(prisma.product.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ storeId: 1, isActive: true }),
+      })
+    );
+
+    await request(app)
+      .get('/api/v1/products?isActive=false')
+      .set('Authorization', `Bearer ${tokenStore1Owner}`);
+
+    expect(prisma.product.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ storeId: 1, isActive: false }),
+      })
+    );
   });
 });

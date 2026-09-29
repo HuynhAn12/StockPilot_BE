@@ -8,6 +8,7 @@ jest.mock('../src/config/db', () => ({
     user: {
       findUnique: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
     },
     store: {
       findUnique: jest.fn(),
@@ -22,6 +23,12 @@ jest.mock('../src/config/db', () => ({
       update: jest.fn(),
       updateMany: jest.fn(),
     },
+    passwordResetToken: {
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    auditLog: { create: jest.fn() },
     $transaction: jest.fn((callback) => callback(prisma)),
   },
 }));
@@ -159,5 +166,102 @@ describe('AuthService - Shop Owner Registration, Login & Session Management', ()
         data: expect.objectContaining({ revokedAt: expect.any(Date) }),
       })
     );
+  });
+  it('creates a hash-only password reset token for a known active email', async () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({ id: 100, isActive: true });
+    (prisma.passwordResetToken.create as jest.Mock).mockResolvedValue({ id: 1 });
+
+    const result = await authService.forgotPassword({ email: 'Owner@Test.com' });
+
+    expect(result.resetToken).toBeDefined();
+    expect(prisma.passwordResetToken.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 100,
+        tokenHash: expect.not.stringContaining(result.resetToken!),
+        expiresAt: expect.any(Date),
+      }),
+    });
+  });
+
+  it('returns a generic forgot-password result for unknown email without storing a token', async () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const result = await authService.forgotPassword({ email: 'missing@test.com' });
+
+    expect(result.expiresAt).toBeInstanceOf(Date);
+    expect(result.resetToken).toBeUndefined();
+    expect(prisma.passwordResetToken.create).not.toHaveBeenCalled();
+  });
+
+  it('resets password once, consumes the token, and revokes active refresh sessions', async () => {
+    (prisma.passwordResetToken.findUnique as jest.Mock).mockResolvedValue({
+      id: 5,
+      userId: 100,
+      usedAt: null,
+      expiresAt: new Date(Date.now() + 100000),
+      user: {
+        id: 100,
+        isActive: true,
+        storeId: 1,
+        store: { isActive: true },
+      },
+    });
+    (prisma.passwordResetToken.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (prisma.user.update as jest.Mock).mockResolvedValue({ id: 100 });
+    (prisma.authSession.updateMany as jest.Mock).mockResolvedValue({ count: 2 });
+
+    await expect(
+      authService.resetPassword({ token: 'a'.repeat(64), newPassword: 'newPassword123' })
+    ).resolves.toEqual({ success: true });
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 100 },
+      data: { passwordHash: expect.any(String) },
+    });
+    expect(prisma.authSession.updateMany).toHaveBeenCalledWith({
+      where: { userId: 100, revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
+  it('rejects invalid, expired, used, and concurrently consumed password reset tokens', async () => {
+    (prisma.passwordResetToken.findUnique as jest.Mock).mockResolvedValueOnce(null);
+    await expect(
+      authService.resetPassword({ token: 'b'.repeat(64), newPassword: 'newPassword123' })
+    ).rejects.toThrow();
+
+    (prisma.passwordResetToken.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 6,
+      userId: 100,
+      usedAt: null,
+      expiresAt: new Date(Date.now() - 1000),
+      user: { id: 100, isActive: true, storeId: 1, store: { isActive: true } },
+    });
+    await expect(
+      authService.resetPassword({ token: 'c'.repeat(64), newPassword: 'newPassword123' })
+    ).rejects.toThrow();
+
+    (prisma.passwordResetToken.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 7,
+      userId: 100,
+      usedAt: new Date(),
+      expiresAt: new Date(Date.now() + 100000),
+      user: { id: 100, isActive: true, storeId: 1, store: { isActive: true } },
+    });
+    await expect(
+      authService.resetPassword({ token: 'd'.repeat(64), newPassword: 'newPassword123' })
+    ).rejects.toThrow();
+
+    (prisma.passwordResetToken.findUnique as jest.Mock).mockResolvedValueOnce({
+      id: 8,
+      userId: 100,
+      usedAt: null,
+      expiresAt: new Date(Date.now() + 100000),
+      user: { id: 100, isActive: true, storeId: 1, store: { isActive: true } },
+    });
+    (prisma.passwordResetToken.updateMany as jest.Mock).mockResolvedValueOnce({ count: 0 });
+    await expect(
+      authService.resetPassword({ token: 'e'.repeat(64), newPassword: 'newPassword123' })
+    ).rejects.toThrow();
   });
 });

@@ -4,6 +4,7 @@ import { NotFoundError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { inflowSchema, outflowSchema, auditSchema } from './inventory.schema';
 import { StockLedgerService } from './stock-ledger.service';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export class InventoryService {
   private prisma: PrismaClient;
@@ -48,6 +49,25 @@ export class InventoryService {
         input.items
       );
 
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'INVENTORY_INFLOW',
+        entityType: 'INVENTORY',
+        entityId: refId,
+        afterJson: {
+          warehouseId: warehouse.id,
+          referenceId: refId,
+          movements: movements.map((movement) => ({
+            id: movement.id,
+            stockItemId: movement.stockItemId,
+            delta: movement.delta,
+            beforeQuantity: movement.beforeQuantity,
+            afterQuantity: movement.afterQuantity,
+          })),
+        },
+      });
+
       return { warehouse, movements };
     });
   }
@@ -71,6 +91,25 @@ export class InventoryService {
         'OUTFLOW',
         input.items
       );
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'INVENTORY_OUTFLOW',
+        entityType: 'INVENTORY',
+        entityId: refId,
+        afterJson: {
+          warehouseId: warehouse.id,
+          referenceId: refId,
+          movements: movements.map((movement) => ({
+            id: movement.id,
+            stockItemId: movement.stockItemId,
+            delta: movement.delta,
+            beforeQuantity: movement.beforeQuantity,
+            afterQuantity: movement.afterQuantity,
+          })),
+        },
+      });
 
       return { warehouse, movements };
     });
@@ -153,6 +192,32 @@ export class InventoryService {
 
         movements.push(movement);
       }
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'INVENTORY_AUDIT',
+        entityType: 'INVENTORY',
+        entityId: refId,
+        beforeJson: {
+          warehouseId: warehouse.id,
+          quantities: movements.map((movement) => ({
+            stockItemId: movement.stockItemId,
+            quantity: movement.beforeQuantity,
+          })),
+        },
+        afterJson: {
+          warehouseId: warehouse.id,
+          referenceId: refId,
+          movements: movements.map((movement) => ({
+            id: movement.id,
+            stockItemId: movement.stockItemId,
+            delta: movement.delta,
+            beforeQuantity: movement.beforeQuantity,
+            afterQuantity: movement.afterQuantity,
+          })),
+        },
+      });
 
       return { warehouse, movements };
     });

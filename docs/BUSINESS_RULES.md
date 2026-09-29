@@ -68,6 +68,38 @@ Do not authorize or mutate a store-owned resource by primary key alone.
 
 `ADMIN` is not a store operator for store-scoped APIs unless a dedicated admin API exists.
 
+## Accounts
+
+### ACC-001
+
+Current-user profile updates may change only allowed profile fields from the current `User` model. Users must not self-change role, store, active status, email, password hash, token/session fields, or admin/system fields through the profile endpoint.
+
+### ACC-002
+
+Staff update/disable is owner-only, same-store scoped, and limited to `WAREHOUSE_STAFF` targets.
+
+### ACC-003
+
+Disabled users cannot log in or use authenticated/refresh flows. Disabling staff and successful password reset revoke active refresh sessions.
+
+### ACC-004
+
+Password reset tokens are hash-only, expiring, single-use credentials. Forgot-password responses must remain generic to avoid email enumeration.
+
+## Products
+
+### PRD-001
+
+Product archive is represented by `Product.isActive = false`; no hard delete is required for archive semantics.
+
+### PRD-002
+
+Default catalog listing returns active products unless an explicit `isActive` filter is supplied.
+
+### PRD-003
+
+Archived products remain readable by direct/historical references, but their stock items cannot be used to create new orders where active product status is required.
+
 ## Orders
 
 ### ORD-001

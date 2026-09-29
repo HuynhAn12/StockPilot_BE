@@ -4,6 +4,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../../common/erro
 import { DemandTrend } from '../decision-engine/demand-metrics.service';
 import { DEFAULT_ENGINE_CONFIG } from '../decision-engine/engine-config.service';
 import { PricingEvaluator, PricingEvaluationResult } from '../decision-engine/pricing-evaluator';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export interface PricingEvaluationInput {
   storeId: number;
@@ -223,15 +224,37 @@ export class PricingService {
         });
       }
 
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'PRICING_RECOMMENDATION_APPROVED',
+        entityType: 'PRICING_RECOMMENDATION',
+        entityId: rec.id,
+        beforeJson: {
+          status: rec.status,
+          currentPrice: rec.currentPrice,
+          recommendedPrice: rec.recommendedPrice,
+          stockItemSellingPrice: oldPrice,
+        },
+        afterJson: {
+          status: updated.status,
+          finalUserSelectedPrice: updated.finalUserSelectedPrice,
+          applyToStockItem,
+          stockItemId: rec.stockItemId,
+          oldPrice,
+          newPrice,
+        },
+      });
+
       return updated;
     });
   }
 
   async rejectRecommendation(storeId: number, userId: number, recommendationId: number, _reason?: string) {
     return this.prisma.$transaction(async (tx) => {
-      await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
+      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
 
-      return tx.pricingRecommendation.update({
+      const updated = await tx.pricingRecommendation.update({
         where: { id: recommendationId },
         data: {
           status: 'REJECTED',
@@ -239,6 +262,25 @@ export class PricingService {
           decidedAt: new Date(),
         },
       });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'PRICING_RECOMMENDATION_REJECTED',
+        entityType: 'PRICING_RECOMMENDATION',
+        entityId: rec.id,
+        beforeJson: {
+          status: rec.status,
+          currentPrice: rec.currentPrice,
+          recommendedPrice: rec.recommendedPrice,
+        },
+        afterJson: {
+          status: updated.status,
+          stockItemId: rec.stockItemId,
+        },
+      });
+
+      return updated;
     });
   }
 
@@ -293,6 +335,28 @@ export class PricingService {
           },
         });
       }
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'PRICING_RECOMMENDATION_MODIFIED',
+        entityType: 'PRICING_RECOMMENDATION',
+        entityId: rec.id,
+        beforeJson: {
+          status: rec.status,
+          currentPrice: rec.currentPrice,
+          recommendedPrice: rec.recommendedPrice,
+          stockItemSellingPrice: oldPrice,
+        },
+        afterJson: {
+          status: updated.status,
+          finalUserSelectedPrice: updated.finalUserSelectedPrice,
+          applyToStockItem,
+          stockItemId: rec.stockItemId,
+          oldPrice,
+          newPrice,
+        },
+      });
 
       return updated;
     });

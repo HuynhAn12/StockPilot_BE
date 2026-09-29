@@ -155,6 +155,7 @@ model User {
 
   store             Store?                  @relation(fields: [storeId], references: [id], onDelete: SetNull)
   sessions          AuthSession[]
+  passwordResetTokens PasswordResetToken[]
   stockMovements    StockMovement[]
   ordersCreated     Order[]
   returnsCreated    ReturnOrder[]
@@ -187,6 +188,20 @@ model AuthSession {
   @@unique([refreshTokenHash])
   @@index([userId])
   @@map("auth_sessions")
+}
+
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
 }
 
 model Warehouse {

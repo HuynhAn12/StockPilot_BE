@@ -63,8 +63,9 @@ export class OrderController {
   async fulfill(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
+      const userId = req.user!.userId;
       const id = Number(req.params.id);
-      const order = await orderService.fulfillOrder(storeId, id);
+      const order = await orderService.fulfillOrder(storeId, id, userId);
       const masked = maskSensitiveFields(order, req.user?.role);
       return res.status(200).json({ success: true, message: 'Hoàn thành đơn hàng thành công', data: masked });
     } catch (error) {

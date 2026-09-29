@@ -3,6 +3,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../../common/erro
 import { z } from 'zod';
 import { createProductSchema, updateProductSchema } from './product.schema';
 import { toDecimal } from '../../common/utils/decimal';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export class ProductService {
   async listProducts(storeId: number, query?: any) {
@@ -16,9 +17,7 @@ export class ProductService {
       where.categoryId = Number(query.categoryId);
     }
 
-    if (typeof query?.isActive === 'boolean') {
-      where.isActive = query.isActive;
-    }
+    where.isActive = typeof query?.isActive === 'boolean' ? query.isActive : true;
 
     if (query?.q && typeof query.q === 'string' && query.q.trim().length > 0) {
       const keyword = query.q.trim();
@@ -92,7 +91,7 @@ export class ProductService {
     return product;
   }
 
-  async createProduct(storeId: number, input: z.infer<typeof createProductSchema>) {
+  async createProduct(storeId: number, input: z.infer<typeof createProductSchema>, userId?: number) {
     const existingCode = await prisma.product.findUnique({
       where: {
         storeId_code: {
@@ -184,7 +183,7 @@ export class ProductService {
         });
       }
 
-      return tx.product.findUnique({
+      const created = await tx.product.findUnique({
         where: { id: product.id },
         include: {
           category: true,
@@ -195,29 +194,78 @@ export class ProductService {
           },
         },
       });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: userId ?? null,
+        action: 'PRODUCT_CREATED',
+        entityType: 'PRODUCT',
+        entityId: product.id,
+        afterJson: {
+          id: product.id,
+          code: product.code,
+          isActive: product.isActive,
+          stockItemIds: created?.stockItems.map((item) => item.id) ?? [],
+        },
+      });
+
+      return created;
     });
   }
 
-  async updateProduct(storeId: number, id: number, input: z.infer<typeof updateProductSchema>) {
-    await this.getProductById(storeId, id);
+  async updateProduct(storeId: number, id: number, input: z.infer<typeof updateProductSchema>, userId?: number) {
+    const existingProduct = await this.getProductById(storeId, id);
 
     if (input.categoryId) {
       const cat = await prisma.category.findFirst({ where: { id: input.categoryId, storeId } });
       if (!cat) throw new NotFoundError('Danh mục không tồn tại');
     }
 
-    return prisma.product.update({
-      where: { id },
-      data: {
-        ...(input.name ? { name: input.name.trim() } : {}),
-        ...(input.description !== undefined ? { description: input.description } : {}),
-        ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
-        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-      },
-      include: {
-        category: true,
-        stockItems: true,
-      },
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({
+        where: { id },
+        data: {
+          ...(input.name ? { name: input.name.trim() } : {}),
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+          ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+        },
+        include: {
+          category: true,
+          stockItems: true,
+        },
+      });
+
+      const action =
+        input.isActive === false && existingProduct.isActive
+          ? 'PRODUCT_DEACTIVATED'
+          : input.isActive === true && !existingProduct.isActive
+          ? 'PRODUCT_REACTIVATED'
+          : 'PRODUCT_UPDATED';
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: userId ?? null,
+        action,
+        entityType: 'PRODUCT',
+        entityId: id,
+        beforeJson: {
+          id: existingProduct.id,
+          name: existingProduct.name,
+          categoryId: existingProduct.categoryId,
+          description: existingProduct.description,
+          isActive: existingProduct.isActive,
+        },
+        afterJson: {
+          id: updated.id,
+          name: updated.name,
+          categoryId: updated.categoryId,
+          description: updated.description,
+          isActive: updated.isActive,
+        },
+      });
+
+      return updated;
     });
   }
 }

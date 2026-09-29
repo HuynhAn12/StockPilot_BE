@@ -45,3 +45,4 @@ The repository contains a GitHub Actions workflow for MySQL 8.4, Prisma validati
 Commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84` is `CI_VERIFIED`: GitHub Actions passed with MySQL 8.4 migration deploy and 20 suites / 135 tests.
 
 Future commits must be checked independently before carrying this label forward.
+Current Sprint 1 backend closeout changes are locally verified only until a fresh GitHub Actions run passes for their exact final commit SHA.

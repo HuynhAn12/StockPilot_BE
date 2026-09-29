@@ -32,7 +32,7 @@ export class ProductController {
   async create(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const product = await productService.createProduct(storeId, req.body);
+      const product = await productService.createProduct(storeId, req.body, req.user!.userId);
       const masked = maskSensitiveFields(product, req.user?.role);
       return res.status(201).json({ success: true, message: 'Tạo sản phẩm thành công', data: masked });
     } catch (error) {
@@ -44,7 +44,7 @@ export class ProductController {
     try {
       const storeId = req.user!.storeId!;
       const id = Number(req.params.id);
-      const product = await productService.updateProduct(storeId, id, req.body);
+      const product = await productService.updateProduct(storeId, id, req.body, req.user!.userId);
       const masked = maskSensitiveFields(product, req.user?.role);
       return res.status(200).json({ success: true, message: 'Cập nhật sản phẩm thành công', data: masked });
     } catch (error) {

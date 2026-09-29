@@ -85,4 +85,47 @@ export class AuthController {
       next(error);
     }
   }
+
+  async updateMe(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId;
+      const user = await this.authService.updateMe(userId, req.body);
+      return res.status(200).json({
+        success: true,
+        message: 'Cap nhat ho so thanh cong',
+        data: user,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async forgotPassword(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await this.authService.forgotPassword(req.body);
+      const data = process.env.NODE_ENV === 'production'
+        ? { expiresAt: result.expiresAt }
+        : result;
+
+      return res.status(200).json({
+        success: true,
+        message: 'If the email is registered, password reset instructions will be sent.',
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async resetPassword(req: Request, res: Response, next: NextFunction) {
+    try {
+      await this.authService.resetPassword(req.body);
+      return res.status(200).json({
+        success: true,
+        message: 'Password has been reset successfully.',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }

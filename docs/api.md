@@ -51,10 +51,14 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | POST | `/auth/register` | Public | Any | No | `{ fullName, email, password, storeName, storeCode, phone?, address? }` | user/store/session tokens | No |
 | POST | `/auth/login` | Public | Any | No | `{ email, password }` | user/session tokens | No |
 | POST | `/auth/refresh` | Public | Any | No | `{ refreshToken }` | rotated session tokens | No |
+| POST | `/auth/forgot-password` | Public | Any | No | `{ email }` | generic accepted response; non-production may include dev reset token | No |
+| POST | `/auth/reset-password` | Public | Any | No | `{ token, newPassword }` | reset status and refresh-session revocation | No |
 | POST | `/auth/logout` | Bearer | Authenticated | User session | `{ refreshToken? }` | logout status | No |
 | GET | `/auth/me` | Bearer | Authenticated | User session | none | current user | No |
+| PATCH | `/auth/me` | Bearer | Authenticated | User session | `{ fullName }` | updated current user profile | No |
 | POST | `/users` | Bearer | `SHOP_OWNER` | Yes | `{ fullName, email, password }` | created staff user | No |
 | GET | `/users` | Bearer | `SHOP_OWNER` | Yes | query pagination if supported | users list | No |
+| PATCH | `/users/:id` | Bearer | `SHOP_OWNER` | Yes | `{ fullName?, isActive? }` | updated same-store warehouse staff user | No |
 | GET | `/categories` | Bearer | Store user | Yes | query pagination if supported | category list | No |
 | GET | `/categories/:id` | Bearer | Store user | Yes | path `id` | category detail | No |
 | POST | `/categories` | Bearer | `SHOP_OWNER` | Yes | `{ name, code, description? }` | created category | No |
@@ -131,6 +135,13 @@ Supported mutation endpoints accept `Idempotency-Key`.
 - Do not break existing request/response contracts without an explicit API task.
 - Keep compatibility aliases documented while they remain mounted in `src/app.ts`.
 - Update this file whenever an endpoint, request shape, response shape, auth rule, role rule, or idempotency rule changes.
+
+## Account Management
+
+- `PATCH /auth/me` updates only current-user profile fields present in the executable `User` model. The current implementation allows `fullName`; it rejects attempts to mutate `id`, `storeId`, `role`, `isActive`, password hashes, tokens, or unknown fields.
+- Password recovery stores only a SHA-256 hash of the reset token in `password_reset_tokens`. Tokens expire after 30 minutes, are single-use, and successful reset revokes active refresh sessions for the user. Forgot-password responses are generic to avoid email enumeration; production HTTP responses do not expose raw reset tokens.
+- `PATCH /users/:id` is owner-only and targets only same-store `WAREHOUSE_STAFF` accounts. It does not update owner/admin accounts, roles, store assignment, email, password, or token fields. Setting `isActive=false` disables the staff user and revokes active refresh sessions.
+- Product archive is represented by `Product.isActive=false` through `PUT /products/:id`. Catalog listing defaults to active products unless `isActive=false` is explicitly requested. Archived products remain readable by direct detail/history references but cannot be used for new order creation through active stock item lookup.
 
 ## StockTake Workflow
 

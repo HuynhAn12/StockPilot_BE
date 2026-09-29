@@ -4,7 +4,7 @@
 
 - Branch: `Sang`
 - Version: `v1.0.0`
-- Evidence status: `CI_VERIFIED` for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
+- Evidence status: `CI_VERIFIED` for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`; current Sprint 1 closeout changes require fresh exact-SHA CI verification.
 - Production observed: `NO`
 - Handoff label: `BACKEND_HANDOFF_CANDIDATE`, not production ready.
 
@@ -22,7 +22,7 @@
 
 The backend is a modular monolith. Modules under `src/modules` own auth, users, categories, products, inventory, orders, returns, analytics, import/export, historical sales, daily summary accounting, StockTake, alerts, pricing, Decision Engine, and AI explanations.
 
-The executable Prisma schema is aligned with Database Design v1.1 at the core foundation level: 29 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, and SystemSetting foundations. StockTake has a backend workflow implementation; Notification, full AuditLog coverage, AiInteraction conversation management, and SystemSetting admin workflows remain deferred.
+The executable Prisma schema is aligned with Database Design v1.1 plus Sprint 1 password recovery storage: 30 models / physical tables, including StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, SystemSetting foundations, and PasswordResetToken. StockTake has a backend workflow implementation; Notification, full AuditLog coverage, AiInteraction conversation management, and SystemSetting admin workflows remain deferred.
 
 Store tenancy is enforced through authenticated store scope. Business queries should include `storeId` unless the model is explicitly global.
 
@@ -32,9 +32,9 @@ The Decision Engine is deterministic TypeScript logic. AI endpoints may explain 
 
 - Schema: `prisma/schema.prisma`
 - Migrations: `prisma/migrations`
-- Current migration count: 12
-- Current Prisma model count: 29
-- Latest migration: `20260925213000_v12_core_architecture_alignment`
+- Current migration count: 13
+- Current Prisma model count: 30
+- Latest migration: `20260929100000_v13_password_reset_tokens`
 - Clean deployment command: `npm run prisma:migrate:deploy`
 - Client generation: `npm run prisma:generate`
 
@@ -102,11 +102,26 @@ Latest local StockTake workflow validation on 2026-09-28:
 - `npm test`: 22 suites / 150 tests passed.
 - Real MySQL StockTake workflow integration: 4 tests passed with `TEST_DATABASE_URL` targeting a safe test database.
 
+Latest local Sprint 1 backend closeout validation on 2026-09-29:
+
+- `npm ci`: passed, 0 vulnerabilities; dependency deprecation warnings only.
+- `npx prisma validate`: passed.
+- `npm run prisma:generate`: passed.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed.
+- `npm run build`: passed.
+- `npm test`: 25 suites / 177 tests passed.
+- `npm run test:coverage`: passed, 25 suites / 177 tests.
+- `npm run prisma:migrate:deploy`: passed locally against `stockpilot_dev`.
+- `npm run prisma:migrate:deploy`: passed with `DATABASE_URL` overridden to guarded local `stockpilot_test`.
+- `npm run handoff:check`: passed; reported `HANDOFF_CHECK_OK` with expected local `.env` warning.
+- `npm audit`: passed, 0 vulnerabilities.
+
 Latest CI evidence:
 
 - Verified commit: `009fc9e8b7229fb7e7fafef8337b93afcea77e84`.
 - GitHub Actions: passed.
-- Database: 29 Prisma models, 12 migrations, MySQL 8.4 migration deploy passed.
+- Database: 29 Prisma models, 12 migrations, MySQL 8.4 migration deploy passed for the verified commit. Current local closeout has 30 models and 13 migrations pending fresh exact-SHA CI.
 - Tests: 20 suites / 135 tests passed.
 - API compatibility: no breaking route/schema changes.
 - Production: not production-observed.

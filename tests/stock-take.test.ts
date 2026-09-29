@@ -9,6 +9,7 @@ function createMockPrisma() {
     stockTakeItem: { createMany: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     inventoryBalance: { findMany: jest.fn(), upsert: jest.fn(), update: jest.fn() },
     stockMovement: { create: jest.fn() },
+    auditLog: { create: jest.fn() },
     $queryRaw: jest.fn(),
   };
   prisma.$transaction = jest.fn((callback) => callback(prisma));

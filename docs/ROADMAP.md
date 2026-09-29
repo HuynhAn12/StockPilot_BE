@@ -8,12 +8,13 @@ Status: `DONE`
 
 Evidence:
 
-- Auth, users, categories, products, inventory, orders, returns, analytics, import/export, and historical sales modules exist.
+- Auth, profile update, password recovery, users/staff update-disable, categories, products/archive semantics, inventory, orders, returns, analytics, import/export, and historical sales modules exist.
 - Unit, API integration, and MySQL integration tests cover core flows.
 
 Notes:
 
 - The repository is a backend handoff candidate, not production evidence.
+- Sprint 1 closeout added `PasswordResetToken` storage after Database Design v1.1, so the executable schema now has 30 models and 13 migrations.
 
 ## Phase 2 - Decision Support
 
@@ -34,9 +35,9 @@ Status: `DONE`
 
 Evidence:
 
-- `prisma/schema.prisma` has 29 models.
-- `prisma/migrations/` has 12 migrations.
-- Latest migration: `20260925213000_v12_core_architecture_alignment`.
+- Database Design v1.1 alignment was completed at 29 models and 12 migrations.
+- Sprint 1 password recovery now brings `prisma/schema.prisma` to 30 models and `prisma/migrations/` to 13 migrations.
+- Latest migration: `20260929100000_v13_password_reset_tokens`.
 - Foundation tables exist for StockTake, StockTakeItem, Notification, AuditLog, AiInteraction, and SystemSetting.
 
 Notes:

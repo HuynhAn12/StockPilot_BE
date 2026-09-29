@@ -3,6 +3,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { HistoricalSaleRowInput } from './historical-sales.schema';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export class HistoricalSalesService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
@@ -301,6 +302,18 @@ export class HistoricalSalesService {
         data: {
           status: 'COMPLETED',
           resultJson: summaryResult,
+        },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'HISTORICAL_SALES_IMPORT_COMMITTED',
+        entityType: 'IMPORT_JOB',
+        entityId: jobId,
+        afterJson: {
+          jobId,
+          summary: summaryResult,
         },
       });
 

@@ -6,6 +6,7 @@ import {
   StockTakeListQuery,
   UpdateStockTakeCountsInput,
 } from './stock-take.schema';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 type TransactionClient = Omit<
   PrismaClient,
@@ -208,6 +209,7 @@ export class StockTakeService {
         where: { storeId, stockTakeId: id },
         orderBy: { stockItemId: 'asc' },
       });
+      const movementIds: number[] = [];
 
       for (const item of items) {
         await tx.inventoryBalance.upsert({
@@ -285,7 +287,21 @@ export class StockTakeService {
           where: { id: item.id },
           data: { adjustmentMovementId: movement.id },
         });
+        movementIds.push(movement.id);
       }
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'STOCK_TAKE_COMPLETED',
+        entityType: 'STOCK_TAKE',
+        entityId: id,
+        afterJson: {
+          stockTakeId: id,
+          warehouseId: stockTake.warehouseId,
+          movementIds,
+        },
+      });
 
       return this.getStockTakeOrThrow(storeId, id, tx);
     });

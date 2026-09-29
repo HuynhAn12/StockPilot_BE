@@ -4,6 +4,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../../common/erro
 import { z } from 'zod';
 import { createOrderSchema, cancelOrderSchema } from './order.schema';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export class OrderService {
   private prisma: PrismaClient;
@@ -29,6 +30,7 @@ export class OrderService {
         storeId,
         id: { in: itemIds },
         isActive: true,
+        product: { isActive: true },
       },
     });
 
@@ -74,7 +76,7 @@ export class OrderService {
 
     // Pro-rata allocate discount & tax across lines to derive exact line-item refundableAmount
     // Invariant: SUM(lineRefundable) == Order.totalAmount
-    const orderItemsData = [];
+    const orderItemsData: Prisma.OrderItemUncheckedCreateWithoutOrderInput[] = [];
     let allocatedRefundableSum = new Prisma.Decimal(0);
 
     for (let i = 0; i < rawLines.length; i++) {
@@ -111,28 +113,47 @@ export class OrderService {
       });
     }
 
-    return this.prisma.order.create({
-      data: {
-        storeId,
-        orderNumber,
-        status: 'DRAFT',
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        customerAddress: input.customerAddress,
-        subtotalAmount,
-        discountAmount: discount,
-        taxAmount: tax,
-        totalAmount,
-        note: input.note,
-        clientRequestKey,
-        createdById: userId,
-        items: {
-          create: orderItemsData,
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.create({
+        data: {
+          storeId,
+          orderNumber,
+          status: 'DRAFT',
+          customerName: input.customerName,
+          customerPhone: input.customerPhone,
+          customerAddress: input.customerAddress,
+          subtotalAmount,
+          discountAmount: discount,
+          taxAmount: tax,
+          totalAmount,
+          note: input.note,
+          clientRequestKey,
+          createdById: userId,
+          items: {
+            create: orderItemsData,
+          },
         },
-      },
-      include: {
-        items: true,
-      },
+        include: {
+          items: true,
+        },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'ORDER_CREATED',
+        entityType: 'ORDER',
+        entityId: order.id,
+        afterJson: {
+          id: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          totalAmount: order.totalAmount,
+          itemCount: order.items.length,
+        },
+      });
+
+      return order;
     });
   }
 
@@ -177,7 +198,7 @@ export class OrderService {
       }));
 
       // 3. Atomically deduct inventory with concurrency protection & ledger movements
-      await StockLedgerService.atomicDeduct(
+      const movements = await StockLedgerService.atomicDeduct(
         tx,
         {
           storeId,
@@ -192,11 +213,25 @@ export class OrderService {
         deductItems
       );
 
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'ORDER_CONFIRMED',
+        entityType: 'ORDER',
+        entityId: order.id,
+        beforeJson: { status: 'DRAFT' },
+        afterJson: {
+          status: 'CONFIRMED',
+          orderNumber: order.orderNumber,
+          movementIds: movements.map((movement) => movement.id),
+        },
+      });
+
       return order;
     });
   }
 
-  async fulfillOrder(storeId: number, orderId: number) {
+  async fulfillOrder(storeId: number, orderId: number, userId?: number) {
     return this.prisma.$transaction(async (tx) => {
       const updateResult = await tx.order.updateMany({
         where: { id: orderId, storeId, status: 'CONFIRMED' },
@@ -214,10 +249,26 @@ export class OrderService {
         );
       }
 
-      return tx.order.findUniqueOrThrow({
+      const order = await tx.order.findUniqueOrThrow({
         where: { id: orderId },
         include: { items: true },
       });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: userId ?? null,
+        action: 'ORDER_FULFILLED',
+        entityType: 'ORDER',
+        entityId: order.id,
+        beforeJson: { status: 'CONFIRMED' },
+        afterJson: {
+          status: order.status,
+          orderNumber: order.orderNumber,
+          fulfilledAt: order.fulfilledAt,
+        },
+      });
+
+      return order;
     });
   }
 
@@ -275,6 +326,7 @@ export class OrderService {
       }
 
       // If order was CONFIRMED, atomically restock items into inventory
+      let restockMovements: Array<{ id: number; stockItemId: number; delta: number; beforeQuantity: number; afterQuantity: number }> = [];
       if (lockedOrder.status === 'CONFIRMED') {
         if (!defaultWarehouse) {
           throw new NotFoundError('Không tìm thấy kho mặc định để hoàn trả tồn kho');
@@ -285,7 +337,7 @@ export class OrderService {
           quantity: i.quantity,
         }));
 
-        await StockLedgerService.atomicAdd(
+        restockMovements = await StockLedgerService.atomicAdd(
           tx,
           {
             storeId,
@@ -301,10 +353,27 @@ export class OrderService {
         );
       }
 
-      return tx.order.findUniqueOrThrow({
+      const canceledOrder = await tx.order.findUniqueOrThrow({
         where: { id: order.id },
         include: { items: true },
       });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'ORDER_CANCELED',
+        entityType: 'ORDER',
+        entityId: order.id,
+        beforeJson: { status: lockedOrder.status },
+        afterJson: {
+          status: canceledOrder.status,
+          orderNumber: canceledOrder.orderNumber,
+          cancelReason: input.cancelReason,
+          restockMovementIds: restockMovements.map((movement) => movement.id),
+        },
+      });
+
+      return canceledOrder;
     });
   }
 

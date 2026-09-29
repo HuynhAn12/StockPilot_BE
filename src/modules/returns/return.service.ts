@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createReturnSchema } from './return.schema';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { PaginationQuery, buildPaginationResult } from '../../common/utils/pagination';
+import { AuditLogService } from '../../common/services/audit-log.service';
 
 export class ReturnService {
   private prisma: PrismaClient;
@@ -207,8 +208,9 @@ export class ReturnService {
       }
 
       // 3. Restock items into inventory atomically if restockable
+      let restockMovements: Array<{ id: number; stockItemId: number; delta: number; beforeQuantity: number; afterQuantity: number }> = [];
       if (restockList.length > 0) {
-        await StockLedgerService.atomicAdd(
+        restockMovements = await StockLedgerService.atomicAdd(
           tx,
           {
             storeId,
@@ -225,7 +227,7 @@ export class ReturnService {
       }
 
       // 4. Create ReturnOrder record
-      return tx.returnOrder.create({
+      const returnOrder = await tx.returnOrder.create({
         data: {
           storeId,
           orderId: order.id,
@@ -244,6 +246,23 @@ export class ReturnService {
           order: true,
         },
       });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'RETURN_CREATED',
+        entityType: 'RETURN',
+        entityId: returnOrder.id,
+        afterJson: {
+          returnId: returnOrder.id,
+          returnNumber: returnOrder.returnNumber,
+          orderId: order.id,
+          totalRefundAmount: returnOrder.totalRefundAmount,
+          restockMovementIds: restockMovements.map((movement) => movement.id),
+        },
+      });
+
+      return returnOrder;
     });
   }
 

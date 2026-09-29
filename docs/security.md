@@ -13,12 +13,18 @@
 - Persisted sessions store `refreshTokenHash`.
 - Refresh uses token rotation.
 - Reuse of a revoked refresh token is treated as a replay signal and revokes remaining active sessions for that user.
+- Password reset success revokes active refresh sessions for the user.
+- Disabling a staff user revokes active refresh sessions for that staff account.
 
 ## Passwords
 
 - Passwords are hashed before persistence.
 - Passwords must never be logged or returned.
 - Documentation and examples must not include real passwords.
+- Password reset tokens are generated with crypto-secure randomness.
+- Password reset tokens are stored hash-only in `password_reset_tokens`, expire after 30 minutes, and are single-use.
+- Forgot-password responses are generic to prevent email enumeration.
+- Production HTTP password-recovery responses must not expose raw reset tokens; non-production may expose a development reset token for test workflows.
 
 ## RBAC
 
@@ -45,7 +51,12 @@ HTTP inputs use Zod schemas in module schema files. Keep validation close to the
 `express-rate-limit` is enabled outside the test environment:
 
 - General `/api/` requests: 300 requests per 15 minutes
-- Auth login and refresh: 10 requests per minute
+- Auth login, refresh, forgot-password, and reset-password: 10 requests per minute
+
+## Account Mutation Controls
+
+- `PATCH /auth/me` allows only current-user profile fields that exist in the current `User` schema. It does not allow role, store, active status, email, password hash, token, or admin/system field changes.
+- `PATCH /users/:id` is limited to `SHOP_OWNER` callers and same-store `WAREHOUSE_STAFF` targets. Owner/admin targets, cross-store targets, role changes, store changes, email changes, and password changes are rejected or unsupported by schema.
 
 ## CORS
 

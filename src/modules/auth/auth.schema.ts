@@ -22,3 +22,18 @@ export const refreshSchema = z.object({
 export const logoutSchema = z.object({
   refreshToken: z.string().optional(),
 });
+
+export const updateProfileSchema = z.object({
+  fullName: z.string().min(2, 'Ho ten phai co it nhat 2 ky tu').optional(),
+}).strict().refine((input) => Object.keys(input).length > 0, {
+  message: 'At least one profile field is required',
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email('Email khong dung dinh dang'),
+}).strict();
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(32, 'Reset token khong hop le'),
+  newPassword: z.string().min(8, 'Mat khau phai co it nhat 8 ky tu'),
+}).strict();

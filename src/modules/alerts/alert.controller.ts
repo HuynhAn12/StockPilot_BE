@@ -24,9 +24,10 @@ export class AlertController {
   acknowledge = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
+      const userId = req.user!.userId;
       const { id } = alertActionParamsSchema.parse(req.params);
 
-      const result = await this.service.acknowledgeAlert(storeId, id);
+      const result = await this.service.acknowledgeAlert(storeId, id, userId);
       return res.status(200).json({
         success: true,
         data: result,
@@ -39,9 +40,10 @@ export class AlertController {
   resolve = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
+      const userId = req.user!.userId;
       const { id } = alertActionParamsSchema.parse(req.params);
 
-      const result = await this.service.resolveAlert(storeId, id);
+      const result = await this.service.resolveAlert(storeId, id, userId);
       return res.status(200).json({
         success: true,
         data: result,
