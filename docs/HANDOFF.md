@@ -78,7 +78,7 @@ Latest backend handoff evidence from the Database Design v1.1 alignment pass:
 - `npm ci`: passed, 0 vulnerabilities; dependency deprecation warnings only.
 - `npx prisma validate`: passed.
 - `npm run prisma:generate`: passed.
-- `npx prisma migrate deploy`: passed on `stockpilot_dev`; clean reset/deploy also passed on isolated `stockpilot_test`.
+- `npx prisma migrate deploy`: passed on the then-configured local development database; clean reset/deploy also passed on isolated `stockpilot_test`.
 - `npm run typecheck`: passed.
 - `npm run lint`: passed with 4 existing `no-console` warnings in `src/server.ts`.
 - `npm run build`: passed.
@@ -112,7 +112,7 @@ Latest local Sprint 1 backend closeout validation on 2026-09-29:
 - `npm run build`: passed.
 - `npm test`: 25 suites / 177 tests passed.
 - `npm run test:coverage`: passed, 25 suites / 177 tests.
-- `npm run prisma:migrate:deploy`: passed locally against `stockpilot_dev`.
+- `npm run prisma:migrate:deploy`: passed locally against canonical app schema `stockpilot` after baselining the existing v1.1 schema history.
 - `npm run prisma:migrate:deploy`: passed with `DATABASE_URL` overridden to guarded local `stockpilot_test`.
 - `npm run handoff:check`: passed; reported `HANDOFF_CHECK_OK` with expected local `.env` warning.
 - `npm audit`: passed, 0 vulnerabilities.

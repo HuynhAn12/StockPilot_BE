@@ -97,7 +97,7 @@ Latest verified evidence:
 - `npm run handoff:check`: passed with `HANDOFF_CHECK_OK` and the expected local `.env` warning.
 - `npm audit`: passed with 0 vulnerabilities.
 - GitHub Actions: passed for commit `009fc9e8b7229fb7e7fafef8337b93afcea77e84`
-- MySQL migration deploy: passed locally against `stockpilot_dev` and guarded local `stockpilot_test` with 13 migrations applied.
+- MySQL migration deploy: passed locally against canonical app schema `stockpilot` and guarded local test schema `stockpilot_test` with 13 migrations applied.
 
 The test suite includes unit tests, API integration tests, real MySQL integration tests, and concurrency tests. MySQL tests require `TEST_DATABASE_URL` to point at a disposable test database.
 

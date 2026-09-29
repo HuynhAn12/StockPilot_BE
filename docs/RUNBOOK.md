@@ -12,6 +12,12 @@ npm run dev
 
 Use MySQL 8.4 where possible. Keep `APP_TIMEZONE=Asia/Ho_Chi_Minh`.
 
+Local database convention:
+
+- Use `stockpilot` as the single app/development schema in `DATABASE_URL`.
+- Use `stockpilot_test` only for automated tests in `TEST_DATABASE_URL`.
+- Do not point destructive test commands at `stockpilot`.
+
 ## Clean Database Setup
 
 Create an empty MySQL schema, set `DATABASE_URL`, then run:

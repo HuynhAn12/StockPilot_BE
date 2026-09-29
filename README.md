@@ -45,6 +45,12 @@ Required production variables:
 
 `TEST_DATABASE_URL` must point to an isolated throwaway MySQL database used only for tests.
 
+Local database convention:
+
+- `DATABASE_URL` should point to the single app/development schema: `stockpilot`.
+- `TEST_DATABASE_URL` should point to the isolated test schema: `stockpilot_test`.
+- Do not run destructive tests against `stockpilot`.
+
 ## Setup
 
 ```bash

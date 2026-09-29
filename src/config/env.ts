@@ -115,7 +115,7 @@ if (!parsedEnv.success) {
 
 export const env = {
   ...parsedEnv.data,
-  DATABASE_URL: parsedEnv.data.DATABASE_URL || 'mysql://root:password@127.0.0.1:3306/stockpilot_dev',
+  DATABASE_URL: parsedEnv.data.DATABASE_URL || 'mysql://root:password@127.0.0.1:3306/stockpilot',
   JWT_SECRET: parsedEnv.data.JWT_SECRET || 'stockpilot-secret-jwt-key-2026',
   JWT_REFRESH_SECRET: parsedEnv.data.JWT_REFRESH_SECRET || 'stockpilot-secret-refresh-key-2026',
 };
