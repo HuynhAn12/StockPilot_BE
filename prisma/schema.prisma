@@ -13,6 +13,10 @@ enum Role {
   ADMIN
 }
 
+enum PaymentProvider {
+  PAYOS
+}
+
 enum MovementType {
   INFLOW
   OUTFLOW
@@ -138,6 +142,7 @@ model Store {
   auditLogs              AuditLog[]
   aiInteractions         AiInteraction[]
   idempotencyRequests    IdempotencyRequest[]
+  paymentConfigs         StorePaymentConfig[]
 
   @@map("stores")
 }
@@ -797,6 +802,25 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([entityType, entityId, createdAt])
   @@map("audit_logs")
+}
+
+model StorePaymentConfig {
+  id                   Int             @id @default(autoincrement())
+  storeId              Int
+  provider             PaymentProvider
+  clientIdEncrypted    String          @db.Text
+  apiKeyEncrypted      String          @db.Text
+  checksumKeyEncrypted String          @db.Text
+  isActive             Boolean         @default(true)
+  configuredAt         DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, provider])
+  @@index([storeId, isActive])
+  @@map("store_payment_configs")
 }
 
 model AiInteraction {

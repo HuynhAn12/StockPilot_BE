@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { Role } from '@prisma/client';
 import { ForbiddenError, UnauthenticatedError } from '../errors/app-error';
+import { env } from '../../config/env';
 
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -27,6 +28,14 @@ export function requireStoreScope(req: Request, res: Response, next: NextFunctio
 
   if (!req.user.storeId) {
     return next(new ForbiddenError('Account is not linked to a store'));
+  }
+
+  if (env.NODE_ENV === 'production' && !req.tenant) {
+    return next(new ForbiddenError('Store tenant hostname is required for shop APIs'));
+  }
+
+  if (req.tenant && req.tenant.storeId !== req.user.storeId) {
+    return next(new ForbiddenError('Authenticated user does not belong to the requested store tenant'));
   }
 
   return next();

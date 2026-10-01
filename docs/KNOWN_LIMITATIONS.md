@@ -32,6 +32,22 @@ The executable schema includes the v1.2 foundation tables, but the following wor
 
 These foundations should not be described as production-ready feature implementations until their business workflows, authorization paths, and operational tests are added.
 
+## POS And PayOS Runtime
+
+Phase 3A/3B adds tenant hostname resolution and encrypted per-store PayOS credential configuration only. It does not implement:
+
+- POS sale endpoints
+- payment records
+- PayOS payment-link or QR creation
+- PayOS webhook verification
+- receipt generation
+- refunds or financial corrections
+- order lifecycle changes
+- inventory behavior changes
+- custom store domains
+
+Legacy `Store.code` rows that contain underscores are supported by runtime compatibility lookup from the canonical hyphen tenant slug. Phase 3 does not rename those existing rows. A future optional data migration should first check for slug collisions such as `abc_def` versus `abc-def` before normalizing stored values.
+
 ## Production Evidence
 
 No production deployment, production traffic, backup/restore drill, or production observability evidence is included in this repository handoff.

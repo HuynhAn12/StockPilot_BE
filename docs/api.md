@@ -83,6 +83,9 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | GET | `/notifications` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ isRead?, page?, limit? }` | current user's notification page | No |
 | POST | `/notifications/:id/read` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | notification marked read | No |
 | POST | `/notifications/read-all` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | none | current user's unread count marked read | No |
+| GET | `/store/payment-config/payos` | Bearer | `SHOP_OWNER` | Yes | none | `{ provider, configured, active, clientIdMasked?, configuredAt?, updatedAt? }` | No |
+| PUT | `/store/payment-config/payos` | Bearer | `SHOP_OWNER` | Yes | `{ clientId, apiKey, checksumKey, isActive? }` | safe config status; no raw or encrypted secrets | No |
+| POST | `/store/payment-config/payos/deactivate` | Bearer | `SHOP_OWNER` | Yes | none | safe config status | No |
 | GET | `/orders` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters/pagination if supported | order list | No |
 | GET | `/orders/:id` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | order detail | No |
 | POST | `/orders` | Bearer | `SHOP_OWNER` | Yes | `{ customerName?, customerPhone?, customerAddress?, discountAmount?, taxAmount?, note?, items[] }` | created order | Yes |
@@ -136,8 +139,31 @@ Supported mutation endpoints accept `Idempotency-Key`.
 - Keep compatibility aliases documented while they remain mounted in `src/app.ts`.
 - Update this file whenever an endpoint, request shape, response shape, auth rule, role rule, or idempotency rule changes.
 
+## Tenant Hostnames
+
+Store tenant hostnames use `{storeCode}.stockpilot.vn`, where new `Store.code` values are canonical DNS-safe slugs. Hostname resolution identifies the requested tenant but is not authorization. Store-scoped APIs still require an authenticated user whose JWT/database user context belongs to the same `storeId`. Existing legacy underscore store codes remain supported by resolving the canonical hyphen hostname to the legacy stored code; the database value is not renamed by this compatibility layer.
+
+Production store API traffic is expected to preserve the store hostname all the way to the backend:
+
+```text
+https://{storeCode}.stockpilot.vn/api/v1/*
+```
+
+The reverse proxy may serve the frontend from `/` and forward `/api/*` to the Node backend on the same hostname. A centralized API hostname such as `api.stockpilot.vn` is reserved and is not treated as a store tenant.
+
+In production, store-scoped APIs require a resolved tenant hostname and fail closed without one.
+
+For local development and automated tests, localhost may omit a tenant hostname. Non-production localhost requests may also send `x-tenant-code` to exercise tenant resolution. Production must not trust arbitrary client tenant headers.
+
+## Store Payment Configuration
+
+`/store/payment-config/payos` is a Phase 3B configuration foundation for PayOS credentials. It does not create payment records, call PayOS, generate payment links, handle webhooks, create receipts, or change order/inventory lifecycle.
+
+`GET` returns only configuration status and a masked `clientId`. `PUT` stores encrypted credentials and returns the same safe status shape. Raw `apiKey`, raw `checksumKey`, and encrypted credential blobs are never returned.
+
 ## Account Management
 
+- `POST /auth/register` treats `storeCode` as the canonical tenant slug for `{storeCode}.stockpilot.vn`. It is normalized to lowercase, must be DNS-safe (`a-z`, `0-9`, `-`, no leading/trailing hyphen), and cannot use reserved platform hostnames such as `api`, `admin`, `www`, `app`, `auth`, or `static`.
 - `PATCH /auth/me` updates only current-user profile fields present in the executable `User` model. The current implementation allows `fullName`; it rejects attempts to mutate `id`, `storeId`, `role`, `isActive`, password hashes, tokens, or unknown fields.
 - Password recovery stores only a SHA-256 hash of the reset token in `password_reset_tokens`. Tokens expire after 30 minutes, are single-use, and successful reset revokes active refresh sessions for the user. Forgot-password responses are generic to avoid email enumeration; production HTTP responses do not expose raw reset tokens.
 - `PATCH /users/:id` is owner-only and targets only same-store `WAREHOUSE_STAFF` accounts. It does not update owner/admin accounts, roles, store assignment, email, password, or token fields. Setting `isActive=false` disables the staff user and revokes active refresh sessions.

@@ -77,12 +77,12 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     importExportService = new ImportExportService(prisma);
 
     // Setup dedicated isolated test tenant
-    const uniqueSuffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const uniqueSuffix = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
     const store = await prisma.store.create({
       data: {
         name: `Real Service Test Store ${uniqueSuffix}`,
-        code: `RST_STORE_${uniqueSuffix}`,
+        code: `rst-store-${uniqueSuffix}`,
       },
     });
     testStoreId = store.id;
@@ -409,7 +409,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       password: 'StrongPassword123!',
       fullName: 'Race Auth User',
       storeName: `Race Store ${Date.now()}`,
-      storeCode: `RACE_${Date.now()}`,
+      storeCode: `race-${Date.now()}`,
     });
 
     createdTestStoreIds.push(regResult.user.storeId!);
@@ -446,7 +446,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       password: 'StrongPassword123!',
       fullName: 'Same Second Auth User',
       storeName: `Same Second Store ${Date.now()}`,
-      storeCode: `SAME_${Date.now()}`,
+      storeCode: `same-${Date.now()}`,
     });
 
     createdTestStoreIds.push(regResult.user.storeId!);

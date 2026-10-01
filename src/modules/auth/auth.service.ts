@@ -13,6 +13,7 @@ import { ConflictError, UnauthenticatedError, ValidationError } from '../../comm
 import { z } from 'zod';
 import { registerSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, resetPasswordSchema } from './auth.schema';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { isValidTenantCode, normalizeTenantCode } from '../../common/utils/tenant-slug';
 
 export class AuthService {
   private prisma: PrismaClient;
@@ -22,6 +23,13 @@ export class AuthService {
   }
 
   async registerOwner(input: z.infer<typeof registerSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
+    const storeCode = normalizeTenantCode(input.storeCode);
+    if (!isValidTenantCode(storeCode)) {
+      throw new ValidationError(
+        'Store code must be a DNS-safe tenant slug and cannot use a reserved platform hostname'
+      );
+    }
+
     const existingUser = await this.prisma.user.findUnique({
       where: { email: input.email.toLowerCase().trim() },
     });
@@ -31,7 +39,7 @@ export class AuthService {
     }
 
     const existingStore = await this.prisma.store.findUnique({
-      where: { code: input.storeCode.toUpperCase().trim() },
+      where: { code: storeCode },
     });
 
     if (existingStore) {
@@ -45,7 +53,7 @@ export class AuthService {
       const store = await tx.store.create({
         data: {
           name: input.storeName.trim(),
-          code: input.storeCode.toUpperCase().trim(),
+          code: storeCode,
           phone: input.phone,
           address: input.address,
         },

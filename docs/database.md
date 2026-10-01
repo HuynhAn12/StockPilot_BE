@@ -12,11 +12,11 @@ The executable Prisma schema and immutable Prisma migration history are authorit
 ## Current Schema Alignment
 
 - Database Design v1.2 target physical table count: 30
-- Executable physical table count: 30
-- Executable Prisma model count: 30
-- Current migration count: 13
-- Latest migration: `20260929100000_v13_password_reset_tokens`
-- Current status: executable Prisma schema is aligned with Database Design v1.2 at the database/model foundation level.
+- Executable physical table count: 31
+- Executable Prisma model count: 31
+- Current migration count: 14
+- Latest migration: `20261001120000_v14_store_payment_configs`
+- Current status: executable Prisma schema extends Database Design v1.2 with the Phase 3B per-store payment configuration foundation.
 
 `password_reset_tokens` is part of the current schema, not an out-of-band add-on.
 
@@ -37,6 +37,7 @@ Account / Access / Config:
 - `auth_sessions`
 - `password_reset_tokens`
 - `system_settings`
+- `store_payment_configs`
 
 Catalog:
 
@@ -120,6 +121,15 @@ Password reset tokens:
 - `tokenHash` is unique and stores only the hash, not the raw token.
 - Index: `(userId, expiresAt)`
 - Foreign key: `userId -> users.id ON DELETE CASCADE`
+
+Payment provider configuration:
+
+- Table: `store_payment_configs`
+- Provider enum: `PAYOS`
+- Unique key: `(storeId, provider)`
+- Fields: `clientIdEncrypted`, `apiKeyEncrypted`, and `checksumKeyEncrypted`
+- Credentials are AES-256-GCM encrypted with `PAYMENT_CONFIG_ENCRYPTION_KEY`.
+- The table is a configuration foundation only. It is not a payment record, receipt table, webhook ledger, refund table, or POS subsystem.
 
 Catalog naming:
 

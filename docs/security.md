@@ -42,12 +42,23 @@ Store-scoped routes use explicit role checks where business authority differs fr
 - Inventory: `SHOP_OWNER` and `WAREHOUSE_STAFF` may read balances/movements and perform inflow, outflow, and audit adjustment.
 - Returns: `WAREHOUSE_STAFF` may read returns; only `SHOP_OWNER` may create returns.
 - Exports: operational product, inventory, and alert exports are available to store operators; owner-sensitive order, sales, returns, decision report, and pricing recommendation exports are `SHOP_OWNER` only.
+- Payment provider credentials: only `SHOP_OWNER` may configure PayOS credentials. `WAREHOUSE_STAFF` may eventually create POS payments, but must not read or configure PayOS credentials.
 
 ## Store Isolation
 
 Every tenant-owned resource must be authorized by `storeId`.
 
 Security rule: do not fetch or mutate a store-owned entity by primary key alone.
+
+Tenant hostnames use `{storeCode}.stockpilot.vn` and resolve through `Store.code`. Hostname resolution is context only; it does not authorize the request. Store APIs compare the resolved tenant store with the authenticated user's `storeId`. Unknown or inactive tenant hostnames fail closed. Legacy stored codes that used underscores can be reached by their canonical hyphen hostname through a compatibility lookup, but new registrations cannot create underscore codes.
+
+Production store APIs must be reached as `https://{storeCode}.stockpilot.vn/api/v1/*` with the original host preserved by the reverse proxy. Store-scoped routes fail closed in production if no tenant context is resolved.
+
+Reserved subdomains such as `www`, `api`, `admin`, `app`, `auth`, and `static` are not treated as store codes. Localhost development and tests may omit tenant hostnames. Outside production only, localhost may use `x-tenant-code` to exercise tenant resolution. Production ignores this as an authorization mechanism and must not trust arbitrary tenant headers.
+
+Registration normalizes `Store.code` to lowercase and rejects store codes that cannot be used as DNS subdomains or that collide with reserved platform hostnames.
+
+Legacy `Store.code` data is not renamed by Phase 3. A future optional data migration may normalize stored legacy values after collision analysis; the runtime compatibility lookup exists to avoid breaking existing tenants before that migration.
 
 ## Request Validation
 
@@ -93,6 +104,8 @@ Do not log:
 - database credentials
 - API keys
 - unnecessary customer PII
+
+Per-store payment credentials are stored in `store_payment_configs` and encrypted with AES-256-GCM using `PAYMENT_CONFIG_ENCRYPTION_KEY`. The key must be a 32-byte base64 value or 64-character hex value in production. Payment config APIs never return raw API keys, checksum keys, or encrypted credential blobs.
 
 ## AI Data Minimization
 

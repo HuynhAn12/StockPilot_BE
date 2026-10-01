@@ -8,6 +8,7 @@ import { requestIdMiddleware } from './common/middleware/request-id';
 import { sensitiveFieldsMiddleware } from './common/middleware/sensitive-fields';
 import { errorHandler } from './common/middleware/error-handler';
 import { requestLoggerMiddleware } from './common/middleware/request-logger';
+import { tenantResolverMiddleware } from './common/middleware/tenant';
 import { logger } from './common/logger';
 
 // Routers
@@ -28,6 +29,7 @@ import { pricingRouter } from './modules/pricing/pricing.routes';
 import { assistantRouter } from './modules/assistant/assistant.routes';
 import { stockTakeRouter } from './modules/stock-takes/stock-take.routes';
 import { notificationRouter } from './modules/notifications/notification.routes';
+import { storePaymentConfigRouter } from './modules/store-payment-config/store-payment-config.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -123,6 +125,8 @@ export function createApp(): Express {
     }
   });
 
+  app.use(tenantResolverMiddleware);
+
   // Module routes
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/users', userRouter);
@@ -143,6 +147,7 @@ export function createApp(): Express {
   app.use('/api/v1/assistant', assistantRouter);
   app.use('/api/v1/stock-takes', stockTakeRouter);
   app.use('/api/v1/notifications', notificationRouter);
+  app.use('/api/v1/store/payment-config', storePaymentConfigRouter);
 
   // Centralized Error Handling
   app.use(errorHandler);

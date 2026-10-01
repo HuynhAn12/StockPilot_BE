@@ -34,10 +34,10 @@ This document describes the repository as inspected from the working tree. It is
 ## Database State
 
 - Target database design: Database Design v1.2
-- Executable physical table count: 30
-- Executable Prisma model count: 30
-- Migration count: 13
-- Latest migration: `20260929100000_v13_password_reset_tokens`
+- Executable physical table count: 31
+- Executable Prisma model count: 31
+- Migration count: 14
+- Latest migration: `20261001120000_v14_store_payment_configs`
 - Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql` is reference only
 
 The executable schema includes the v1.2 foundation models:
@@ -49,6 +49,7 @@ The executable schema includes the v1.2 foundation models:
 - `AiInteraction`
 - `SystemSetting`
 - `PasswordResetToken`
+- `StorePaymentConfig`
 
 ## Implemented Modules
 
@@ -71,6 +72,8 @@ The executable schema includes the v1.2 foundation models:
 - Alerts
 - Pricing recommendations
 - Assistant explanations
+- Phase 3A tenant hostname resolution for `{storeCode}.stockpilot.vn`
+- Phase 3B owner-only PayOS credential configuration foundation
 
 ## Deferred Features
 
@@ -82,6 +85,7 @@ The schema foundations exist, but these workflows are not implemented as complet
 - AI conversation history UI/API
 - Large-catalog export streaming
 - Production monitoring, backup, and restore drills
+- POS sale workflow, payment records, PayOS payment-link creation, webhook confirmation, refunds, and receipts
 
 ## Test State
 

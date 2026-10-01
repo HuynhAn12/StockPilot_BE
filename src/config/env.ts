@@ -47,6 +47,28 @@ function isStrongProductionSecret(value?: string): boolean {
   return !/(change-me|changeme|default|stockpilot-secret|secret-key|password|example)/i.test(value);
 }
 
+export function isValidAes256Key(value?: string): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim();
+  if (/^[a-f0-9]{64}$/i.test(normalized)) {
+    return true;
+  }
+
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized) || normalized.length % 4 !== 0) {
+    return false;
+  }
+
+  try {
+    const decoded = Buffer.from(normalized, 'base64');
+    return decoded.length === 32 && decoded.toString('base64') === normalized;
+  } catch {
+    return false;
+  }
+}
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -57,6 +79,8 @@ const envSchema = z
     JWT_REFRESH_SECRET: z.string().optional(),
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
+    TENANT_ROOT_DOMAIN: z.string().default('stockpilot.vn'),
+    PAYMENT_CONFIG_ENCRYPTION_KEY: z.string().optional(),
     APP_TIMEZONE: z.string().default('Asia/Ho_Chi_Minh').refine(isValidTimeZone, {
       message: 'APP_TIMEZONE must be a valid IANA timezone name',
     }),
@@ -97,6 +121,14 @@ const envSchema = z
     message: 'FATAL: Production JWT_REFRESH_SECRET must be at least 32 characters and cannot be a placeholder/default.',
     path: ['JWT_REFRESH_SECRET'],
   })
+  .refine((data) => data.NODE_ENV !== 'production' || isValidAes256Key(data.PAYMENT_CONFIG_ENCRYPTION_KEY), {
+    message: 'FATAL: Production PAYMENT_CONFIG_ENCRYPTION_KEY must be a 32-byte base64 value or 64-character hex value.',
+    path: ['PAYMENT_CONFIG_ENCRYPTION_KEY'],
+  })
+  .refine((data) => !data.PAYMENT_CONFIG_ENCRYPTION_KEY || isValidAes256Key(data.PAYMENT_CONFIG_ENCRYPTION_KEY), {
+    message: 'PAYMENT_CONFIG_ENCRYPTION_KEY must be a 32-byte base64 value or 64-character hex value.',
+    path: ['PAYMENT_CONFIG_ENCRYPTION_KEY'],
+  })
   .refine(
     (data) => data.NODE_ENV !== 'production' || !data.CORS_ORIGIN.split(',').map((origin) => origin.trim()).includes('*'),
     {
@@ -118,4 +150,7 @@ export const env = {
   DATABASE_URL: parsedEnv.data.DATABASE_URL || 'mysql://root:password@127.0.0.1:3306/stockpilot',
   JWT_SECRET: parsedEnv.data.JWT_SECRET || 'stockpilot-secret-jwt-key-2026',
   JWT_REFRESH_SECRET: parsedEnv.data.JWT_REFRESH_SECRET || 'stockpilot-secret-refresh-key-2026',
+  PAYMENT_CONFIG_ENCRYPTION_KEY:
+    parsedEnv.data.PAYMENT_CONFIG_ENCRYPTION_KEY ||
+    '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
 };

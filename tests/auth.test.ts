@@ -1,6 +1,6 @@
 import { AuthService } from '../src/modules/auth/auth.service';
 import { prisma } from '../src/config/db';
-import { ConflictError, UnauthenticatedError } from '../src/common/errors/app-error';
+import { ConflictError, UnauthenticatedError, ValidationError } from '../src/common/errors/app-error';
 import { generateRefreshToken } from '../src/common/utils/jwt';
 
 jest.mock('../src/config/db', () => ({
@@ -45,7 +45,7 @@ describe('AuthService - Shop Owner Registration, Login & Session Management', ()
     (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.store.findUnique as jest.Mock).mockResolvedValue(null);
 
-    const mockStore = { id: 1, name: 'Cửa hàng Test', code: 'STORE_TEST' };
+    const mockStore = { id: 1, name: 'Cửa hàng Test', code: 'store-test' };
     const mockWh = { id: 10, storeId: 1, name: 'Kho Mặc Định', isDefault: true };
     const mockUser = { id: 100, email: 'owner@test.com', fullName: 'Chủ Shop', role: 'SHOP_OWNER', storeId: 1 };
 
@@ -59,16 +59,47 @@ describe('AuthService - Shop Owner Registration, Login & Session Management', ()
       email: 'owner@test.com',
       password: 'password123',
       storeName: 'Cửa hàng Test',
-      storeCode: 'STORE_TEST',
+      storeCode: 'Store-Test',
     });
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.store.findUnique).toHaveBeenCalledWith({ where: { code: 'store-test' } });
+    expect(prisma.store.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: 'store-test' }),
+      })
+    );
     expect(prisma.authSession.create).toHaveBeenCalledTimes(1);
     expect(result.user.role).toBe('SHOP_OWNER');
-    expect(result.store.code).toBe('STORE_TEST');
+    expect(result.store.code).toBe('store-test');
     expect(result.warehouse.isDefault).toBe(true);
     expect(result.tokens.accessToken).toBeDefined();
     expect(result.tokens.refreshToken).toBeDefined();
+  });
+
+  it('rejects tenant store codes that are not DNS-safe or are reserved platform hostnames', async () => {
+    await expect(
+      authService.registerOwner({
+        fullName: 'Chá»§ Shop',
+        email: 'owner@test.com',
+        password: 'password123',
+        storeName: 'Cá»­a hÃ ng Test',
+        storeCode: 'shop_abc',
+      })
+    ).rejects.toThrow(ValidationError);
+
+    await expect(
+      authService.registerOwner({
+        fullName: 'Chá»§ Shop',
+        email: 'owner@test.com',
+        password: 'password123',
+        storeName: 'Cá»­a hÃ ng Test',
+        storeCode: 'api',
+      })
+    ).rejects.toThrow(ValidationError);
+
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(prisma.store.create).not.toHaveBeenCalled();
   });
 
   it('phải ném lỗi ConflictError nếu email đã tồn tại', async () => {
@@ -80,7 +111,7 @@ describe('AuthService - Shop Owner Registration, Login & Session Management', ()
         email: 'owner@test.com',
         password: 'password123',
         storeName: 'Cửa hàng Test',
-        storeCode: 'STORE_TEST',
+        storeCode: 'store-test',
       })
     ).rejects.toThrow(ConflictError);
   });
