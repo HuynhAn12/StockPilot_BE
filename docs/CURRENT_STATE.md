@@ -58,11 +58,11 @@ The executable schema includes the v1.2 foundation models:
 - Staff update and disable
 - Categories
 - Products and stock items
-- Inventory balances and stock ledger
-- Orders
-- Returns
+- Inventory balances and stock ledger with explicit owner/staff inventory RBAC
+- Orders with explicit owner/staff RBAC split for read, create, confirm, fulfill, and cancel
+- Returns with owner-only creation and owner/staff read access
 - Analytics dashboard
-- Import / export
+- Import / export with role-gated CSV exports for owner-sensitive business data
 - Historical sales import and listing
 - Daily sales summary services
 - StockTake workflow

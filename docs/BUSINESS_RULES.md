@@ -24,6 +24,10 @@ Inventory balance changes and stock movements must be consistent in the same tra
 
 Product CRUD must not directly edit stock quantity.
 
+### INV-006
+
+`SHOP_OWNER` and `WAREHOUSE_STAFF` may perform operational inventory inflow, outflow, and manual audit adjustment through store-scoped inventory APIs. Manual audit adjustment must validate non-negative counted quantities, create `StockMovement` rows, record the actor, remain transaction-safe, and stay scoped to the authenticated store.
+
 ## StockTake
 
 ### STK-001
@@ -122,6 +126,10 @@ Confirmed orders deduct inventory; draft orders do not reserve stock in the curr
 
 Canceled confirmed orders restock through the inventory ledger. Fulfilled orders must go through returns instead of cancellation.
 
+### ORD-006
+
+Order read and fulfillment are available to `SHOP_OWNER` and `WAREHOUSE_STAFF`. Order creation, confirmation, and cancellation are business-authority actions limited to `SHOP_OWNER`.
+
 ## Returns
 
 ### RET-001
@@ -139,6 +147,10 @@ Restockable returns create inventory ledger movements.
 ### RET-004
 
 Non-restockable returns do not reverse COGS in the current MVP.
+
+### RET-005
+
+Return listing is available to `SHOP_OWNER` and `WAREHOUSE_STAFF`. Return creation is limited to `SHOP_OWNER` because the current implementation calculates refunds, increments refunded amounts, creates a completed return, and may restock inventory atomically.
 
 ## Money And Accounting
 
@@ -189,6 +201,10 @@ Pricing recommendation approval is serialized and guards stale current prices.
 ### PRI-003
 
 Warehouse staff must not receive sensitive cost or margin fields.
+
+### PRI-004
+
+Exports that expose owner-sensitive revenue, refund, cost, margin, or pricing decision data are limited to `SHOP_OWNER`. Operational exports may be available to `WAREHOUSE_STAFF` only when sensitive fields are omitted or absent.
 
 ## Notifications
 

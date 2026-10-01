@@ -68,11 +68,11 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | GET | `/products/:id` | Bearer | Store user | Yes | path `id` | product detail | No |
 | POST | `/products` | Bearer | `SHOP_OWNER` | Yes | `{ categoryId?, name, code, description?, items[] }` | created product with stock items | No |
 | PUT | `/products/:id` | Bearer | `SHOP_OWNER` | Yes | `{ categoryId?, name?, description?, isActive? }` | updated product | No |
-| GET | `/inventory/balances` | Bearer | Store user | Yes | query filters/pagination if supported | balances | No |
-| GET | `/inventory/movements` | Bearer | Store user | Yes | query filters/pagination if supported | stock movements | No |
-| POST | `/inventory/inflow` | Bearer | Store user | Yes | `{ warehouseId?, items: [{ stockItemId, quantity }], referenceId?, note? }` | ledger mutation result | Yes |
-| POST | `/inventory/outflow` | Bearer | Store user | Yes | `{ warehouseId?, items: [{ stockItemId, quantity }], referenceId?, note? }` | ledger mutation result | Yes |
-| POST | `/inventory/audit` | Bearer | Store user | Yes | `{ warehouseId?, items: [{ stockItemId, countedQuantity }], referenceId?, note? }` | audit adjustment result | Yes |
+| GET | `/inventory/balances` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters/pagination if supported | balances | No |
+| GET | `/inventory/movements` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters/pagination if supported | stock movements | No |
+| POST | `/inventory/inflow` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ warehouseId?, items: [{ stockItemId, quantity }], referenceId?, note? }` | ledger mutation result | Yes |
+| POST | `/inventory/outflow` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ warehouseId?, items: [{ stockItemId, quantity }], referenceId?, note? }` | ledger mutation result | Yes |
+| POST | `/inventory/audit` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ warehouseId?, items: [{ stockItemId, countedQuantity }], referenceId?, note? }` | audit adjustment result | Yes |
 | POST | `/stock-takes` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ warehouseId, note? }` | created DRAFT stock take | Yes |
 | GET | `/stock-takes` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ status?, warehouseId?, page?, limit? }` | stock take page | No |
 | GET | `/stock-takes/:id` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | stock take detail with items | No |
@@ -83,25 +83,25 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | GET | `/notifications` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ isRead?, page?, limit? }` | current user's notification page | No |
 | POST | `/notifications/:id/read` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | notification marked read | No |
 | POST | `/notifications/read-all` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | none | current user's unread count marked read | No |
-| GET | `/orders` | Bearer | Store user | Yes | query filters/pagination if supported | order list | No |
-| GET | `/orders/:id` | Bearer | Store user | Yes | path `id` | order detail | No |
-| POST | `/orders` | Bearer | Store user | Yes | `{ customerName?, customerPhone?, customerAddress?, discountAmount?, taxAmount?, note?, items[] }` | created order | Yes |
-| POST | `/orders/:id/confirm` | Bearer | Store user | Yes | path `id` | confirmed order and inventory result | Yes |
-| POST | `/orders/:id/fulfill` | Bearer | Store user | Yes | path `id` | fulfilled order | No |
-| POST | `/orders/:id/cancel` | Bearer | Store user | Yes | `{ cancelReason }` | canceled order and restock result | Yes |
-| GET | `/returns` | Bearer | Store user | Yes | query filters/pagination if supported | return list | No |
-| POST | `/returns` | Bearer | Store user | Yes | `{ orderId, reason, items: [{ orderItemId, quantity, isRestockable?, note? }] }` | created return | Yes |
+| GET | `/orders` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters/pagination if supported | order list | No |
+| GET | `/orders/:id` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | order detail | No |
+| POST | `/orders` | Bearer | `SHOP_OWNER` | Yes | `{ customerName?, customerPhone?, customerAddress?, discountAmount?, taxAmount?, note?, items[] }` | created order | Yes |
+| POST | `/orders/:id/confirm` | Bearer | `SHOP_OWNER` | Yes | path `id` | confirmed order and inventory result | Yes |
+| POST | `/orders/:id/fulfill` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | fulfilled order | No |
+| POST | `/orders/:id/cancel` | Bearer | `SHOP_OWNER` | Yes | `{ cancelReason }` | canceled order and restock result | Yes |
+| GET | `/returns` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters/pagination if supported | return list | No |
+| POST | `/returns` | Bearer | `SHOP_OWNER` | Yes | `{ orderId, reason, items: [{ orderItemId, quantity, isRestockable?, note? }] }` | created return | Yes |
 | GET | `/analytics/dashboard` | Bearer | `SHOP_OWNER` | Yes | query timeframe if supported | dashboard data | No |
 | POST | `/import/preview` | Bearer | `SHOP_OWNER` | Yes | `{ mode?, warehouseId?, items[] }` | preview job and row validation | No |
 | POST | `/import/commit` | Bearer | `SHOP_OWNER` | Yes | `{ jobId }` | import commit result | Yes |
-| GET | `/export/products` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/inventory` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/orders` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/sales` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/returns` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/decision-report` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/alerts` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
-| GET | `/export/recommendations` | Bearer | Store user | Yes | query filters if supported | CSV response | No |
+| GET | `/export/products` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters if supported | CSV response; omits cost price for warehouse staff | No |
+| GET | `/export/inventory` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters if supported | CSV response; omits cost price for warehouse staff | No |
+| GET | `/export/orders` | Bearer | `SHOP_OWNER` | Yes | query filters if supported | CSV response | No |
+| GET | `/export/sales` | Bearer | `SHOP_OWNER` | Yes | query filters if supported | CSV response | No |
+| GET | `/export/returns` | Bearer | `SHOP_OWNER` | Yes | query filters if supported | CSV response | No |
+| GET | `/export/decision-report` | Bearer | `SHOP_OWNER` | Yes | query filters if supported | CSV response | No |
+| GET | `/export/alerts` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | query filters if supported | CSV response | No |
+| GET | `/export/recommendations` | Bearer | `SHOP_OWNER` | Yes | query filters if supported | CSV response | No |
 | POST | `/historical-sales/preview` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ rows: [{ externalOrderId?, sku, quantity, unitPrice, costPrice?, unitCost?, soldAt, source? }] }` | preview job and validation | No |
 | POST | `/historical-sales/commit` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ jobId }` | commit result | Yes |
 | GET | `/historical-sales` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ sku?, stockItemId?, source?, from?, to?, page?, limit? }` | historical sales page | No |

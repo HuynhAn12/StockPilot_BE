@@ -36,6 +36,13 @@ Implemented roles:
 
 Store-scoped APIs are for store users. `ADMIN` must not operate store data through store-scoped APIs unless a dedicated admin API is implemented and documented.
 
+Store-scoped routes use explicit role checks where business authority differs from operational execution:
+
+- Orders: `WAREHOUSE_STAFF` may read and fulfill; only `SHOP_OWNER` may create, confirm, or cancel.
+- Inventory: `SHOP_OWNER` and `WAREHOUSE_STAFF` may read balances/movements and perform inflow, outflow, and audit adjustment.
+- Returns: `WAREHOUSE_STAFF` may read returns; only `SHOP_OWNER` may create returns.
+- Exports: operational product, inventory, and alert exports are available to store operators; owner-sensitive order, sales, returns, decision report, and pricing recommendation exports are `SHOP_OWNER` only.
+
 ## Store Isolation
 
 Every tenant-owned resource must be authorized by `storeId`.
@@ -71,6 +78,8 @@ Request IDs are assigned for traceability.
 ## Sensitive Fields
 
 The sensitive fields middleware masks cost and margin fields for `WAREHOUSE_STAFF` responses where applicable.
+
+CSV exports do not pass through JSON response masking. Export routes therefore enforce role-specific access, and product/inventory CSV generation omits cost price for `WAREHOUSE_STAFF`.
 
 ## Secrets
 
