@@ -34,16 +34,14 @@ These foundations should not be described as production-ready feature implementa
 
 ## POS And PayOS Runtime
 
-Phase 3A/3B adds tenant hostname resolution and encrypted per-store PayOS credential configuration only. It does not implement:
+Phase 3A/3B adds tenant hostname resolution and encrypted per-store PayOS credential configuration. Phase 4 adds a cash POS sale foundation. It does not implement:
 
-- POS sale endpoints
-- payment records
 - PayOS payment-link or QR creation
 - PayOS webhook verification
-- receipt generation
+- receipt PDF generation or printer integration
 - refunds or financial corrections
-- order lifecycle changes
-- inventory behavior changes
+- PayOS-driven order lifecycle settlement
+- deferred-payment inventory timing for pending online payments
 - custom store domains
 
 Legacy `Store.code` rows that contain underscores are supported by runtime compatibility lookup from the canonical hyphen tenant slug. Phase 3 does not rename those existing rows. A future optional data migration should first check for slug collisions such as `abc_def` versus `abc-def` before normalizing stored values.

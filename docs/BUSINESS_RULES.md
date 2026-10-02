@@ -150,6 +150,14 @@ Order read and fulfillment are available to `SHOP_OWNER` and `WAREHOUSE_STAFF`. 
 
 Generic order-management permissions remain separate from future POS sale permissions. Allowing `WAREHOUSE_STAFF` to operate future POS sales must not reopen generic `POST /orders`, `POST /orders/:id/confirm`, or `POST /orders/:id/cancel`.
 
+### ORD-008
+
+POS cash sales are a dedicated use case. `SHOP_OWNER` and `WAREHOUSE_STAFF` may create POS cash sales through `/pos/sales`; this does not grant warehouse staff generic order creation, confirmation, or cancellation authority.
+
+### ORD-009
+
+Cash POS sale creation is transaction-safe: it creates a `DRAFT` `Order` with sale-time `OrderItem` snapshots, creates a `PAID` cash `Payment`, confirms the order, deducts inventory once through the stock ledger, fulfills the order, and writes audit rows.
+
 ## Returns
 
 ### RET-001
@@ -205,6 +213,14 @@ Payment provider credentials are store-owned configuration, not order payment re
 ### PAY-003
 
 The Phase 3B PayOS configuration foundation does not call PayOS, create payment links, trust redirects, process webhooks, create receipts, or mutate order/inventory state.
+
+### PAY-004
+
+Payment records are separate from orders. They are store-scoped, order-linked, and use `DECIMAL(15,2)` amounts.
+
+### PAY-005
+
+Cash POS payments are created as `PAID` in the same transaction as the POS sale. PayOS link creation and webhook settlement are deferred and must not infer payment success from frontend redirects.
 
 ## Import And Idempotency
 

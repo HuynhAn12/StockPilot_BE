@@ -14,7 +14,27 @@ enum Role {
 }
 
 enum PaymentProvider {
+  CASH
   PAYOS
+}
+
+enum PaymentConfigProvider {
+  PAYOS
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  PAYOS
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELED
+  REFUNDED
+  PARTIALLY_REFUNDED
 }
 
 enum MovementType {
@@ -126,6 +146,7 @@ model Store {
   stockMovements         StockMovement[]
   orders                 Order[]
   orderItems             OrderItem[]
+  payments               Payment[]
   returnOrders           ReturnOrder[]
   returnItems            ReturnItem[]
   importJobs             ImportJob[]
@@ -375,11 +396,38 @@ model Order {
   createdBy User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
   items     OrderItem[]
   returns   ReturnOrder[]
+  payments  Payment[]
 
   @@unique([storeId, orderNumber])
   @@unique([storeId, clientRequestKey])
   @@index([storeId, status, createdAt])
   @@map("orders")
+}
+
+model Payment {
+  id                Int             @id @default(autoincrement())
+  storeId           Int
+  orderId           Int
+  provider          PaymentProvider
+  method            PaymentMethod
+  amount            Decimal         @db.Decimal(15, 2)
+  currency          String          @default("VND") @db.VarChar(3)
+  status            PaymentStatus   @default(PENDING)
+  providerReference String?         @db.VarChar(191)
+  clientRequestKey  String?         @db.VarChar(200)
+  metadataJson      Json?
+  paidAt            DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, clientRequestKey])
+  @@unique([storeId, provider, providerReference])
+  @@index([storeId, orderId])
+  @@index([storeId, status, createdAt])
+  @@map("payments")
 }
 
 model OrderItem {
@@ -807,7 +855,7 @@ model AuditLog {
 model StorePaymentConfig {
   id                   Int             @id @default(autoincrement())
   storeId              Int
-  provider             PaymentProvider
+  provider             PaymentConfigProvider
   clientIdEncrypted    String          @db.Text
   apiKeyEncrypted      String          @db.Text
   checksumKeyEncrypted String          @db.Text

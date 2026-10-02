@@ -80,6 +80,7 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | PUT | `/stock-takes/:id/counts` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ items: [{ stockItemId, countedQuantity, note? }] }` | updated stock take detail | Yes |
 | POST | `/stock-takes/:id/complete` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | COMPLETED stock take with adjustment movement links | Yes |
 | POST | `/stock-takes/:id/cancel` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | CANCELED stock take | Yes |
+| POST | `/pos/sales` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ warehouseId?, customerName?, customerPhone?, discountAmount?, taxAmount?, note?, paymentMethod: "CASH", items: [{ stockItemId, quantity }] }` | fulfilled order, paid cash payment, receipt-ready data | Yes |
 | GET | `/notifications` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ isRead?, page?, limit? }` | current user's notification page | No |
 | POST | `/notifications/:id/read` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | notification marked read | No |
 | POST | `/notifications/read-all` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | none | current user's unread count marked read | No |
@@ -160,6 +161,18 @@ For local development and automated tests, localhost may omit a tenant hostname.
 `/store/payment-config/payos` is a Phase 3B configuration foundation for PayOS credentials. It does not create payment records, call PayOS, generate payment links, handle webhooks, create receipts, or change order/inventory lifecycle.
 
 `GET` returns only configuration status and a masked `clientId`. `PUT` stores encrypted credentials and returns the same safe status shape. Raw `apiKey`, raw `checksumKey`, and encrypted credential blobs are never returned.
+
+## POS Cash Sales
+
+`POST /pos/sales` is a dedicated in-store cash sale endpoint for `SHOP_OWNER` and `WAREHOUSE_STAFF`.
+
+- It does not reuse or weaken generic `POST /orders` permissions.
+- It creates a `DRAFT` `Order`, records a `PAID` cash `Payment`, confirms the order, deducts inventory, then fulfills the order in one transaction.
+- It deducts inventory once during POS sale creation through the stock ledger.
+- It creates a separate `Payment` row with `provider = CASH`, `method = CASH`, and `status = PAID`.
+- It returns receipt-ready structured data but does not generate PDF receipts or interact with printers.
+- It supports `Idempotency-Key`; completed identical replays return the stored idempotent response and do not rerun the sale.
+- PayOS payment-link creation and webhook settlement are not implemented by this cash endpoint.
 
 ## Account Management
 

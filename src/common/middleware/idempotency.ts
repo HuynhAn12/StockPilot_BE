@@ -234,6 +234,74 @@ async function recoverCommittedOutcome(
       : null;
   }
 
+  if (operation === 'POS_SALE_CREATE') {
+    const order = await prisma.order.findFirst({
+      where: { storeId, clientRequestKey: effectKey },
+      include: { items: true, payments: { orderBy: { id: 'asc' }, take: 1 } },
+    });
+    if (!order || order.payments.length === 0) return null;
+
+    const [store, movement] = await Promise.all([
+      prisma.store.findFirst({
+        where: { id: storeId, isActive: true },
+        select: { id: true, name: true, code: true, phone: true, address: true },
+      }),
+      prisma.stockMovement.findFirst({
+        where: { storeId, referenceType: 'POS_SALE', referenceId: order.orderNumber },
+        orderBy: { id: 'asc' },
+      }),
+    ]);
+    if (!store || !movement) return null;
+
+    const warehouse = await prisma.warehouse.findFirst({
+      where: { id: movement.warehouseId, storeId },
+    });
+    if (!warehouse) return null;
+
+    const payment = order.payments[0];
+    const orderWithoutPayments = { ...order };
+    delete (orderWithoutPayments as any).payments;
+
+    return {
+      statusCode: 201,
+      responseJson: {
+        success: true,
+        message: 'POS sale recovered',
+        data: {
+          order: orderWithoutPayments,
+          payment,
+          warehouse,
+          receipt: {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            store,
+            soldAt: order.fulfilledAt,
+            items: order.items.map((item: any) => ({
+              stockItemId: item.stockItemId,
+              sku: item.skuSnapshot,
+              name: item.nameSnapshot,
+              quantity: item.quantity,
+              unitPrice: item.unitPriceSnapshot,
+              subtotal: item.subtotal,
+            })),
+            subtotal: order.subtotalAmount,
+            discount: order.discountAmount,
+            tax: order.taxAmount,
+            total: order.totalAmount,
+            payment: {
+              id: payment.id,
+              method: payment.method,
+              status: payment.status,
+              amount: payment.amount,
+              currency: payment.currency,
+              paidAt: payment.paidAt,
+            },
+          },
+        },
+      },
+    };
+  }
+
   if (operation === 'RETURN_CREATE') {
     const returnOrder = await prisma.returnOrder.findFirst({
       where: { storeId, clientRequestKey: effectKey },

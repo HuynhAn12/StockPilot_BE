@@ -30,6 +30,7 @@ The current backend is one deployable Node.js process. There is no implemented m
 - `products`: product and stock item management
 - `inventory`: inflow, outflow, audit adjustment, balances, movements
 - `orders`: order creation, confirmation, fulfillment, cancellation
+- `pos`: cash POS sale creation using existing order, inventory ledger, payment, and audit tables
 - `returns`: return creation and listing
 - `analytics`: dashboard summaries
 - `import-export`: product import preview/commit and CSV exports
@@ -54,7 +55,7 @@ Store-scoped APIs derive store access from authenticated user context and RBAC m
 
 Tenant hostnames are resolved before module routes. Production requests for store-scoped APIs must resolve `{storeCode}.stockpilot.vn` from `Store.code`, where new codes are lowercase DNS-safe tenant slugs and platform-reserved hostnames are rejected. Non-production may use `x-tenant-code` for local testing only. The resolved tenant must match the authenticated user's `storeId`; platform `ADMIN` users do not receive store-scoped access through tenant routes. Legacy stored codes that used underscores remain resolvable through a compatibility lookup from the canonical hyphen slug; this does not rename database records.
 
-Per-store payment provider credentials are stored through a dedicated store payment configuration module. The current foundation supports owner-managed PayOS configuration metadata and encrypted credentials only; it does not create payment records, payment links, webhooks, POS sales, receipt generation, refunds, or order lifecycle changes.
+Per-store payment provider credentials are stored through a dedicated store payment configuration module. POS cash sales use the existing `Order` lifecycle and create store-scoped `Payment` records. The current PayOS configuration foundation does not create PayOS links, process webhooks, generate receipt PDFs, perform online refunds, or change order/inventory state.
 
 ## Decision Engine
 

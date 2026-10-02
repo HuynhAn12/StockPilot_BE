@@ -34,10 +34,10 @@ This document describes the repository as inspected from the working tree. It is
 ## Database State
 
 - Target database design: Database Design v1.2
-- Executable physical table count: 31
-- Executable Prisma model count: 31
-- Migration count: 14
-- Latest migration: `20261001120000_v14_store_payment_configs`
+- Executable physical table count: 32
+- Executable Prisma model count: 32
+- Migration count: 15
+- Latest migration: `20261002120000_v15_payments_pos_foundation`
 - Consolidated target SQL: `prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql` is reference only
 
 The executable schema includes the v1.2 foundation models:
@@ -50,6 +50,7 @@ The executable schema includes the v1.2 foundation models:
 - `SystemSetting`
 - `PasswordResetToken`
 - `StorePaymentConfig`
+- `Payment`
 
 ## Implemented Modules
 
@@ -75,6 +76,7 @@ The executable schema includes the v1.2 foundation models:
 - Phase 3A tenant hostname resolution for `{storeCode}.stockpilot.vn`
 - Phase 3B owner-only PayOS credential configuration foundation
 - High-value audit logging for auth, users, products, categories, inventory, orders, returns, stock takes, pricing decisions, alerts, imports, and payment configuration changes. Category and StockTake cancel audit writes are transaction-bound with their business mutations.
+- Phase 4 POS cash sale foundation: `/api/v1/pos/sales` atomically creates receipt-ready orders through `DRAFT -> CONFIRMED -> FULFILLED`, deducts inventory once, records a `PAID` cash `Payment`, and writes order/POS/payment audit events.
 
 ## Deferred Features
 
@@ -86,7 +88,7 @@ The schema foundations exist, but these workflows are not implemented as complet
 - AI conversation history UI/API
 - Large-catalog export streaming
 - Production monitoring, backup, and restore drills
-- POS sale workflow, payment records, PayOS payment-link creation, webhook confirmation, refunds, and receipts
+- PayOS payment-link creation, webhook confirmation, online refunds, receipt PDF/printing, and payment correction workflows
 
 ## Test State
 
@@ -98,7 +100,7 @@ Latest verified evidence:
 - `npm run lint`: passed
 - `npm run build`: passed
 - Focused Sprint 1 closeout tests: `npm test -- tests/auth.test.ts tests/api-integration.test.ts tests/order-flow.test.ts` passed, 3 suites / 37 tests.
-- `npm test`: 29 suites / 213 tests passed, including unit, API integration, real MySQL integration, and concurrency tests.
+- `npm test`: 31 suites / 219 tests passed, including unit, API integration, real MySQL integration, and concurrency tests.
 - `npm run test:coverage`: latest evidence is 25 suites / 177 tests from the Sprint 1 closeout; not rerun in the latest audit coverage pass.
 - `npm run handoff:check`: passed with `HANDOFF_CHECK_OK` and the expected local `.env` warning.
 - `npm audit`: passed with 0 vulnerabilities.

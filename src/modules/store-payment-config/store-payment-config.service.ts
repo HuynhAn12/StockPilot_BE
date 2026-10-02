@@ -1,4 +1,4 @@
-import { PaymentProvider, PrismaClient } from '@prisma/client';
+import { PaymentConfigProvider, PrismaClient } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { AuditLogService } from '../../common/services/audit-log.service';
 import { SecretEncryptionService } from '../../common/services/secret-encryption.service';
@@ -16,12 +16,12 @@ export class StorePaymentConfigService {
 
   async getPayosStatus(storeId: number) {
     const config = await this.db.storePaymentConfig.findUnique({
-      where: { storeId_provider: { storeId, provider: PaymentProvider.PAYOS } },
+      where: { storeId_provider: { storeId, provider: PaymentConfigProvider.PAYOS } },
     });
 
     if (!config) {
       return {
-        provider: PaymentProvider.PAYOS,
+        provider: PaymentConfigProvider.PAYOS,
         configured: false,
         active: false,
       };
@@ -50,15 +50,15 @@ export class StorePaymentConfigService {
 
     const config = await this.db.$transaction(async (tx) => {
       const existing = await tx.storePaymentConfig.findUnique({
-        where: { storeId_provider: { storeId, provider: PaymentProvider.PAYOS } },
+        where: { storeId_provider: { storeId, provider: PaymentConfigProvider.PAYOS } },
         select: { id: true, isActive: true },
       });
 
       const saved = await tx.storePaymentConfig.upsert({
-        where: { storeId_provider: { storeId, provider: PaymentProvider.PAYOS } },
+        where: { storeId_provider: { storeId, provider: PaymentConfigProvider.PAYOS } },
         create: {
           storeId,
-          provider: PaymentProvider.PAYOS,
+          provider: PaymentConfigProvider.PAYOS,
           ...encryptedPayload,
         },
         update: encryptedPayload,
@@ -74,7 +74,7 @@ export class StorePaymentConfigService {
         entityId: saved.id,
         beforeJson: wasUpdated
           ? {
-              provider: PaymentProvider.PAYOS,
+              provider: PaymentConfigProvider.PAYOS,
               active: existing!.isActive,
             }
           : undefined,
@@ -102,7 +102,7 @@ export class StorePaymentConfigService {
 
   async deactivatePayosConfig(storeId: number, actorUserId: number) {
     const existing = await this.db.storePaymentConfig.findUnique({
-      where: { storeId_provider: { storeId, provider: PaymentProvider.PAYOS } },
+      where: { storeId_provider: { storeId, provider: PaymentConfigProvider.PAYOS } },
       select: { id: true, isActive: true },
     });
 
@@ -123,7 +123,7 @@ export class StorePaymentConfigService {
         entityType: 'STORE_PAYMENT_CONFIG',
         entityId: saved.id,
         beforeJson: {
-          provider: PaymentProvider.PAYOS,
+          provider: PaymentConfigProvider.PAYOS,
           active: existing.isActive,
         },
         afterJson: {

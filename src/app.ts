@@ -30,6 +30,7 @@ import { assistantRouter } from './modules/assistant/assistant.routes';
 import { stockTakeRouter } from './modules/stock-takes/stock-take.routes';
 import { notificationRouter } from './modules/notifications/notification.routes';
 import { storePaymentConfigRouter } from './modules/store-payment-config/store-payment-config.routes';
+import { posRouter } from './modules/pos/pos.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -148,6 +149,7 @@ export function createApp(): Express {
   app.use('/api/v1/stock-takes', stockTakeRouter);
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/store/payment-config', storePaymentConfigRouter);
+  app.use('/api/v1/pos', posRouter);
 
   // Centralized Error Handling
   app.use(errorHandler);

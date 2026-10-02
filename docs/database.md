@@ -12,11 +12,11 @@ The executable Prisma schema and immutable Prisma migration history are authorit
 ## Current Schema Alignment
 
 - Database Design v1.2 target physical table count: 30
-- Executable physical table count: 31
-- Executable Prisma model count: 31
-- Current migration count: 14
-- Latest migration: `20261001120000_v14_store_payment_configs`
-- Current status: executable Prisma schema extends Database Design v1.2 with the Phase 3B per-store payment configuration foundation.
+- Executable physical table count: 32
+- Executable Prisma model count: 32
+- Current migration count: 15
+- Latest migration: `20261002120000_v15_payments_pos_foundation`
+- Current status: executable Prisma schema extends Database Design v1.2 with the Phase 3B per-store payment configuration foundation and Phase 4 POS payment record foundation.
 
 `password_reset_tokens` is part of the current schema, not an out-of-band add-on.
 
@@ -59,6 +59,7 @@ Orders / Returns:
 - `order_items`
 - `return_orders`
 - `return_items`
+- `payments`
 
 Import / Idempotency:
 
@@ -130,6 +131,17 @@ Payment provider configuration:
 - Fields: `clientIdEncrypted`, `apiKeyEncrypted`, and `checksumKeyEncrypted`
 - Credentials are AES-256-GCM encrypted with `PAYMENT_CONFIG_ENCRYPTION_KEY`.
 - The table is a configuration foundation only. It is not a payment record, receipt table, webhook ledger, refund table, or POS subsystem.
+
+Payment records:
+
+- Table: `payments`
+- Provider enum currently supports `CASH` and `PAYOS`.
+- Method enum supports `CASH`, `BANK_TRANSFER`, and `PAYOS`; the current implemented POS flow creates `CASH` payments only.
+- Status enum supports `PENDING`, `PAID`, `FAILED`, `CANCELED`, `REFUNDED`, and `PARTIALLY_REFUNDED`; current cash POS payments are created directly as `PAID`.
+- Payment amounts use `DECIMAL(15,2)`.
+- Payments are store-scoped and order-linked.
+- Provider reference uniqueness is scoped by `(storeId, provider, providerReference)`.
+- Idempotent local creation uses `(storeId, clientRequestKey)`.
 
 Catalog naming:
 

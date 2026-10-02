@@ -3,6 +3,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
 import { canonicalJsonStringify, idempotency } from '../../src/common/middleware/idempotency';
+import { PosService } from '../../src/modules/pos/pos.service';
 
 const rawDbUrl = process.env.TEST_DATABASE_URL;
 
@@ -164,5 +165,125 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
       },
     });
     expect(idem.status).toBe('COMPLETED');
+  });
+
+  it('recovers expired PROCESSING POS_SALE_CREATE with full receipt contract and no duplicate mutations', async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const key = `idem-pos-sale-${suffix}`;
+
+    const store = await prisma.store.create({
+      data: {
+        name: `Idempotency POS Store ${suffix}`,
+        code: `idem-pos-${suffix}`.replace(/_/g, '-'),
+      },
+    });
+    createdStoreIds.push(store.id);
+
+    const user = await prisma.user.create({
+      data: {
+        storeId: store.id,
+        email: `idem-pos-${suffix}@example.test`,
+        passwordHash: 'test-hash',
+        fullName: 'POS Idempotency User',
+        role: 'WAREHOUSE_STAFF',
+      },
+    });
+    const warehouse = await prisma.warehouse.create({
+      data: { storeId: store.id, name: `POS Warehouse ${suffix}`, isDefault: true },
+    });
+    const product = await prisma.product.create({
+      data: {
+        storeId: store.id,
+        name: `POS Product ${suffix}`,
+        code: `POS_PRD_${suffix}`,
+      },
+    });
+    const stockItem = await prisma.stockItem.create({
+      data: {
+        storeId: store.id,
+        productId: product.id,
+        sku: `SKU-POS-IDEM-${suffix}`,
+        name: `POS StockItem ${suffix}`,
+        costPrice: 10000,
+        sellingPrice: 20000,
+      },
+    });
+    await prisma.inventoryBalance.create({
+      data: {
+        storeId: store.id,
+        warehouseId: warehouse.id,
+        stockItemId: stockItem.id,
+        quantity: 5,
+        reservedQuantity: 0,
+      },
+    });
+
+    const effectKey = `POS_SALE_CREATE:${store.id}:${key}`;
+    const body = { paymentMethod: 'CASH', items: [{ stockItemId: stockItem.id, quantity: 2 }] };
+    const service = new PosService(prisma);
+    const sale = await service.createCashSale(store.id, user.id, body as any, effectKey);
+
+    const requestHash = crypto
+      .createHash('sha256')
+      .update(
+        canonicalJsonStringify({
+          method: 'POST',
+          path: '/pos/sales',
+          params: {},
+          query: {},
+          body,
+        })
+      )
+      .digest('hex');
+
+    await prisma.idempotencyRequest.create({
+      data: {
+        storeId: store.id,
+        operation: 'POS_SALE_CREATE',
+        key,
+        requestHash,
+        status: 'PROCESSING',
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    });
+
+    const beforeCounts = await Promise.all([
+      prisma.order.count({ where: { storeId: store.id } }),
+      prisma.payment.count({ where: { storeId: store.id } }),
+      prisma.stockMovement.count({ where: { storeId: store.id } }),
+      prisma.auditLog.count({ where: { storeId: store.id } }),
+    ]);
+
+    const handler = jest.fn((_req, res) => res.status(500).json({ success: false }));
+    const app = express();
+    app.set('prisma', prisma);
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      (req as any).user = { storeId: store.id, userId: user.id };
+      next();
+    });
+    app.post('/pos/sales', idempotency({ operation: 'POS_SALE_CREATE' }), handler);
+
+    const response = await request(app)
+      .post('/pos/sales')
+      .set('Idempotency-Key', key)
+      .send(body);
+
+    const afterCounts = await Promise.all([
+      prisma.order.count({ where: { storeId: store.id } }),
+      prisma.payment.count({ where: { storeId: store.id } }),
+      prisma.stockMovement.count({ where: { storeId: store.id } }),
+      prisma.auditLog.count({ where: { storeId: store.id } }),
+    ]);
+
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.order.id).toBe(sale.order.id);
+    expect(response.body.data.payment.id).toBe(sale.payment.id);
+    expect(response.body.data.warehouse.id).toBe(warehouse.id);
+    expect(response.body.data.receipt.orderId).toBe(sale.order.id);
+    expect(response.body.data.receipt.payment.status).toBe('PAID');
+    expect(handler).not.toHaveBeenCalled();
+    expect(afterCounts).toEqual(beforeCounts);
   });
 });

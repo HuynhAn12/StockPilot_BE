@@ -40,6 +40,7 @@ Store-scoped routes use explicit role checks where business authority differs fr
 
 - Orders: `WAREHOUSE_STAFF` may read and fulfill; only `SHOP_OWNER` may create, confirm, or cancel.
 - Inventory: `SHOP_OWNER` and `WAREHOUSE_STAFF` may read balances/movements and perform inflow, outflow, and audit adjustment.
+- POS: `SHOP_OWNER` and `WAREHOUSE_STAFF` may create cash POS sales through the dedicated POS endpoint.
 - Returns: `WAREHOUSE_STAFF` may read returns; only `SHOP_OWNER` may create returns.
 - Exports: operational product, inventory, and alert exports are available to store operators; owner-sensitive order, sales, returns, decision report, and pricing recommendation exports are `SHOP_OWNER` only.
 - Payment provider credentials: only `SHOP_OWNER` may configure PayOS credentials. `WAREHOUSE_STAFF` may eventually create POS payments, but must not read or configure PayOS credentials.
@@ -106,6 +107,8 @@ Do not log:
 - unnecessary customer PII
 
 Per-store payment credentials are stored in `store_payment_configs` and encrypted with AES-256-GCM using `PAYMENT_CONFIG_ENCRYPTION_KEY`. The key must be a 32-byte base64 value or 64-character hex value in production. Payment config APIs never return raw API keys, checksum keys, or encrypted credential blobs.
+
+POS cash payment records do not store provider credentials. Payment metadata must not include raw provider secrets, tokens, or customer payment credentials.
 
 ## AI Data Minimization
 
