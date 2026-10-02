@@ -16,10 +16,29 @@ describe('AuditLogService', () => {
         password: 'plain',
         passwordHash: 'hashed',
         refreshToken: 'refresh',
+        accessToken: 'access',
+        jwt: 'jwt',
+        credentials: 'creds',
+        authorization: 'Bearer token',
+        cookie: 'cookie',
+        session: 'session',
+        encryptionKey: 'encryption-key',
         nested: {
           apiSecret: 'secret',
           safeValue: 'kept',
+          array: [
+            { checksumKeyEncrypted: 'encrypted-checksum', quantity: 1 },
+            { clientIdEncrypted: 'encrypted-client-id', visible: true },
+          ],
         },
+        apiKey: 'api-key',
+        checksumKey: 'checksum-key',
+        clientSecret: 'client-secret',
+        apiKeyEncrypted: 'encrypted-api-key',
+        encryptedNote: 'not-a-secret-by-name',
+        nothing: undefined,
+        nullable: null,
+        big: BigInt(123),
       },
       afterJson: {
         amount: new Prisma.Decimal('12.50'),
@@ -37,7 +56,15 @@ describe('AuditLogService', () => {
         beforeJson: {
           nested: {
             safeValue: 'kept',
+            array: [
+              { quantity: 1 },
+              { visible: true },
+            ],
           },
+          encryptedNote: 'not-a-secret-by-name',
+          nothing: null,
+          nullable: null,
+          big: '123',
         },
         afterJson: {
           amount: '12.50',

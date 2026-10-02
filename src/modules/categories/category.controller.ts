@@ -29,7 +29,7 @@ export class CategoryController {
   async create(req: Request, res: Response, next: NextFunction) {
     try {
       const storeId = req.user!.storeId!;
-      const category = await categoryService.createCategory(storeId, req.body);
+      const category = await categoryService.createCategory(storeId, req.body, req.user!.userId);
       return res.status(201).json({ success: true, message: 'Tạo danh mục thành công', data: category });
     } catch (error) {
       next(error);
@@ -40,7 +40,7 @@ export class CategoryController {
     try {
       const storeId = req.user!.storeId!;
       const id = Number(req.params.id);
-      const category = await categoryService.updateCategory(storeId, id, req.body);
+      const category = await categoryService.updateCategory(storeId, id, req.body, req.user!.userId);
       return res.status(200).json({ success: true, message: 'Cập nhật danh mục thành công', data: category });
     } catch (error) {
       next(error);
@@ -51,7 +51,7 @@ export class CategoryController {
     try {
       const storeId = req.user!.storeId!;
       const id = Number(req.params.id);
-      await categoryService.deleteCategory(storeId, id);
+      await categoryService.deleteCategory(storeId, id, req.user!.userId);
       return res.status(200).json({ success: true, message: 'Xóa danh mục thành công' });
     } catch (error) {
       next(error);

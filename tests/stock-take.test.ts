@@ -141,16 +141,52 @@ describe('StockTakeService', () => {
   });
 
   it('cancels only non-terminal stock takes without inventory mutation', async () => {
-    prisma.stockTake.findFirst.mockResolvedValueOnce({ id: 10, storeId: 1, status: StockTakeStatus.IN_PROGRESS });
+    prisma.stockTake.findFirst.mockResolvedValueOnce({
+      id: 10,
+      storeId: 1,
+      warehouseId: 5,
+      status: StockTakeStatus.IN_PROGRESS,
+    });
     prisma.stockTake.updateMany.mockResolvedValue({ count: 1 });
     prisma.stockTake.findFirst.mockResolvedValueOnce({ id: 10, status: StockTakeStatus.CANCELED, items: [] });
 
-    await service.cancel(1, 10);
+    await service.cancel(1, 99, 10);
 
     expect(prisma.stockTake.updateMany).toHaveBeenCalledWith({
       where: { id: 10, storeId: 1, status: { in: [StockTakeStatus.DRAFT, StockTakeStatus.IN_PROGRESS] } },
       data: { status: StockTakeStatus.CANCELED },
     });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        storeId: 1,
+        userId: 99,
+        action: 'STOCK_TAKE_CANCELED',
+        entityType: 'STOCK_TAKE',
+        entityId: '10',
+        beforeJson: { status: StockTakeStatus.IN_PROGRESS },
+        afterJson: {
+          stockTakeId: 10,
+          warehouseId: 5,
+          status: StockTakeStatus.CANCELED,
+        },
+      }),
+    });
+    expect(prisma.inventoryBalance.update).not.toHaveBeenCalled();
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('does not write cancel audit when the cancel transition loses the race', async () => {
+    prisma.stockTake.findFirst.mockResolvedValueOnce({
+      id: 10,
+      storeId: 1,
+      warehouseId: 5,
+      status: StockTakeStatus.IN_PROGRESS,
+    });
+    prisma.stockTake.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.cancel(1, 99, 10)).rejects.toThrow(ConflictError);
+
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
     expect(prisma.inventoryBalance.update).not.toHaveBeenCalled();
     expect(prisma.stockMovement.create).not.toHaveBeenCalled();
   });

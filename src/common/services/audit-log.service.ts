@@ -14,7 +14,10 @@ export interface AuditLogEntry {
   userAgent?: string | null;
 }
 
-const SENSITIVE_KEY_PATTERN = /(password|passwordHash|token|jwt|secret|credential|authorization|cookie|session)/i;
+const SENSITIVE_KEY_PATTERN =
+  /(password|token|jwt|secret|credential|authorization|cookie|session|apiKey|checksumKey|encryptionKey)/i;
+const ENCRYPTED_CREDENTIAL_KEY_PATTERN =
+  /^(apiKey|checksumKey|clientId|clientSecret|secret|credential|credentials).*Encrypted$/i;
 
 export class AuditLogService {
   static sanitizeJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
@@ -51,13 +54,17 @@ function sanitize(value: unknown): unknown {
 
     const result: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (SENSITIVE_KEY_PATTERN.test(key)) continue;
+      if (isSensitiveKey(key)) continue;
       result[key] = sanitize(child);
     }
     return result;
   }
 
   return String(value);
+}
+
+function isSensitiveKey(key: string) {
+  return SENSITIVE_KEY_PATTERN.test(key) || ENCRYPTED_CREDENTIAL_KEY_PATTERN.test(key);
 }
 
 function isPrismaDecimal(value: object): value is Prisma.Decimal {

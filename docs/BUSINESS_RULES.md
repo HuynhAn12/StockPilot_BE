@@ -288,7 +288,7 @@ Notification realtime delivery and broadcast/read-receipt behavior are deferred.
 
 ### DEF-002
 
-AuditLog tables exist, but full mutation coverage is deferred.
+AuditLog tables exist and cover high-value operational mutations. Category changes and StockTake cancel/complete audit events are written in the same transaction as their business state changes. Exhaustive coverage across every business mutation is deferred.
 
 ### DEF-003
 

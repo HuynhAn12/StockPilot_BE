@@ -74,13 +74,14 @@ The executable schema includes the v1.2 foundation models:
 - Assistant explanations
 - Phase 3A tenant hostname resolution for `{storeCode}.stockpilot.vn`
 - Phase 3B owner-only PayOS credential configuration foundation
+- High-value audit logging for auth, users, products, categories, inventory, orders, returns, stock takes, pricing decisions, alerts, imports, and payment configuration changes. Category and StockTake cancel audit writes are transaction-bound with their business mutations.
 
 ## Deferred Features
 
 The schema foundations exist, but these workflows are not implemented as complete production features:
 
 - Realtime notification delivery and broadcast/read-receipt notification behavior
-- Full audit coverage across all business mutations
+- Exhaustive audit coverage across every business mutation
 - SystemSetting admin API
 - AI conversation history UI/API
 - Large-catalog export streaming
@@ -97,8 +98,8 @@ Latest verified evidence:
 - `npm run lint`: passed
 - `npm run build`: passed
 - Focused Sprint 1 closeout tests: `npm test -- tests/auth.test.ts tests/api-integration.test.ts tests/order-flow.test.ts` passed, 3 suites / 37 tests.
-- `npm test`: 25 suites / 177 tests passed, including unit, API integration, real MySQL integration, and concurrency tests.
-- `npm run test:coverage`: passed, 25 suites / 177 tests.
+- `npm test`: 29 suites / 213 tests passed, including unit, API integration, real MySQL integration, and concurrency tests.
+- `npm run test:coverage`: latest evidence is 25 suites / 177 tests from the Sprint 1 closeout; not rerun in the latest audit coverage pass.
 - `npm run handoff:check`: passed with `HANDOFF_CHECK_OK` and the expected local `.env` warning.
 - `npm audit`: passed with 0 vulnerabilities.
 - GitHub Actions: `StockPilot Backend CI` run #27 passed for commit `194a3bef7ce7ffa1f9c8df7c2a274400e0368c0e`.

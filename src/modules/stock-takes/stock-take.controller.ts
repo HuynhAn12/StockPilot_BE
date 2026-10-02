@@ -70,7 +70,7 @@ export class StockTakeController {
 
   async cancel(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await stockTakeService.cancel(req.user!.storeId!, Number(req.params.id));
+      const result = await stockTakeService.cancel(req.user!.storeId!, req.user!.userId, Number(req.params.id));
       return res.status(200).json({ success: true, data: maskSensitiveFields(result, req.user?.role) });
     } catch (error) {
       next(error);

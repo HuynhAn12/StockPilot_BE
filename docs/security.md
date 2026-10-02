@@ -116,7 +116,7 @@ AI is explanation-only and must not mutate business state.
 
 ## Audit Logging Principles
 
-`AuditLog` is an append-only foundation table. Full audit coverage is not implemented yet.
+`AuditLog` is an append-only foundation table. High-value mutation coverage exists for core operational workflows, including transaction-bound category changes, stock-take completion/cancelation, and payment-configuration changes. Exhaustive audit coverage across every mutation remains deferred.
 
 When adding audit events:
 

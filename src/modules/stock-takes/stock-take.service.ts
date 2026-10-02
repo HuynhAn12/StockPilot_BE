@@ -307,7 +307,7 @@ export class StockTakeService {
     });
   }
 
-  async cancel(storeId: number, id: number) {
+  async cancel(storeId: number, userId: number, id: number) {
     return this.prisma.$transaction(async (tx) => {
       const stockTake = await tx.stockTake.findFirst({ where: { id, storeId } });
       if (!stockTake) throw new NotFoundError('Stock take not found');
@@ -322,6 +322,20 @@ export class StockTakeService {
       if (transition.count !== 1) {
         throw new ConflictError('Stock take state changed while canceling');
       }
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId,
+        action: 'STOCK_TAKE_CANCELED',
+        entityType: 'STOCK_TAKE',
+        entityId: id,
+        beforeJson: { status: stockTake.status },
+        afterJson: {
+          stockTakeId: id,
+          warehouseId: stockTake.warehouseId,
+          status: StockTakeStatus.CANCELED,
+        },
+      });
 
       return this.getStockTakeOrThrow(storeId, id, tx);
     });
