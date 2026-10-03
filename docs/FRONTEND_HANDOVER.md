@@ -1,4 +1,4 @@
-# STOCKPILOT - TÀI LIỆU BÀN GIAO TÍCH HỢP FRONTEND (API HANDOVER DOCUMENT)
+ # STOCKPILOT - TÀI LIỆU BÀN GIAO TÍCH HỢP FRONTEND (API HANDOVER DOCUMENT)
 
 > **Dự án**: StockPilot Backend (Quản lý kho & Bán hàng đa kênh / POS)  
 > **Phiên bản API**: `v1.0.0` (Production Hardening)  
