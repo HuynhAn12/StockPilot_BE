@@ -19,3 +19,7 @@ storePaymentConfigRouter.put('/payos', validate({ body: upsertPayosConfigSchema 
 storePaymentConfigRouter.post('/payos/deactivate', (req, res, next) =>
   controller.deactivatePayosConfig(req, res, next)
 );
+storePaymentConfigRouter.post('/payos/toggle', (req, res, next) =>
+  controller.togglePayosConfig(req, res, next)
+);
+

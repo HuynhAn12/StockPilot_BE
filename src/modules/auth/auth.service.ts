@@ -11,9 +11,14 @@ import {
 } from '../../common/utils/jwt';
 import { ConflictError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
-import { registerSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, resetPasswordSchema } from './auth.schema';
+import { registerSchema, sendRegisterOtpSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, verifyOtpSchema, resetPasswordSchema } from './auth.schema';
 import { AuditLogService } from '../../common/services/audit-log.service';
 import { isValidTenantCode, normalizeTenantCode } from '../../common/utils/tenant-slug';
+import { sendPasswordResetOtpEmail, sendRegisterOtpEmail } from '../../common/services/email.service';
+import { sendPasswordResetOtpSms } from '../../common/services/sms.service';
+
+// Store in-memory OTPs for registration verification (email -> { otp, expiresAt })
+const registerOtpStore = new Map<string, { otp: string; expiresAt: Date }>();
 
 export class AuthService {
   private prisma: PrismaClient;
@@ -22,7 +27,78 @@ export class AuthService {
     this.prisma = customPrisma || defaultPrisma;
   }
 
+  async sendRegisterOtp(input: z.infer<typeof sendRegisterOtpSchema>) {
+    const email = input.email.toLowerCase().trim();
+
+    // 1. Kiểm tra email đã tồn tại hay chưa
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email },
+    });
+    if (existingUser) {
+      throw new ConflictError('Email này đã được sử dụng trong hệ thống');
+    }
+
+    // 2. Nếu có storeCode, kiểm tra trước storeCode
+    if (input.storeCode) {
+      const storeCode = normalizeTenantCode(input.storeCode);
+      if (!isValidTenantCode(storeCode)) {
+        throw new ValidationError('Mã cửa hàng phải là slug DNS hợp lệ');
+      }
+      const existingStore = await this.prisma.store.findUnique({
+        where: { code: storeCode },
+      });
+      if (existingStore) {
+        throw new ConflictError('Mã cửa hàng (Store Code) đã tồn tại');
+      }
+    }
+
+    // 3. Sinh OTP 6 chữ số ngẫu nhiên
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 phút
+
+    // Lưu vào bộ nhớ
+    registerOtpStore.set(email, { otp, expiresAt });
+
+    // 4. Gửi email chứa mã OTP
+    const emailResult = await sendRegisterOtpEmail({
+      to: email,
+      name: input.fullName,
+      otp,
+      expiresMinutes: 10,
+    });
+
+    const publicResult: { expiresAt: Date; otp?: string; emailSent: boolean; simulated: boolean } = {
+      expiresAt,
+      emailSent: emailResult.sent,
+      simulated: emailResult.simulated || false,
+    };
+
+    if (process.env.NODE_ENV !== 'production') {
+      publicResult.otp = otp;
+    }
+
+    return publicResult;
+  }
+
   async registerOwner(input: z.infer<typeof registerSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
+    const email = input.email.toLowerCase().trim();
+
+    // 1. Xác thực mã OTP đăng ký (bắt buộc trong production)
+    if (input.otp) {
+      const stored = registerOtpStore.get(email);
+      if (!stored || stored.expiresAt < new Date()) {
+        registerOtpStore.delete(email);
+        throw new ValidationError('Mã OTP xác thực đã hết hạn hoặc không tồn tại. Vui lòng bấm gửi lại mã OTP');
+      }
+
+      if (stored.otp !== input.otp.trim()) {
+        throw new ValidationError('Mã OTP xác thực không chính xác. Vui lòng kiểm tra lại hộp thư email');
+      }
+      registerOtpStore.delete(email);
+    } else if (process.env.NODE_ENV === 'production') {
+      throw new ValidationError('Mã OTP xác thực là bắt buộc');
+    }
+
     const storeCode = normalizeTenantCode(input.storeCode);
     if (!isValidTenantCode(storeCode)) {
       throw new ValidationError(
@@ -31,7 +107,7 @@ export class AuthService {
     }
 
     const existingUser = await this.prisma.user.findUnique({
-      where: { email: input.email.toLowerCase().trim() },
+      where: { email },
     });
 
     if (existingUser) {
@@ -45,6 +121,9 @@ export class AuthService {
     if (existingStore) {
       throw new ConflictError('Mã cửa hàng (Store Code) đã tồn tại');
     }
+
+    // Xóa OTP sau khi kiểm tra hợp lệ
+    registerOtpStore.delete(email);
 
     const passwordHash = await hashPassword(input.password);
 
@@ -190,6 +269,21 @@ export class AuthService {
       },
     });
 
+    await AuditLogService.create(this.prisma, {
+      storeId: user.storeId,
+      userId: user.id,
+      action: 'USER_LOGIN',
+      entityType: 'AUTH',
+      entityId: user.id,
+      ipAddress: meta?.ipAddress,
+      userAgent: meta?.userAgent,
+      afterJson: {
+        email: user.email,
+        role: user.role,
+        fullName: user.fullName,
+      },
+    }).catch(() => {});
+
     return {
       user: {
         id: user.id,
@@ -231,6 +325,27 @@ export class AuthService {
     }
 
     if (session.revokedAt !== null) {
+      const now = new Date();
+      const revokedAgoMs = now.getTime() - session.revokedAt.getTime();
+      // Grace period: If the session was revoked within 30 seconds, this is a concurrent request
+      // from the same client session. Do NOT revoke all sessions.
+      if (revokedAgoMs <= 30000) {
+        const user = session.user;
+        if (user && user.isActive && (!user.storeId || user.store?.isActive)) {
+          const tokenPayload = {
+            userId: user.id,
+            email: user.email,
+            role: user.role,
+            storeId: user.storeId,
+          };
+          const newAccessToken = generateAccessToken(tokenPayload);
+          return {
+            accessToken: newAccessToken,
+            refreshToken: token,
+          };
+        }
+      }
+
       // Token reuse / replay attack detected! Revoke all sessions for this user for security
       await this.prisma.authSession.updateMany({
         where: { userId: session.userId, revokedAt: null },
@@ -276,17 +391,8 @@ export class AuthService {
       });
 
       if (revokeResult.count !== 1) {
-        // Replay attack / concurrent reused token detected! Revoke all sessions for this user
-        await tx.authSession.updateMany({
-          where: { userId: session.userId, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
-        return { replayDetected: true };
-        /*
-        throw new UnauthenticatedError(
-          'Refresh token đã được sử dụng hoặc phiên không còn hợp lệ. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn'
-        );
-        */
+        // A parallel request already rotated this session in the same instant
+        return { concurrent: true };
       }
 
       await tx.authSession.create({
@@ -299,13 +405,14 @@ export class AuthService {
         },
       });
 
-      return { replayDetected: false };
+      return { concurrent: false };
     });
 
-    if (rotation.replayDetected) {
-      throw new UnauthenticatedError(
-        'Refresh token đã được sử dụng hoặc phiên không còn hợp lệ. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn'
-      );
+    if (rotation.concurrent) {
+      return {
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      };
     }
 
     return {
@@ -381,22 +488,136 @@ export class AuthService {
     return user;
   }
 
+  private async findActiveUserByEmailOrPhone(email?: string, phone?: string) {
+    if (email) {
+      return this.prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
+        include: { store: true },
+      });
+    }
+
+    if (phone) {
+      const cleaned = phone.replace(/[^\d+]/g, '');
+      const rawDigits = cleaned.replace(/\D/g, '');
+      const localPhone = rawDigits.startsWith('84') ? '0' + rawDigits.slice(2) : rawDigits;
+      const internationalPhone = rawDigits.startsWith('0') ? '84' + rawDigits.slice(1) : rawDigits;
+
+      // Tìm user theo số điện thoại cửa hàng đã đăng ký (hoặc khớp 9 số cuối)
+      return this.prisma.user.findFirst({
+        where: {
+          isActive: true,
+          store: {
+            isActive: true,
+            OR: [
+              { phone: phone.trim() },
+              { phone: cleaned },
+              { phone: localPhone },
+              { phone: `+${internationalPhone}` },
+              { phone: { contains: localPhone.slice(-9) } },
+            ],
+          },
+        },
+        include: { store: true },
+      });
+    }
+
+    return null;
+  }
+
   async forgotPassword(input: z.infer<typeof forgotPasswordSchema>) {
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
-    const publicResult: { expiresAt: Date; resetToken?: string } = { expiresAt };
-    const email = input.email.toLowerCase().trim();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    const publicResult: { expiresAt: Date; resetToken?: string; otp?: string } = { expiresAt };
 
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-      select: { id: true, isActive: true },
-    });
+    const user = await this.findActiveUserByEmailOrPhone(input.email, input.phone);
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || (user.storeId && !user.store?.isActive)) {
       return publicResult;
     }
 
+    // Sinh mã OTP 6 chữ số ngẫu nhiên
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const rawToken = crypto.randomBytes(32).toString('hex');
     const tokenHash = hashToken(rawToken);
+    const otpHash = hashToken(`${user.id}:otp:${otp}`);
+
+    // Vô hiệu hóa các mã reset trước đó của user này
+    await this.prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    // Lưu token cho link / legacy API token
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    // Lưu token cho mã OTP 6 chữ số
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: otpHash,
+        expiresAt,
+      },
+    });
+
+    let sendResult = { sent: false, simulated: false };
+
+    if (input.email) {
+      // Gửi email chứa mã OTP về Gmail
+      const emailResult = await sendPasswordResetOtpEmail({
+        to: user.email,
+        name: user.fullName,
+        otp,
+        expiresMinutes: 15,
+      });
+      sendResult = { sent: emailResult.sent, simulated: emailResult.simulated || false };
+    } else if (input.phone) {
+      // Gửi SMS chứa mã OTP đến số điện thoại
+      const smsResult = await sendPasswordResetOtpSms({
+        phone: input.phone,
+        name: user.fullName,
+        otp,
+        expiresMinutes: 15,
+      });
+      sendResult = { sent: smsResult.sent, simulated: smsResult.simulated || false };
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      publicResult.resetToken = rawToken;
+    }
+
+    return {
+      ...publicResult,
+      ...sendResult,
+    };
+  }
+
+  async verifyOtp(input: z.infer<typeof verifyOtpSchema>) {
+    const now = new Date();
+
+    const user = await this.findActiveUserByEmailOrPhone(input.email, input.phone);
+
+    if (!user || !user.isActive || (user.store && !user.store.isActive)) {
+      throw new ValidationError('Mã OTP không chính xác hoặc tài khoản không hợp lệ');
+    }
+
+    const otpHash = hashToken(`${user.id}:otp:${input.otp.trim()}`);
+    const token = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash: otpHash },
+    });
+
+    if (!token || token.usedAt || token.expiresAt <= now || token.userId !== user.id) {
+      throw new ValidationError('Mã OTP không chính xác hoặc đã hết hạn');
+    }
+
+    // Sinh resetToken cho bước tiếp theo
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashToken(resetToken);
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
     await this.prisma.passwordResetToken.create({
       data: {
@@ -406,31 +627,60 @@ export class AuthService {
       },
     });
 
-    if (process.env.NODE_ENV !== 'production') {
-      publicResult.resetToken = rawToken;
-    }
-
-    return publicResult;
+    return {
+      valid: true,
+      resetToken,
+      email: user.email,
+      phone: input.phone,
+    };
   }
 
   async resetPassword(input: z.infer<typeof resetPasswordSchema>) {
-    const tokenHash = hashToken(input.token);
     const now = new Date();
     const newPasswordHash = await hashPassword(input.newPassword);
 
     return this.prisma.$transaction(async (tx) => {
-      const token = await tx.passwordResetToken.findUnique({
-        where: { tokenHash },
-        include: { user: { include: { store: true } } },
-      });
+      let targetUserId: number | null = null;
+      let targetTokenId: number | null = null;
 
-      if (!token || token.usedAt || token.expiresAt <= now || !token.user.isActive || (token.user.storeId && !token.user.store?.isActive)) {
-        throw new ValidationError('Reset token khong hop le hoac da het han');
+      if (input.token) {
+        const tokenHash = hashToken(input.token);
+        const token = await tx.passwordResetToken.findUnique({
+          where: { tokenHash },
+          include: { user: { include: { store: true } } },
+        });
+
+        if (!token || token.usedAt || token.expiresAt <= now || !token.user.isActive || (token.user.storeId && !token.user.store?.isActive)) {
+          throw new ValidationError('Reset token khong hop le hoac da het han');
+        }
+
+        targetUserId = token.userId;
+        targetTokenId = token.id;
+      } else if ((input.email || input.phone) && input.otp) {
+        const user = await this.findActiveUserByEmailOrPhone(input.email, input.phone);
+
+        if (!user || !user.isActive || (user.storeId && !user.store?.isActive)) {
+          throw new ValidationError('Tài khoản không tồn tại hoặc đã bị khóa');
+        }
+
+        const otpHash = hashToken(`${user.id}:otp:${input.otp.trim()}`);
+        const token = await tx.passwordResetToken.findUnique({
+          where: { tokenHash: otpHash },
+        });
+
+        if (!token || token.usedAt || token.expiresAt <= now || token.userId !== user.id) {
+          throw new ValidationError('Mã OTP không chính xác hoặc đã hết hạn');
+        }
+
+        targetUserId = user.id;
+        targetTokenId = token.id;
+      } else {
+        throw new ValidationError('Thiếu thông tin token hoặc OTP để đặt lại mật khẩu');
       }
 
       const consumeResult = await tx.passwordResetToken.updateMany({
         where: {
-          id: token.id,
+          id: targetTokenId,
           usedAt: null,
           expiresAt: { gt: now },
         },
@@ -441,27 +691,92 @@ export class AuthService {
         throw new ValidationError('Reset token khong hop le hoac da duoc su dung');
       }
 
+      // Đánh dấu tất cả các token reset còn lại của user này là đã sử dụng
+      await tx.passwordResetToken.updateMany({
+        where: {
+          userId: targetUserId,
+          usedAt: null,
+        },
+        data: { usedAt: now },
+      });
+
       await tx.user.update({
-        where: { id: token.userId },
+        where: { id: targetUserId },
         data: { passwordHash: newPasswordHash },
       });
 
       await tx.authSession.updateMany({
-        where: { userId: token.userId, revokedAt: null },
+        where: { userId: targetUserId, revokedAt: null },
         data: { revokedAt: now },
       });
 
+      const userStore = await tx.user.findUnique({
+        where: { id: targetUserId },
+        select: { storeId: true },
+      });
+
       await AuditLogService.create(tx, {
-        storeId: token.user.storeId,
-        userId: token.userId,
+        storeId: userStore?.storeId || null,
+        userId: targetUserId,
         action: 'PASSWORD_RESET',
         entityType: 'USER',
-        entityId: token.userId,
+        entityId: targetUserId,
         afterJson: { sessionsRevoked: true },
       });
 
       return { success: true };
     });
   }
+
+  async updateStore(userId: number, input: { storeName?: string; phone?: string; address?: string }) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { store: true },
+    });
+    if (!user || !user.storeId) {
+      throw new ValidationError('Người dùng chưa liên kết với cửa hàng');
+    }
+
+    const updatedStore = await this.prisma.store.update({
+      where: { id: user.storeId },
+      data: {
+        ...(input.storeName ? { name: input.storeName.trim() } : {}),
+        ...(input.phone !== undefined ? { phone: input.phone?.trim() || null } : {}),
+        ...(input.address !== undefined ? { address: input.address?.trim() || null } : {}),
+      },
+    });
+
+    return {
+      success: true,
+      store: updatedStore,
+    };
+  }
+
+  async changePassword(userId: number, input: { oldPassword: string; newPassword: string }) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) {
+      throw new UnauthenticatedError('Tài khoản không tồn tại');
+    }
+
+    const isMatch = await comparePassword(input.oldPassword, user.passwordHash);
+    if (!isMatch) {
+      throw new ValidationError('Mật khẩu cũ không chính xác');
+    }
+
+    if (input.newPassword.length < 8) {
+      throw new ValidationError('Mật khẩu mới phải có ít nhất 8 ký tự');
+    }
+
+    const newPasswordHash = await hashPassword(input.newPassword);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: newPasswordHash },
+    });
+
+    return { success: true, message: 'Đổi mật khẩu thành công' };
+  }
 }
+
 

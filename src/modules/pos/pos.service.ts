@@ -3,6 +3,7 @@ import { prisma as defaultPrisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { AuditLogService } from '../../common/services/audit-log.service';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 import { createPosSaleSchema } from './pos.schema';
 import { z } from 'zod';
 
@@ -13,6 +14,7 @@ export class PosService {
 
   async createCashSale(storeId: number, userId: number, input: CreatePosSaleInput, clientRequestKey?: string) {
     const now = new Date();
+    const aggregatedItems = StockLedgerService.normalizeItems(input.items);
 
     return this.db.$transaction(async (tx) => {
       const warehouse = input.warehouseId
@@ -31,7 +33,6 @@ export class PosService {
         throw new NotFoundError('Store was not found or inactive');
       }
 
-      const aggregatedItems = StockLedgerService.normalizeItems(input.items);
       const itemIds = aggregatedItems.map((item) => item.stockItemId);
       const stockItems = await tx.stockItem.findMany({
         where: {
@@ -46,11 +47,22 @@ export class PosService {
         throw new NotFoundError('One or more POS sale items do not exist in this store or are inactive');
       }
 
+      const customPriceMap = new Map<number, number>();
+      for (const item of input.items) {
+        const p = (item as any).price !== undefined ? (item as any).price : (item as any).unitPrice;
+        if (p !== undefined && p !== null && !isNaN(Number(p)) && Number(p) >= 0) {
+          customPriceMap.set(item.stockItemId, Number(p));
+        }
+      }
+
       const itemMap = new Map(stockItems.map((stockItem) => [stockItem.id, stockItem]));
       let subtotalAmount = new Prisma.Decimal(0);
       const rawLines = aggregatedItems.map((item) => {
         const stockItem = itemMap.get(item.stockItemId)!;
-        const unitPrice = new Prisma.Decimal(stockItem.sellingPrice);
+        const customPrice = customPriceMap.get(item.stockItemId);
+        const unitPrice = customPrice !== undefined
+          ? new Prisma.Decimal(customPrice)
+          : new Prisma.Decimal(stockItem.sellingPrice);
         const costPrice = new Prisma.Decimal(stockItem.costPrice);
         const subtotal = unitPrice.mul(item.quantity).toDecimalPlaces(2);
         subtotalAmount = subtotalAmount.plus(subtotal);
@@ -63,7 +75,10 @@ export class PosService {
       if (discountAmount.gt(subtotalAmount)) {
         throw new ValidationError('POS sale discount cannot exceed subtotal');
       }
-      const totalAmount = subtotalAmount.minus(discountAmount).plus(taxAmount).toDecimalPlaces(2);
+      let totalAmount = subtotalAmount.minus(discountAmount).plus(taxAmount).toDecimalPlaces(2);
+      if (input.totalAmount !== undefined && Number(input.totalAmount) > 0) {
+        totalAmount = new Prisma.Decimal(input.totalAmount).toDecimalPlaces(2);
+      }
       const orderItemsData: Prisma.OrderItemUncheckedCreateWithoutOrderInput[] = [];
       let allocatedRefundableSum = new Prisma.Decimal(0);
 
@@ -119,16 +134,26 @@ export class PosService {
         include: { items: true },
       });
 
+      const paymentMethod =
+        input.paymentMethod === 'BANK_TRANSFER'
+          ? PaymentMethod.BANK_TRANSFER
+          : input.paymentMethod === 'PAYOS'
+          ? PaymentMethod.PAYOS
+          : PaymentMethod.CASH;
+
+      const paymentProvider =
+        input.paymentMethod === 'PAYOS' ? PaymentProvider.PAYOS : PaymentProvider.CASH;
+
       const payment = await tx.payment.create({
         data: {
           storeId,
           orderId: order.id,
-          provider: PaymentProvider.CASH,
-          method: PaymentMethod.CASH,
+          provider: paymentProvider,
+          method: paymentMethod,
           amount: totalAmount,
           currency: 'VND',
           status: PaymentStatus.PAID,
-          providerReference: `CASH-${order.orderNumber}`,
+          providerReference: `${paymentMethod}-${order.orderNumber}`,
           clientRequestKey: clientRequestKey ? `${clientRequestKey}:PAYMENT` : undefined,
           paidAt: now,
           metadataJson: {
@@ -280,6 +305,12 @@ export class PosService {
           },
         },
       };
+    }).then((result) => {
+      // Trigger background sync for sold items (alerts, summaries, decision engine)
+      BusinessSyncService.getInstance(this.db)
+        .syncAfterSale(storeId, aggregatedItems.map((item) => item.stockItemId))
+        .catch(() => {});
+      return result;
     }).catch((error) => {
       if (isUniqueConstraintError(error)) {
         throw new ConflictError('POS sale was already processed for this idempotency key or payment reference');

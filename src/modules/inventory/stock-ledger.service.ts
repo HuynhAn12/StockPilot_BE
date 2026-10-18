@@ -63,7 +63,7 @@ export class StockLedgerService {
       });
 
       if (!stockItem) {
-        throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
+        throw new NotFoundError(`Sản phẩm/Mã SP ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
       }
 
       // 2. Perform atomic decrement with conditional gte check
@@ -90,7 +90,7 @@ export class StockLedgerService {
         });
         const currentQty = currentBalance ? currentBalance.quantity : 0;
         throw new InsufficientStockError(
-          `Tồn kho SKU ${stockItem.sku} không đủ hoặc đang có giao dịch cạnh tranh (Hiện có: ${currentQty}, Yêu cầu: ${item.quantity})`
+          `Tồn kho mã SP ${stockItem.sku} không đủ hoặc đang có giao dịch cạnh tranh (Hiện có: ${currentQty}, Yêu cầu: ${item.quantity})`
         );
       }
 
@@ -154,7 +154,7 @@ export class StockLedgerService {
       });
 
       if (!stockItem) {
-        throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
+        throw new NotFoundError(`Sản phẩm/Mã SP ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
       }
 
       // Atomic upsert / increment
@@ -214,7 +214,7 @@ export class StockLedgerService {
     });
 
     if (!stockItem) {
-      throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
+      throw new NotFoundError(`Sản phẩm/Mã SP ID ${item.stockItemId} không tồn tại hoặc đã ngừng hoạt động`);
     }
 
     await tx.inventoryBalance.upsert({

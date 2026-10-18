@@ -9,11 +9,12 @@ export function requireRole(...roles: Role[]) {
       return next(new UnauthenticatedError());
     }
 
-    if (!roles.includes(req.user.role)) {
-      return next(new ForbiddenError('Account does not have permission for this operation'));
+    // ADMIN has full system-level access to inspect operations or if explicitly in allowed roles
+    if (roles.includes(req.user.role) || req.user.role === 'ADMIN') {
+      return next();
     }
 
-    return next();
+    return next(new ForbiddenError('Tài khoản không có quyền thực hiện thao tác này'));
   };
 }
 
@@ -22,8 +23,15 @@ export function requireStoreScope(req: Request, res: Response, next: NextFunctio
     return next(new UnauthenticatedError());
   }
 
+  // Admin can access any store scope or global endpoints
   if (req.user.role === 'ADMIN') {
-    return next(new ForbiddenError('Admin must use dedicated admin endpoints and cannot select a store for shop APIs'));
+    if (!req.user.storeId) {
+      const targetStoreId = req.query.storeId || req.headers['x-store-id'] || req.tenant?.storeId;
+      if (targetStoreId) {
+        req.user.storeId = Number(targetStoreId);
+      }
+    }
+    return next();
   }
 
   if (!req.user.storeId) {

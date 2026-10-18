@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createOrderSchema, cancelOrderSchema } from './order.schema';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 
 export class OrderService {
   private prisma: PrismaClient;
@@ -228,6 +229,11 @@ export class OrderService {
       });
 
       return order;
+    }).then((result) => {
+      BusinessSyncService.getInstance(this.prisma)
+        .syncAfterSale(storeId, result.items.map((i) => i.stockItemId))
+        .catch(() => {});
+      return result;
     });
   }
 
@@ -269,10 +275,21 @@ export class OrderService {
       });
 
       return order;
+    }).then((result) => {
+      BusinessSyncService.getInstance(this.prisma)
+        .syncAfterSale(storeId, result.items.map((i) => i.stockItemId))
+        .catch(() => {});
+      return result;
     });
   }
 
-  async cancelOrder(storeId: number, userId: number, orderId: number, input: z.infer<typeof cancelOrderSchema>) {
+  async cancelOrder(
+    storeId: number,
+    userId: number,
+    orderId: number,
+    input: z.infer<typeof cancelOrderSchema>,
+    userRole?: string
+  ) {
     const defaultWarehouse = await this.prisma.warehouse.findFirst({
       where: { storeId, isDefault: true, isActive: true },
     });
@@ -284,6 +301,23 @@ export class OrderService {
       });
 
       if (!order) throw new NotFoundError('Đơn hàng không tồn tại');
+
+      // If staff, verify order belongs to today or was created/handled by this staff
+      if (userRole === 'WAREHOUSE_STAFF') {
+        const now = new Date();
+        const vnNow = new Date(now.getTime() + 7 * 3600000);
+        const vnYear = vnNow.getUTCFullYear();
+        const vnMonth = vnNow.getUTCMonth();
+        const vnDate = vnNow.getUTCDate();
+        const startOfToday = new Date(Date.UTC(vnYear, vnMonth, vnDate, -7, 0, 0, 0));
+
+        const isToday = order.createdAt >= startOfToday;
+        const isCreator = order.createdById === userId;
+
+        if (!isToday && !isCreator) {
+          throw new ConflictError('Bạn không có quyền hủy đơn hàng này');
+        }
+      }
 
       const lockedOrders = typeof (tx as any).$queryRaw === 'function'
         ? await tx.$queryRaw<Array<{ id: number; status: string }>>`
@@ -297,22 +331,16 @@ export class OrderService {
 
       const lockedOrder = lockedOrders[0];
 
-      if (lockedOrder.status === 'FULFILLED') {
-        throw new ConflictError(
-          'Đơn hàng đã hoàn thành FULFILLED không thể hủy trực tiếp. Vui lòng sử dụng tính năng Trả hàng (Returns)'
-        );
-      }
-
       if (lockedOrder.status === 'CANCELED') {
-        throw new ConflictError('Đơn hàng đã bị hủy trước đó');
+        return order;
       }
 
-      // Guard transition to CANCELED
+      // Guard transition to CANCELED (support DRAFT, CONFIRMED, and FULFILLED)
       const updateResult = await tx.order.updateMany({
         where: {
           id: orderId,
           storeId,
-          status: { in: ['DRAFT', 'CONFIRMED'] },
+          status: { in: ['DRAFT', 'CONFIRMED', 'FULFILLED'] },
         },
         data: {
           status: 'CANCELED',
@@ -325,9 +353,9 @@ export class OrderService {
         throw new ConflictError('Không thể chuyển trạng thái đơn hàng sang CANCELED');
       }
 
-      // If order was CONFIRMED, atomically restock items into inventory
+      // If order was CONFIRMED or FULFILLED, atomically restock items into inventory
       let restockMovements: Array<{ id: number; stockItemId: number; delta: number; beforeQuantity: number; afterQuantity: number }> = [];
-      if (lockedOrder.status === 'CONFIRMED') {
+      if (['CONFIRMED', 'FULFILLED'].includes(lockedOrder.status)) {
         if (!defaultWarehouse) {
           throw new NotFoundError('Không tìm thấy kho mặc định để hoàn trả tồn kho');
         }
@@ -337,20 +365,22 @@ export class OrderService {
           quantity: i.quantity,
         }));
 
-        restockMovements = await StockLedgerService.atomicAdd(
-          tx,
-          {
-            storeId,
-            warehouseId: defaultWarehouse.id,
-            userId,
-            referenceType: 'ORDER_CANCEL',
-            referenceId: order.orderNumber,
-            idempotencyKey: `ORDER_CANCEL:${storeId}:${order.id}`,
-            note: `Hoàn kho do hủy đơn hàng ${order.orderNumber}. Lý do: ${input.cancelReason}`,
-          },
-          'ORDER_CANCEL_RESTOCK',
-          restockItems
-        );
+        if (restockItems.length > 0) {
+          restockMovements = await StockLedgerService.atomicAdd(
+            tx,
+            {
+              storeId,
+              warehouseId: defaultWarehouse.id,
+              userId,
+              referenceType: 'ORDER_CANCEL',
+              referenceId: order.orderNumber,
+              idempotencyKey: `ORDER_CANCEL:${storeId}:${order.id}`,
+              note: `Hoàn kho do khách trả / hủy đơn hàng ${order.orderNumber}. Lý do: ${input.cancelReason}`,
+            },
+            'ORDER_CANCEL_RESTOCK',
+            restockItems
+          );
+        }
       }
 
       const canceledOrder = await tx.order.findUniqueOrThrow({
@@ -374,27 +404,85 @@ export class OrderService {
       });
 
       return canceledOrder;
+    }).then((result) => {
+      BusinessSyncService.getInstance(this.prisma)
+        .syncAfterCancelOrReturn(storeId, result.items.map((i) => i.stockItemId))
+        .catch(() => {});
+      return result;
     });
   }
 
-  async listOrders(storeId: number, status?: string, query?: any) {
+  async listOrders(
+    storeId: number,
+    status?: string,
+    query?: any,
+    userRole?: string,
+    userId?: number
+  ) {
     const page = Number(query?.page) || 1;
     const limit = Number(query?.limit) || 20;
     const skip = (page - 1) * limit;
+
+    const now = new Date();
+    const vnNow = new Date(now.getTime() + 7 * 3600000);
+    const vnYear = vnNow.getUTCFullYear();
+    const vnMonth = vnNow.getUTCMonth();
+    const vnDate = vnNow.getUTCDate();
+    const startOfToday = new Date(Date.UTC(vnYear, vnMonth, vnDate, -7, 0, 0, 0));
+    const startOf3Days = new Date(Date.UTC(vnYear, vnMonth, vnDate - 2, -7, 0, 0, 0));
+    const startOf7Days = new Date(Date.UTC(vnYear, vnMonth, vnDate - 6, -7, 0, 0, 0));
+    const startOf30Days = new Date(Date.UTC(vnYear, vnMonth, vnDate - 29, -7, 0, 0, 0));
 
     const where: any = {
       storeId,
       ...(status ? { status: status as any } : {}),
     };
 
+    const andConditions: any[] = [];
+
+    const searchTerm = query?.search || query?.q;
+    if (searchTerm && typeof searchTerm === 'string' && searchTerm.trim()) {
+      const term = searchTerm.trim();
+      andConditions.push({
+        OR: [
+          { orderNumber: { contains: term } },
+          { customerName: { contains: term } },
+          { customerPhone: { contains: term } },
+        ],
+      });
+    }
+
     if (query?.from || query?.to) {
-      where.createdAt = {};
+      const dateFilter: any = {};
       if (query.from) {
-        where.createdAt.gte = new Date(query.from);
+        dateFilter.gte = new Date(query.from);
       }
       if (query.to) {
-        where.createdAt.lte = new Date(query.to);
+        dateFilter.lte = new Date(query.to);
       }
+      andConditions.push({ createdAt: dateFilter });
+    }
+
+    // Role-based visibility scoping for staff:
+    // WAREHOUSE_STAFF can only see:
+    // 1. All orders created today (for counter checkout, shift lookups, re-printing invoices, checking transfers)
+    // 2. OR orders prior to today where they were the creator/handler (createdById === userId)
+    const isStaff = userRole === 'WAREHOUSE_STAFF';
+    const staffVisibilityCondition = isStaff && userId
+      ? {
+          OR: [
+            { createdAt: { gte: startOfToday } },
+            { createdById: userId },
+          ],
+        }
+      : null;
+
+    if (staffVisibilityCondition) {
+      andConditions.push(staffVisibilityCondition);
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     const sortField = ['createdAt', 'totalAmount', 'orderNumber'].includes(query?.sort)
@@ -402,19 +490,135 @@ export class OrderService {
       : 'createdAt';
     const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
 
-    const [items, total] = await Promise.all([
+    const baseStaffFilter = staffVisibilityCondition ? [staffVisibilityCondition] : [];
+
+    const [
+      items,
+      total,
+      activeOrderCount,
+      totalRevAgg,
+      itemsSoldAgg,
+      paymentAggs,
+      allCount,
+      todayCount,
+      threeDaysCount,
+      sevenDaysCount,
+      thirtyDaysCount,
+    ] = await Promise.all([
       this.prisma.order.findMany({
         where,
         include: {
           items: true,
           returns: true,
+          payments: true,
+          createdBy: {
+            select: { id: true, fullName: true, email: true },
+          },
         },
         orderBy: { [sortField]: sortOrder },
         skip,
         take: limit,
       }),
       this.prisma.order.count({ where }),
+      this.prisma.order.count({
+        where: { ...where, status: { notIn: ['CANCELED'] } },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...where, status: { notIn: ['CANCELED'] } },
+        _sum: { totalAmount: true },
+      }),
+      this.prisma.orderItem.aggregate({
+        where: { order: { ...where, status: { notIn: ['CANCELED'] } } },
+        _sum: { quantity: true },
+      }),
+      this.prisma.payment.groupBy({
+        by: ['method'],
+        where: { order: { ...where, status: { notIn: ['CANCELED'] } } },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.order.count({
+        where: {
+          storeId,
+          status: { notIn: ['CANCELED'] },
+          ...(baseStaffFilter.length > 0 ? { AND: baseStaffFilter } : {}),
+        },
+      }),
+      this.prisma.order.count({
+        where: {
+          storeId,
+          status: { notIn: ['CANCELED'] },
+          createdAt: { gte: startOfToday },
+        },
+      }),
+      this.prisma.order.count({
+        where: {
+          storeId,
+          status: { notIn: ['CANCELED'] },
+          createdAt: { gte: startOf3Days },
+          ...(baseStaffFilter.length > 0 ? { AND: baseStaffFilter } : {}),
+        },
+      }),
+      this.prisma.order.count({
+        where: {
+          storeId,
+          status: { notIn: ['CANCELED'] },
+          createdAt: { gte: startOf7Days },
+          ...(baseStaffFilter.length > 0 ? { AND: baseStaffFilter } : {}),
+        },
+      }),
+      this.prisma.order.count({
+        where: {
+          storeId,
+          status: { notIn: ['CANCELED'] },
+          createdAt: { gte: startOf30Days },
+          ...(baseStaffFilter.length > 0 ? { AND: baseStaffFilter } : {}),
+        },
+      }),
     ]);
+
+    let cashCount = 0;
+    let cashTotal = 0;
+    let transferCount = 0;
+    let transferTotal = 0;
+    let walletCount = 0;
+    let walletTotal = 0;
+
+    for (const p of paymentAggs) {
+      const m = String(p.method || 'CASH').toUpperCase();
+      const count = p._count?._all || 0;
+      const amt = Number(p._sum?.amount || 0);
+      if (m === 'BANK_TRANSFER') {
+        transferCount += count;
+        transferTotal += amt;
+      } else if (m === 'PAYOS' || m === 'WALLET') {
+        walletCount += count;
+        walletTotal += amt;
+      } else {
+        cashCount += count;
+        cashTotal += amt;
+      }
+    }
+
+    const metrics = {
+      totalRevenue: Number(totalRevAgg._sum?.totalAmount || 0),
+      orderCount: activeOrderCount,
+      totalSoldQuantity: Number(itemsSoldAgg._sum?.quantity || 0),
+      cashCount,
+      cashTotal,
+      transferCount,
+      transferTotal,
+      walletCount,
+      walletTotal,
+    };
+
+    const timeframeCounts = {
+      all: allCount,
+      today: todayCount,
+      threeDays: threeDaysCount,
+      sevenDays: sevenDaysCount,
+      thirtyDays: thirtyDaysCount,
+    };
 
     return {
       items,
@@ -424,23 +628,47 @@ export class OrderService {
         total,
         totalPages: Math.ceil(total / limit) || 1,
       },
+      metrics,
+      timeframeCounts,
     };
   }
 
-  async getOrderById(storeId: number, id: number) {
+  async getOrderById(storeId: number, id: number, userRole?: string, userId?: number) {
     const order = await this.prisma.order.findFirst({
       where: { id, storeId },
       include: {
         items: true,
+        createdBy: {
+          select: { id: true, fullName: true, email: true },
+        },
         returns: {
           include: {
             items: true,
           },
         },
+        payments: true,
       },
     });
 
     if (!order) throw new NotFoundError('Đơn hàng không tồn tại');
+
+    // Role-based visibility check for WAREHOUSE_STAFF
+    if (userRole === 'WAREHOUSE_STAFF' && userId) {
+      const now = new Date();
+      const vnNow = new Date(now.getTime() + 7 * 3600000);
+      const vnYear = vnNow.getUTCFullYear();
+      const vnMonth = vnNow.getUTCMonth();
+      const vnDate = vnNow.getUTCDate();
+      const startOfToday = new Date(Date.UTC(vnYear, vnMonth, vnDate, -7, 0, 0, 0));
+
+      const isToday = order.createdAt >= startOfToday;
+      const isCreator = order.createdById === userId;
+
+      if (!isToday && !isCreator) {
+        throw new NotFoundError('Đơn hàng không tồn tại hoặc bạn không có quyền xem đơn hàng này');
+      }
+    }
+
     return order;
   }
 }

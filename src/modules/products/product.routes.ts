@@ -18,3 +18,4 @@ productRouter.get('/:id', validate({ params: idParamSchema }), (req, res, next) 
 // Mutating endpoints require SHOP_OWNER
 productRouter.post('/', requireRole('SHOP_OWNER'), validate({ body: createProductSchema }), (req, res, next) => controller.create(req, res, next));
 productRouter.put('/:id', requireRole('SHOP_OWNER'), validate({ params: idParamSchema, body: updateProductSchema }), (req, res, next) => controller.update(req, res, next));
+productRouter.delete('/:id', requireRole('SHOP_OWNER'), validate({ params: idParamSchema }), (req, res, next) => controller.delete(req, res, next));

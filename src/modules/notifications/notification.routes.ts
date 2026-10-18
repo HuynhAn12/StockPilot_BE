@@ -14,6 +14,8 @@ notificationRouter.use(authMiddleware);
 notificationRouter.use(requireStoreScope);
 notificationRouter.use(requireRole(...storeOperatorRoles));
 
+notificationRouter.get('/settings', (req, res, next) => controller.getSettings(req, res, next));
+notificationRouter.put('/settings', (req, res, next) => controller.updateSettings(req, res, next));
 notificationRouter.get('/', validate({ query: notificationListQuerySchema }), (req, res, next) =>
   controller.list(req, res, next)
 );
@@ -21,3 +23,4 @@ notificationRouter.post('/read-all', (req, res, next) => controller.markAllRead(
 notificationRouter.post('/:id/read', validate({ params: notificationIdParamSchema }), (req, res, next) =>
   controller.markRead(req, res, next)
 );
+

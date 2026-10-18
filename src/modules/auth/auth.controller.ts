@@ -8,6 +8,19 @@ export class AuthController {
     this.authService = new AuthService();
   }
 
+  async sendRegisterOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await this.authService.sendRegisterOtp(req.body);
+      return res.status(200).json({
+        success: true,
+        message: 'Mã xác thực OTP đã được gửi đến email đăng ký của bạn.',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async register(req: Request, res: Response, next: NextFunction) {
     try {
       const meta = {
@@ -109,8 +122,23 @@ export class AuthController {
 
       return res.status(200).json({
         success: true,
-        message: 'If the email is registered, password reset instructions will be sent.',
+        message: req.body.phone
+          ? 'Mã xác thực OTP đã được gửi đến số điện thoại của bạn.'
+          : 'Mã xác thực OTP đã được gửi đến địa chỉ email của bạn.',
         data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async verifyOtp(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await this.authService.verifyOtp(req.body);
+      return res.status(200).json({
+        success: true,
+        message: 'Mã OTP chính xác. Vui lòng thiết lập mật khẩu mới.',
+        data: result,
       });
     } catch (error) {
       next(error);
@@ -128,4 +156,32 @@ export class AuthController {
       next(error);
     }
   }
+
+  async updateStore(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId;
+      const result = await this.authService.updateStore(userId, req.body);
+      return res.status(200).json({
+        success: true,
+        message: 'Cập nhật thông tin cửa hàng thành công',
+        data: result.store,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async changePassword(req: Request, res: Response, next: NextFunction) {
+    try {
+      const userId = req.user!.userId;
+      const result = await this.authService.changePassword(userId, req.body);
+      return res.status(200).json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+

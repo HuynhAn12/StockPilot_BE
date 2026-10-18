@@ -60,11 +60,58 @@ export class PricingEvaluator {
     const minimumPrice = PricingEvaluator.calculateMinimumPrice(costPrice, minimumMarginPct);
     const factors: Array<{ code: string; label: string; impact: string; value?: unknown }> = [];
 
-    // Fallback: Low confidence (< 40) or weak signals -> MAINTAIN
+    // CRITICAL: Selling below cost (loss-making) - Must always recommend price correction
+    if (costPrice > 0 && sellingPrice < costPrice) {
+      factors.push({
+        code: 'SELLING_AT_LOSS',
+        label: `Sản phẩm đang bán dưới giá vốn (Giá bán: ${sellingPrice.toLocaleString('vi-VN')} đ < Giá vốn: ${costPrice.toLocaleString('vi-VN')} đ). Cần điều chỉnh để bảo toàn vốn.`,
+        impact: 'CẦN_TĂNG_GIÁ_NGAY',
+        value: { sellingPrice, costPrice, lossPerUnit: costPrice - sellingPrice },
+      });
+
+      const targetPrice = Math.max(minimumPrice, Math.ceil((costPrice * 1.15) / 1000) * 1000);
+      return {
+        action: 'INCREASE',
+        currentPrice: sellingPrice,
+        recommendedPrice: targetPrice,
+        discountPct: 0,
+        minimumPrice,
+        expectedMarginPct: Number((((targetPrice - costPrice) / targetPrice) * 100).toFixed(1)),
+        confidence: Math.max(confidenceScore, 90),
+        factors,
+        shouldGenerateRecommendation: true,
+      };
+    }
+
+    // WARNING: Below minimum required gross margin
+    if (costPrice > 0 && sellingPrice < minimumPrice) {
+      const curMargin = Number((((sellingPrice - costPrice) / Math.max(1, sellingPrice)) * 100).toFixed(1));
+      const targetMargin = Number((minimumMarginPct * 100).toFixed(0));
+      factors.push({
+        code: 'BELOW_MINIMUM_MARGIN',
+        label: `Biên lợi nhuận gộp hiện tại (${curMargin}%) thấp hơn mục tiêu tối thiểu (${targetMargin}%). Đề xuất tăng giá lên mức an toàn.`,
+        impact: 'TĂNG_GIÁ_ĐẠT_BIÊN',
+        value: { sellingPrice, costPrice, minimumPrice, curMargin, targetMargin },
+      });
+
+      return {
+        action: 'INCREASE',
+        currentPrice: sellingPrice,
+        recommendedPrice: minimumPrice,
+        discountPct: 0,
+        minimumPrice,
+        expectedMarginPct: Number((((minimumPrice - costPrice) / minimumPrice) * 100).toFixed(1)),
+        confidence: Math.max(confidenceScore, 80),
+        factors,
+        shouldGenerateRecommendation: true,
+      };
+    }
+
+    // Fallback: Low confidence (< 40) -> MAINTAIN to avoid risky price adjustments on unreliable data
     if (confidenceScore < 40) {
       factors.push({
         code: 'LOW_CONFIDENCE',
-        label: 'Dữ liệu lịch sử chưa đủ sâu để đưa ra đề xuất thay đổi giá an toàn',
+        label: 'Dữ liệu lịch sử chưa đủ tin cậy (< 40) để đưa ra đề xuất thay đổi giá an toàn',
         impact: 'GIỮ_NGUYÊN_GIÁ',
       });
 
@@ -83,9 +130,9 @@ export class PricingEvaluator {
 
     // CASE 1: DECREASE (Markdown candidate due to Dead Stock, Slow Moving, or High Overstock)
     if (
-      (daysSinceLastSale !== null && daysSinceLastSale >= 90) ||
+      (daysSinceLastSale !== null && daysSinceLastSale >= 30) ||
       overstockScore >= 50 ||
-      (daysOfCover !== null && daysOfCover > 60)
+      (daysOfCover !== null && daysOfCover > 45)
     ) {
       let baseMarkdown = 0.10;
 

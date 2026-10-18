@@ -19,13 +19,26 @@ pricingRouter.use(requireStoreScope);
 // List pricing recommendations
 pricingRouter.get(
   '/',
-  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  requireRole('SHOP_OWNER'),
   validate({ query: pricingListQuerySchema }),
   controller.list
 );
 
+// Get price change history
+pricingRouter.get(
+  '/history',
+  requireRole('SHOP_OWNER'),
+  controller.getHistory
+);
+
 // Accept recommendation (SHOP_OWNER only)
 pricingRouter.post(
+  '/:id/accept',
+  requireRole('SHOP_OWNER'),
+  validate({ params: pricingActionParamsSchema, body: acceptRecommendationSchema }),
+  controller.accept
+);
+pricingRouter.patch(
   '/:id/accept',
   requireRole('SHOP_OWNER'),
   validate({ params: pricingActionParamsSchema, body: acceptRecommendationSchema }),
@@ -39,9 +52,21 @@ pricingRouter.post(
   validate({ params: pricingActionParamsSchema }),
   controller.reject
 );
+pricingRouter.patch(
+  '/:id/reject',
+  requireRole('SHOP_OWNER'),
+  validate({ params: pricingActionParamsSchema }),
+  controller.reject
+);
 
 // Modify recommendation (SHOP_OWNER only)
 pricingRouter.post(
+  '/:id/modify',
+  requireRole('SHOP_OWNER'),
+  validate({ params: pricingActionParamsSchema, body: modifyRecommendationSchema }),
+  controller.modify
+);
+pricingRouter.patch(
   '/:id/modify',
   requireRole('SHOP_OWNER'),
   validate({ params: pricingActionParamsSchema, body: modifyRecommendationSchema }),

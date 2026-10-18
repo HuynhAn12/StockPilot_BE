@@ -81,4 +81,20 @@ export class PricingController {
       next(error);
     }
   };
+
+  getHistory = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const storeId = req.user!.storeId!;
+      const stockItemId = req.query.stockItemId ? Number(req.query.stockItemId) : undefined;
+      const limit = req.query.limit ? Math.min(100, Math.max(1, Number(req.query.limit))) : 50;
+
+      const items = await this.service.getPriceHistories(storeId, stockItemId, limit);
+      return res.status(200).json({
+        success: true,
+        data: items,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 }

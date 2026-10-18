@@ -11,7 +11,7 @@ export class ProductController {
       const query = (req as any).validatedQuery || req.query;
       const result = await productService.listProducts(storeId, query);
       const maskedItems = maskSensitiveFields(result.items, req.user?.role);
-      return res.status(200).json({ success: true, items: maskedItems, pagination: result.pagination });
+      return res.status(200).json({ success: true, data: maskedItems, items: maskedItems, pagination: result.pagination });
     } catch (error) {
       next(error);
     }
@@ -47,6 +47,17 @@ export class ProductController {
       const product = await productService.updateProduct(storeId, id, req.body, req.user!.userId);
       const masked = maskSensitiveFields(product, req.user?.role);
       return res.status(200).json({ success: true, message: 'Cập nhật sản phẩm thành công', data: masked });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async delete(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const id = Number(req.params.id);
+      await productService.deleteProduct(storeId, id, req.user!.userId);
+      return res.status(200).json({ success: true, message: 'Đã xóa sản phẩm thành công' });
     } catch (error) {
       next(error);
     }
