@@ -139,7 +139,7 @@ export class ReturnService {
         const remainingQuantity = orderItem.quantity - returnedQty;
         if (reqItem.quantity > remainingQuantity) {
           throw new ConflictError(
-            `Số lượng trả vượt quá giới hạn mua còn lại của SKU ${orderItem.skuSnapshot} (Còn lại có thể trả: ${remainingQuantity}, Yêu cầu trả: ${reqItem.quantity})`
+            `Số lượng trả vượt quá giới hạn mua còn lại của mã SP ${orderItem.skuSnapshot} (Còn lại có thể trả: ${remainingQuantity}, Yêu cầu trả: ${reqItem.quantity})`
           );
         }
 
@@ -182,7 +182,7 @@ export class ReturnService {
 
         if (updateResult.count !== 1) {
           throw new ConflictError(
-            `Số lượng trả hoặc số tiền hoàn vượt quá giới hạn cho phép của SKU ${orderItem.skuSnapshot}`
+            `Số lượng trả hoặc số tiền hoàn vượt quá giới hạn cho phép của mã SP ${orderItem.skuSnapshot}`
           );
         }
 

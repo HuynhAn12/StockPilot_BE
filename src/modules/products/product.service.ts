@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createProductSchema, updateProductSchema } from './product.schema';
 import { toDecimal } from '../../common/utils/decimal';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { uploadImageBuffer } from '../upload/upload.service';
 
 export class ProductService {
   async listProducts(storeId: number, query?: any) {
@@ -29,10 +30,10 @@ export class ProductService {
       ];
     }
 
-    const sortField = ['createdAt', 'name', 'code', 'updatedAt'].includes(query?.sort)
+    const sortField = ['createdAt', 'name', 'code', 'updatedAt', 'id'].includes(query?.sort)
       ? query.sort
-      : 'createdAt';
-    const sortOrder = query?.order === 'asc' ? 'asc' : 'desc';
+      : 'id';
+    const sortOrder = query?.order === 'desc' ? 'desc' : 'asc';
 
     const [items, total] = await Promise.all([
       prisma.product.findMany({
@@ -92,11 +93,16 @@ export class ProductService {
   }
 
   async createProduct(storeId: number, input: z.infer<typeof createProductSchema>, userId?: number) {
+    const cleanCode = input.code.toUpperCase().trim();
+    if (!/^SP[0-9]+$/.test(cleanCode)) {
+      throw new ValidationError('Mã sản phẩm chỉ được có định dạng SP kèm số (VD: SP1, SP2...)');
+    }
+
     const existingCode = await prisma.product.findUnique({
       where: {
         storeId_code: {
           storeId,
-          code: input.code.toUpperCase().trim(),
+          code: cleanCode,
         },
       },
     });
@@ -120,6 +126,12 @@ export class ProductService {
       throw new ValidationError('Duplicate SKU in the same product request');
     }
 
+    for (const sku of skus) {
+      if (!/^SP[0-9]+$/.test(sku)) {
+        throw new ValidationError('Mã SP chỉ được có định dạng SP kèm số (VD: SP1, SP2...)');
+      }
+    }
+
     const invalidThreshold = input.items.find((i) => i.minStockLevel > i.maxStockLevel);
     if (invalidThreshold) {
       throw new ValidationError(`minStockLevel must be less than or equal to maxStockLevel for SKU ${invalidThreshold.sku}`);
@@ -133,7 +145,29 @@ export class ProductService {
     });
 
     if (existingSKUs.length > 0) {
-      throw new ConflictError(`Mã SKU '${existingSKUs[0].sku}' đã tồn tại trong cửa hàng`);
+      throw new ConflictError(`Mã SP '${existingSKUs[0].sku}' đã tồn tại trong cửa hàng`);
+    }
+
+    const barcodes = input.items
+      .map((i) => i.barcode?.trim())
+      .filter((b): b is string => Boolean(b && b.length > 0));
+
+    if (barcodes.length > 0) {
+      const existingBarcode = await prisma.stockItem.findFirst({
+        where: {
+          storeId,
+          barcode: { in: barcodes },
+        },
+        include: {
+          product: { select: { name: true } },
+        },
+      });
+
+      if (existingBarcode) {
+        throw new ConflictError(
+          `Mã vạch '${existingBarcode.barcode}' đã tồn tại trên sản phẩm '${existingBarcode.product?.name || existingBarcode.name}'`
+        );
+      }
     }
 
     // Find default warehouse to initialize balance row with 0 quantity
@@ -145,6 +179,19 @@ export class ProductService {
       throw new NotFoundError('No active default warehouse exists for this store');
     }
 
+    let finalImageUrl = (input as any).imageUrl;
+    if (typeof finalImageUrl === 'string' && finalImageUrl.startsWith('data:image/')) {
+      try {
+        const base64Data = finalImageUrl.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        const uploaded = await uploadImageBuffer(buffer, 'stockpilot');
+        finalImageUrl = uploaded.secureUrl || uploaded.url;
+      } catch (err) {
+        console.warn('Backend Cloudinary upload error:', err);
+        finalImageUrl = null;
+      }
+    }
+
     return prisma.$transaction(async (tx) => {
       const product = await tx.product.create({
         data: {
@@ -153,6 +200,7 @@ export class ProductService {
           name: input.name.trim(),
           code: input.code.toUpperCase().trim(),
           description: input.description,
+          imageUrl: finalImageUrl || null,
         },
       });
 
@@ -221,7 +269,33 @@ export class ProductService {
       if (!cat) throw new NotFoundError('Danh mục không tồn tại');
     }
 
+    let finalImageUrl = (input as any).imageUrl;
+    if (typeof finalImageUrl === 'string' && finalImageUrl.startsWith('data:image/')) {
+      try {
+        const base64Data = finalImageUrl.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        const uploaded = await uploadImageBuffer(buffer, 'stockpilot');
+        finalImageUrl = uploaded.secureUrl || uploaded.url;
+      } catch (err) {
+        console.warn('Backend Cloudinary upload error:', err);
+        finalImageUrl = null;
+      }
+    }
+
     return prisma.$transaction(async (tx) => {
+      const newSellingPrice = input.sellingPrice !== undefined ? input.sellingPrice : input.salePrice;
+      const newCostPrice = input.costPrice;
+
+      if (newSellingPrice !== undefined || newCostPrice !== undefined) {
+        await tx.stockItem.updateMany({
+          where: { productId: id, storeId },
+          data: {
+            ...(newSellingPrice !== undefined ? { sellingPrice: newSellingPrice } : {}),
+            ...(newCostPrice !== undefined ? { costPrice: newCostPrice } : {}),
+          },
+        });
+      }
+
       const updated = await tx.product.update({
         where: { id },
         data: {
@@ -229,6 +303,7 @@ export class ProductService {
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
           ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+          ...((input as any).imageUrl !== undefined ? { imageUrl: finalImageUrl || null } : {}),
         },
         include: {
           category: true,
@@ -262,6 +337,43 @@ export class ProductService {
           categoryId: updated.categoryId,
           description: updated.description,
           isActive: updated.isActive,
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  async deleteProduct(storeId: number, id: number, userId?: number) {
+    const existingProduct = await this.getProductById(storeId, id);
+
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.product.update({
+        where: { id },
+        data: { isActive: false },
+        include: { stockItems: true },
+      });
+
+      await tx.stockItem.updateMany({
+        where: { productId: id, storeId },
+        data: { isActive: false },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: userId ?? null,
+        action: 'PRODUCT_DELETED',
+        entityType: 'PRODUCT',
+        entityId: id,
+        beforeJson: {
+          id: existingProduct.id,
+          name: existingProduct.name,
+          isActive: existingProduct.isActive,
+        },
+        afterJson: {
+          id: updated.id,
+          name: updated.name,
+          isActive: false,
         },
       });
 

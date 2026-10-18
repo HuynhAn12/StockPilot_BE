@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { inflowSchema, outflowSchema, auditSchema } from './inventory.schema';
 import { StockLedgerService } from './stock-ledger.service';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 
 export class InventoryService {
   private prisma: PrismaClient;
@@ -69,6 +70,11 @@ export class InventoryService {
       });
 
       return { warehouse, movements };
+    }).then((result) => {
+      BusinessSyncService.getInstance(this.prisma)
+        .syncAfterInventoryMovement(storeId, input.items.map((i) => i.stockItemId))
+        .catch(() => {});
+      return result;
     });
   }
 
@@ -112,6 +118,11 @@ export class InventoryService {
       });
 
       return { warehouse, movements };
+    }).then((result) => {
+      BusinessSyncService.getInstance(this.prisma)
+        .syncAfterInventoryMovement(storeId, input.items.map((i) => i.stockItemId))
+        .catch(() => {});
+      return result;
     });
   }
 
@@ -129,7 +140,7 @@ export class InventoryService {
         });
 
         if (!stockItem) {
-          throw new NotFoundError(`Sản phẩm/SKU ID ${item.stockItemId} không tồn tại trong cửa hàng`);
+          throw new NotFoundError(`Sản phẩm/Mã SP ID ${item.stockItemId} không tồn tại trong cửa hàng`);
         }
 
         // Ensure balance record exists prior to locking
@@ -220,6 +231,11 @@ export class InventoryService {
       });
 
       return { warehouse, movements };
+    }).then((result) => {
+      BusinessSyncService.getInstance(this.prisma)
+        .syncAfterInventoryMovement(storeId, input.items.map((i) => i.stockItemId))
+        .catch(() => {});
+      return result;
     });
   }
 

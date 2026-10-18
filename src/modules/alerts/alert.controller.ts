@@ -21,6 +21,19 @@ export class AlertController {
     }
   };
 
+  stats = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const storeId = req.user!.storeId!;
+      const result = await this.service.getStats(storeId);
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   acknowledge = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;

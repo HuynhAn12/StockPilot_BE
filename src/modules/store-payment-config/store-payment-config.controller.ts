@@ -38,4 +38,19 @@ export class StorePaymentConfigController {
       return next(error);
     }
   }
+
+  async togglePayosConfig(req: Request, res: Response, next: NextFunction) {
+    try {
+      const active = Boolean(req.body.active);
+      const result = await service.togglePayosConfig(req.user!.storeId!, req.user!.userId, active);
+      return res.status(200).json({
+        success: true,
+        message: active ? 'Đã kích hoạt PayOS' : 'Đã tạm dừng PayOS',
+        data: result,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
 }
+

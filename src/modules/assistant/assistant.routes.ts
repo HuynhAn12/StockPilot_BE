@@ -25,3 +25,17 @@ assistantRouter.get(
   requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
   controller.explainStoreOverview
 );
+
+// Chat with assistant
+assistantRouter.post(
+  '/chat',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF', 'ADMIN'),
+  controller.chat
+);
+
+// Chat history
+assistantRouter.get(
+  '/history',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF', 'ADMIN'),
+  controller.getHistory
+);

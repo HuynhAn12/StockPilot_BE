@@ -5,6 +5,7 @@ import { DemandTrend } from '../decision-engine/demand-metrics.service';
 import { DEFAULT_ENGINE_CONFIG } from '../decision-engine/engine-config.service';
 import { PricingEvaluator, PricingEvaluationResult } from '../decision-engine/pricing-evaluator';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 
 export interface PricingEvaluationInput {
   storeId: number;
@@ -247,6 +248,13 @@ export class PricingService {
       });
 
       return updated;
+    }).then((result) => {
+      if (applyToStockItem) {
+        BusinessSyncService.getInstance(this.prisma)
+          .syncAfterPriceChange(storeId, result.stockItemId)
+          .catch(() => {});
+      }
+      return result;
     });
   }
 
@@ -359,6 +367,13 @@ export class PricingService {
       });
 
       return updated;
+    }).then((result) => {
+      if (applyToStockItem) {
+        BusinessSyncService.getInstance(this.prisma)
+          .syncAfterPriceChange(storeId, result.stockItemId)
+          .catch(() => {});
+      }
+      return result;
     });
   }
 

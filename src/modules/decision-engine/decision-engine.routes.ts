@@ -31,10 +31,10 @@ decisionEngineRouter.get(
   controller.getOverview
 );
 
-// Batch recalculation (SHOP_OWNER only)
+// Batch recalculation
 decisionEngineRouter.post(
   '/recalculate',
-  requireRole('SHOP_OWNER'),
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
   controller.recalculate
 );
 

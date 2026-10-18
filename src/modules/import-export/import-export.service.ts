@@ -99,7 +99,7 @@ export class ImportExportService {
           sku: item.sku,
           field: 'sku',
           severity: 'ERROR',
-          message: `Mã SKU ${item.sku} bị trùng lặp trong danh sách tải lên`,
+          message: `Mã SP ${item.sku} bị trùng lặp trong danh sách tải lên`,
         });
         hasError = true;
         invalidRowIndices.add(rowNumber);
@@ -198,7 +198,7 @@ export class ImportExportService {
           sku: item.sku,
           field: 'sku',
           severity: 'WARNING',
-          message: `SKU ${item.sku} đã tồn tại trong hệ thống (Chế độ CREATE_ONLY sẽ bỏ qua cập nhật)`,
+          message: `Mã SP ${item.sku} đã tồn tại trong hệ thống (Chế độ CREATE_ONLY sẽ bỏ qua cập nhật)`,
         });
         warningRowIndices.add(idx + 1);
       }

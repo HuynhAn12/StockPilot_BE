@@ -9,6 +9,12 @@ import { createPosSaleSchema } from './pos.schema';
 export const posRouter = Router();
 const controller = new PosController();
 
+// Public Webhook IPN from MoMo (No auth required)
+posRouter.post(
+  '/momo/ipn',
+  (req, res, next) => controller.handleMomoIpn(req, res, next)
+);
+
 posRouter.use(authMiddleware);
 posRouter.use(requireStoreScope);
 
@@ -19,3 +25,47 @@ posRouter.post(
   idempotency({ operation: 'POS_SALE_CREATE' }),
   (req, res, next) => controller.createSale(req, res, next)
 );
+
+posRouter.post(
+  '/payos/create-link',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  (req, res, next) => controller.createPayosLink(req, res, next)
+);
+
+posRouter.get(
+  '/payos/status/:orderCode',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  (req, res, next) => controller.checkPayosStatus(req, res, next)
+);
+
+posRouter.post(
+  '/momo/create-payment',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  (req, res, next) => controller.createMomoPayment(req, res, next)
+);
+
+posRouter.get(
+  '/momo/status/:momoOrderId',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  (req, res, next) => controller.checkMomoStatus(req, res, next)
+);
+
+posRouter.post(
+  '/momo/confirm-success/:momoOrderId',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  (req, res, next) => controller.confirmMomoSuccess(req, res, next)
+);
+
+posRouter.get(
+  '/momo/config',
+  requireRole('SHOP_OWNER'),
+  (req, res, next) => controller.getMomoConfig(req, res, next)
+);
+
+posRouter.post(
+  '/momo/config',
+  requireRole('SHOP_OWNER'),
+  (req, res, next) => controller.saveMomoConfig(req, res, next)
+);
+
+
