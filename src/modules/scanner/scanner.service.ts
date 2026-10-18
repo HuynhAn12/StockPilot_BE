@@ -108,7 +108,9 @@ const cleanupInterval = setInterval(() => {
           try {
             client.res.write('event: expired\ndata: {"message":"Session expired"}\n\n');
             client.res.end();
-          } catch (_) {}
+          } catch (_error) {
+            //
+          }
         }
         sseClients.delete(code);
       }
@@ -337,7 +339,9 @@ export class ScannerService {
       try {
         client.res.write('event: closed\ndata: {"message":"Session closed by host"}\n\n');
         client.res.end();
-      } catch (_) {}
+      } catch (_) {
+        //ko co gi
+      }
     }
     sseClients.delete(code);
   }
