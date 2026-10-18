@@ -338,7 +338,7 @@ export class OrderService {
       }
 
       if (lockedOrder.status === 'CANCELED') {
-        return order;
+        throw new ConflictError('Đơn hàng đã bị hủy trước đó');
       }
 
       // Guard transition to CANCELED (only DRAFT and CONFIRMED)

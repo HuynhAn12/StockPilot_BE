@@ -371,8 +371,13 @@ export class AuthService {
       });
 
       if (revokeResult.count !== 1) {
-        // A parallel request already rotated this session in the same instant
-        return { concurrent: true };
+        // Parallel request already rotated this session!
+        // Revoke all remaining active sessions of this user (replay attack detection)
+        await tx.authSession.updateMany({
+          where: { userId: session.userId, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        return { replayDetected: true };
       }
 
       await tx.authSession.create({
@@ -385,14 +390,13 @@ export class AuthService {
         },
       });
 
-      return { concurrent: false };
+      return { replayDetected: false };
     });
 
-    if (rotation.concurrent) {
-      return {
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
-      };
+    if (rotation.replayDetected) {
+      throw new UnauthenticatedError(
+        'Refresh token đã được sử dụng hoặc phiên không còn hợp lệ. Toàn bộ phiên đăng nhập đã bị thu hồi vì lý do an toàn'
+      );
     }
 
     return {
