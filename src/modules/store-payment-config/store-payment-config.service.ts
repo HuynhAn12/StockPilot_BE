@@ -135,12 +135,35 @@ export class StorePaymentConfigService {
       return saved;
     });
 
-    return {
+      return {
       provider: config.provider,
       configured: true,
       active: config.isActive,
       configuredAt: config.configuredAt,
       updatedAt: config.updatedAt,
+    };
+  }
+
+  async togglePayosConfig(storeId: number, actorUserId: number, active: boolean) {
+    const existing = await this.db.storePaymentConfig.findUnique({
+      where: { storeId_provider: { storeId, provider: PaymentConfigProvider.PAYOS } },
+      select: { id: true, isActive: true },
+    });
+
+    if (!existing) {
+      throw new NotFoundError('Chưa cấu hình thông tin PayOS');
+    }
+
+    const saved = await this.db.storePaymentConfig.update({
+      where: { id: existing.id },
+      data: { isActive: active },
+    });
+
+    return {
+      provider: saved.provider,
+      configured: true,
+      active: saved.isActive,
+      updatedAt: saved.updatedAt,
     };
   }
 }

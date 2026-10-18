@@ -163,11 +163,12 @@ export class DecisionEngineService {
       hasSufficientHistory,
     });
 
-    const reorderPoint = this.riskEvaluator.calculateReorderPoint(
+    const statisticalRop = this.riskEvaluator.calculateReorderPoint(
       demand.avg30,
       config.leadTimeDays,
       safetyStockResult.safetyStock
     );
+    const reorderPoint = Math.max(stockItem.minStockLevel || 0, statisticalRop);
 
     const daysOfCover = this.riskEvaluator.calculateDaysOfCover(available, demand.avg30);
 

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const stockItemInputSchema = z.object({
-  sku: z.string().min(1, 'SKU không được để trống'),
+  sku: z.string().min(1, 'Mã SP không được để trống'),
   name: z.string().min(1, 'Tên biến thể không được để trống'),
   barcode: z.string().optional(),
   costPrice: z.coerce.number().min(0, 'Giá vốn không được âm'),
@@ -23,7 +23,8 @@ export const createProductSchema = z.object({
   name: z.string().min(1, 'Tên sản phẩm không được để trống'),
   code: z.string().min(1, 'Mã sản phẩm không được để trống').regex(/^[A-Za-z0-9_-]+$/, 'Mã sản phẩm chỉ chứa ký tự chữ cái, số, gạch nối hoặc gạch dưới'),
   description: z.string().optional(),
-  items: z.array(stockItemInputSchema).min(1, 'Sản phẩm phải có ít nhất 1 SKU/biến thể'),
+  imageUrl: z.string().optional().or(z.literal('')),
+  items: z.array(stockItemInputSchema).min(1, 'Sản phẩm phải có ít nhất 1 mã SP/biến thể'),
 }).superRefine((input, ctx) => {
   const seen = new Set<string>();
   input.items.forEach((item, index) => {
@@ -43,5 +44,9 @@ export const updateProductSchema = z.object({
   categoryId: z.number().int().nullable().optional(),
   name: z.string().min(1).optional(),
   description: z.string().optional(),
+  imageUrl: z.string().optional().or(z.literal('')).nullable(),
   isActive: z.boolean().optional(),
+  salePrice: z.coerce.number().min(0).optional(),
+  sellingPrice: z.coerce.number().min(0).optional(),
+  costPrice: z.coerce.number().min(0).optional(),
 });

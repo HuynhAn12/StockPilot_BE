@@ -10,9 +10,21 @@ export class OrderController {
       const storeId = req.user!.storeId!;
       const status = req.query.status as string;
       const query = (req as any).validatedQuery || req.query;
-      const result = await orderService.listOrders(storeId, status, query);
+      const result = await orderService.listOrders(
+        storeId,
+        status,
+        query,
+        req.user?.role,
+        req.user?.userId
+      );
       const maskedItems = maskSensitiveFields(result.items, req.user?.role);
-      return res.status(200).json({ success: true, items: maskedItems, pagination: result.pagination });
+      return res.status(200).json({
+        success: true,
+        items: maskedItems,
+        pagination: result.pagination,
+        metrics: result.metrics,
+        timeframeCounts: result.timeframeCounts,
+      });
     } catch (error) {
       next(error);
     }
@@ -22,7 +34,12 @@ export class OrderController {
     try {
       const storeId = req.user!.storeId!;
       const id = Number(req.params.id);
-      const order = await orderService.getOrderById(storeId, id);
+      const order = await orderService.getOrderById(
+        storeId,
+        id,
+        req.user?.role,
+        req.user?.userId
+      );
       const masked = maskSensitiveFields(order, req.user?.role);
       return res.status(200).json({ success: true, data: masked });
     } catch (error) {
@@ -78,7 +95,7 @@ export class OrderController {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
       const id = Number(req.params.id);
-      const order = await orderService.cancelOrder(storeId, userId, id, req.body);
+      const order = await orderService.cancelOrder(storeId, userId, id, req.body, req.user?.role);
       const masked = maskSensitiveFields(order, req.user?.role);
       return res.status(200).json({ success: true, message: 'Hủy đơn hàng thành công', data: masked });
     } catch (error) {

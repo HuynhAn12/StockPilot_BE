@@ -14,7 +14,7 @@ export const importItemSchema = z.object({
   categoryCode: z.string().min(1, 'Mã danh mục không được để trống'),
   productName: z.string().min(1, 'Tên sản phẩm không được để trống'),
   productCode: z.string().min(1, 'Mã sản phẩm không được để trống'),
-  sku: z.string().min(1, 'Mã SKU không được để trống'),
+  sku: z.string().min(1, 'Mã SP không được để trống'),
   barcode: z.string().optional(),
   costPrice: z.coerce.number().min(0, 'Giá vốn phải lớn hơn hoặc bằng 0').default(0),
   sellingPrice: z.coerce.number().min(0, 'Giá bán phải lớn hơn hoặc bằng 0').default(0),

@@ -31,6 +31,9 @@ import { stockTakeRouter } from './modules/stock-takes/stock-take.routes';
 import { notificationRouter } from './modules/notifications/notification.routes';
 import { storePaymentConfigRouter } from './modules/store-payment-config/store-payment-config.routes';
 import { posRouter } from './modules/pos/pos.routes';
+import { auditLogRouter } from './modules/audit-logs/audit-log.routes';
+import { uploadRouter } from './modules/upload/upload.routes';
+import { scannerRouter } from './modules/scanner/scanner.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -59,8 +62,8 @@ export function createApp(): Express {
   app.use(requestLoggerMiddleware);
   app.use(sensitiveFieldsMiddleware);
 
-  // Rate Limiting (Skip in test environment)
-  if (env.NODE_ENV !== 'test') {
+  // Rate Limiting (Production only)
+  if (env.NODE_ENV === 'production') {
     const generalLimiter = rateLimit({
       windowMs: env.GENERAL_RATE_LIMIT_WINDOW_MS,
       max: env.GENERAL_RATE_LIMIT_MAX,
@@ -93,9 +96,27 @@ export function createApp(): Express {
           },
         }),
     });
+
+    const refreshLimiter = rateLimit({
+      windowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+      max: Math.max(env.AUTH_RATE_LIMIT_MAX * 12, 120),
+      standardHeaders: true,
+      legacyHeaders: false,
+      handler: (req, res) =>
+        res.status(429).json({
+          success: false,
+          error: {
+            code: 'AUTH_RATE_LIMIT_EXCEEDED',
+            message: 'Too many token refresh attempts, please try again later.',
+            requestId: (req as any).requestId,
+          },
+        }),
+    });
+
     app.use('/api/v1/auth/login', authLimiter);
-    app.use('/api/v1/auth/refresh', authLimiter);
+    app.use('/api/v1/auth/refresh', refreshLimiter);
     app.use('/api/v1/auth/forgot-password', authLimiter);
+    app.use('/api/v1/auth/verify-otp', authLimiter);
     app.use('/api/v1/auth/reset-password', authLimiter);
   }
 
@@ -149,7 +170,11 @@ export function createApp(): Express {
   app.use('/api/v1/stock-takes', stockTakeRouter);
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/store/payment-config', storePaymentConfigRouter);
+  app.use('/api/v1/store-payment-config', storePaymentConfigRouter);
   app.use('/api/v1/pos', posRouter);
+  app.use('/api/v1/audit-logs', auditLogRouter);
+  app.use('/api/v1/upload', uploadRouter);
+  app.use('/api/v1/scanner', scannerRouter);
 
   // Centralized Error Handling
   app.use(errorHandler);

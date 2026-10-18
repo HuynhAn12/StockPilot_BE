@@ -19,6 +19,13 @@ alertRouter.get(
   controller.list
 );
 
+// Get summary stats
+alertRouter.get(
+  '/stats',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  controller.stats
+);
+
 // Acknowledge alert
 alertRouter.post(
   '/:id/acknowledge',

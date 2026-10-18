@@ -44,3 +44,4 @@ STOCKPILOT_*.md
 prisma/*.sql
 !prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql
 
+node_modules

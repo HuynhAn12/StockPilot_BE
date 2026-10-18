@@ -128,10 +128,14 @@ export class RiskEvaluator {
 
     const shortageRatio = Math.max(0, reorderPoint - availableStock) / Math.max(reorderPoint, 1);
     const requiredCoverage = Math.max(1, leadTimeDays + safetyDays);
-    const coverageRisk = daysOfCover !== null ? Math.max(0, 1 - daysOfCover / requiredCoverage) : 0;
+    const coverageRisk = daysOfCover !== null ? Math.max(0, 1 - daysOfCover / requiredCoverage) : (shortageRatio > 0 ? 0.7 : 0);
     const trendRisk = Math.min(Math.max((trendRatio - 1.0) / 1.0, 0), 1);
 
-    const weightedScore = Math.round(100 * (0.5 * shortageRatio + 0.35 * coverageRisk + 0.15 * trendRisk));
+    let weightedScore = Math.round(100 * (0.5 * shortageRatio + 0.35 * coverageRisk + 0.15 * trendRisk));
+    if (availableStock <= reorderPoint && reorderPoint > 0) {
+      const minStockoutScore = shortageRatio >= 0.7 ? criticalThreshold : shortageRatio >= 0.3 ? highThreshold : lowThreshold;
+      weightedScore = Math.max(weightedScore, minStockoutScore);
+    }
     const score = Math.min(100, Math.max(0, weightedScore));
 
     let severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
@@ -161,11 +165,15 @@ export class RiskEvaluator {
     const coverageExcess =
       daysOfCover !== null
         ? Math.max(0, daysOfCover - targetCoverageDays) / Math.max(targetCoverageDays, 1)
-        : 0;
+        : (qtyExcessRatio > 0 ? 0.5 : 0);
     const declineRisk = Math.min(Math.max(1.0 - trendRatio, 0), 1);
 
     const weighted = 0.45 * Math.min(1, qtyExcessRatio) + 0.4 * Math.min(1, coverageExcess) + 0.15 * declineRisk;
-    const score = Math.min(100, Math.max(0, Math.round(100 * weighted)));
+    let score = Math.min(100, Math.max(0, Math.round(100 * weighted)));
+    if (availableStock > maxStockLevel && maxStockLevel > 0) {
+      const minOverstockScore = qtyExcessRatio >= 0.5 ? highThreshold : lowThreshold;
+      score = Math.max(score, minOverstockScore);
+    }
 
     let severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
     if (score >= criticalThreshold) severity = 'CRITICAL';

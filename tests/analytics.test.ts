@@ -23,6 +23,10 @@ describe('AnalyticsService - Dashboard Metrics Calculation', () => {
       _count: { id: 2 },
       _sum: { totalAmount: 800000 },
     });
+    (prisma.order.findMany as jest.Mock).mockResolvedValue([
+      { id: 1, totalAmount: 500000, items: [] },
+      { id: 2, totalAmount: 300000, items: [] },
+    ]);
 
     // 1 return aggregate: 100,000
     (prisma.returnOrder.aggregate as jest.Mock).mockResolvedValue({

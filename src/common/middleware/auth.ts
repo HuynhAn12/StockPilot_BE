@@ -19,8 +19,14 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
   }
 
   const token = authHeader.split(' ')[1];
+  let payload: TokenPayload;
   try {
-    const payload = verifyAccessToken(token);
+    payload = verifyAccessToken(token);
+  } catch {
+    return next(new UnauthenticatedError('Invalid or expired token'));
+  }
+
+  try {
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
       select: {
@@ -46,7 +52,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       storeId: user.storeId,
     };
     return next();
-  } catch {
-    return next(new UnauthenticatedError('Invalid or expired token'));
+  } catch (dbErr) {
+    return next(dbErr);
   }
 }

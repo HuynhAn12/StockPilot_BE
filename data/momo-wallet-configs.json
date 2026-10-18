@@ -1,0 +1,34 @@
+{
+  "4": {
+    "partnerCode": "MOMOVA0I20261015",
+    "accessKey": "sjqZwImFcjxZBhHF",
+    "secretKey": "OK6GwHc66ZBSdqyuR5RXKTx0xA718DKh",
+    "publicKey": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA0bdyiSaX+Ab/seENKgN9NwIcPSYw6GlwRZjh3ZfqFuEKr7ecohIc8PkPPimJzjE8L2e2ihnNvfri1YVTS29v7se1BqWI/hfb8Mrlz5P8jl8vQUZtT/osQYY8EZluJy3vc5GbVvvCt4PN0nw3qbITri25uyMLqR4zcJHLidLs1TBcuDoJggxkG23d0wtBQJu4saAGcmY3YhWJ09UaMtdJB+fdZiYdzuDwTYoINmSC9oegeawU7Zc580W+2RDrgxdJDUrmommhjgoyg0LCCtp4xcz0mpSUmn0wIey79fDRqH5soaxVaF763IdSvmUrxBM4e9NpFvziOa58VDTf618aMlMGU06TLlrg09GPlVMxLV+xn1xZ4hBBvqEH5mz8I9y34zGA7Q89ksnwaSPJECc6GBo3Vc2ajOTYhDB9NaQktx7fQGDA9hkdF/qwP2vq3+HgGB5LZx40vSDunFGLDePj87tU18Y4YgQZXk9gRUpRaoQpSriTVLQGV1Fe3QKLG4DSKlBO79myk0TUcq3Iydcx1RKvzFJSHGEwEX6rm3/bBPtPHU4CVWpa0Z1QWKKwB0GHehwtmbf599QNMNg67MT2qOVF/iLbiGv3ZkTJ4F1/zJ9O94choP/0afmoGd3J+QTes4588Tiq71ifUoRe98ed9cIXtNiKhIOqOnOlTBSox2ECAwEAAQ==",
+    "endpoint": "https://payment.momo.vn/v2/gateway/api/create",
+    "queryEndpoint": "https://payment.momo.vn/v2/gateway/api/query",
+    "posEndpoint": "https://payment.momo.vn/v2/gateway/api/pos",
+    "businessName": "STOCKPILOT",
+    "merchantName": "STOCKPILOT",
+    "storeQrId": "4032108",
+    "merchantAccount": "PMC2628818000000003",
+    "merchantQrCode": "00020101021126220007vn.momo0207403210838630010A000000727013300069710250119PMC26288180000000030208QRIBFTTA53037045802VN6304CB72",
+    "qrImageUrl": "/momo-merchant-qr.png",
+    "isConfigured": true
+  },
+  "default": {
+    "partnerCode": "MOMOVA0I20261015",
+    "accessKey": "sjqZwImFcjxZBhHF",
+    "secretKey": "OK6GwHc66ZBSdqyuR5RXKTx0xA718DKh",
+    "publicKey": "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA0bdyiSaX+Ab/seENKgN9NwIcPSYw6GlwRZjh3ZfqFuEKr7ecohIc8PkPPimJzjE8L2e2ihnNvfri1YVTS29v7se1BqWI/hfb8Mrlz5P8jl8vQUZtT/osQYY8EZluJy3vc5GbVvvCt4PN0nw3qbITri25uyMLqR4zcJHLidLs1TBcuDoJggxkG23d0wtBQJu4saAGcmY3YhWJ09UaMtdJB+fdZiYdzuDwTYoINmSC9oegeawU7Zc580W+2RDrgxdJDUrmommhjgoyg0LCCtp4xcz0mpSUmn0wIey79fDRqH5soaxVaF763IdSvmUrxBM4e9NpFvziOa58VDTf618aMlMGU06TLlrg09GPlVMxLV+xn1xZ4hBBvqEH5mz8I9y34zGA7Q89ksnwaSPJECc6GBo3Vc2ajOTYhDB9NaQktx7fQGDA9hkdF/qwP2vq3+HgGB5LZx40vSDunFGLDePj87tU18Y4YgQZXk9gRUpRaoQpSriTVLQGV1Fe3QKLG4DSKlBO79myk0TUcq3Iydcx1RKvzFJSHGEwEX6rm3/bBPtPHU4CVWpa0Z1QWKKwB0GHehwtmbf599QNMNg67MT2qOVF/iLbiGv3ZkTJ4F1/zJ9O94choP/0afmoGd3J+QTes4588Tiq71ifUoRe98ed9cIXtNiKhIOqOnOlTBSox2ECAwEAAQ==",
+    "endpoint": "https://payment.momo.vn/v2/gateway/api/create",
+    "queryEndpoint": "https://payment.momo.vn/v2/gateway/api/query",
+    "posEndpoint": "https://payment.momo.vn/v2/gateway/api/pos",
+    "businessName": "STOCKPILOT",
+    "merchantName": "STOCKPILOT",
+    "storeQrId": "4032108",
+    "merchantAccount": "PMC2628818000000003",
+    "merchantQrCode": "00020101021126220007vn.momo0207403210838630010A000000727013300069710250119PMC26288180000000030208QRIBFTTA53037045802VN6304CB72",
+    "qrImageUrl": "/momo-merchant-qr.png",
+    "isConfigured": true
+  }
+}

@@ -75,8 +75,8 @@ export class AlertService {
         type: 'STOCKOUT',
         severity: 'CRITICAL',
         riskScore: 100,
-        title: `Hết hàng: SKU ${sku} (${productName})`,
-        message: `SKU ${sku} hiện có sẵn 0 sản phẩm trong kho. Cần nhập hàng khẩn cấp.`,
+        title: `Hết hàng: ${sku} (${productName})`,
+        message: `Sản phẩm ${sku} hiện có sẵn 0 sản phẩm trong kho. Cần nhập hàng khẩn cấp.`,
         reasonJson: { availableStock, reorderPoint, stockoutScore: 100 },
       };
     } else if (availableStock <= reorderPoint || stockoutScore >= 50) {
@@ -86,8 +86,8 @@ export class AlertService {
         type: 'LOW_STOCK',
         severity: sev,
         riskScore: stockoutScore,
-        title: `Cảnh báo tồn kho thấp: SKU ${sku}`,
-        message: `SKU ${sku} chỉ còn ${availableStock} đơn vị khả dụng, dưới điểm đặt hàng ${reorderPoint}.`,
+        title: `Cảnh báo tồn kho thấp: ${sku}`,
+        message: `Sản phẩm ${sku} chỉ còn ${availableStock} đơn vị khả dụng, dưới điểm đặt hàng ${reorderPoint}.`,
         reasonJson: { availableStock, reorderPoint, stockoutScore },
       };
     }
@@ -108,8 +108,8 @@ export class AlertService {
         type: 'DEAD_STOCK',
         severity: sev,
         riskScore: overstockScore,
-        title: `Hàng tồn kho ứ đọng (Dead Stock): SKU ${sku}`,
-        message: `SKU ${sku} không có giao dịch bán hàng trong ${daysSinceLastSale ?? 90} ngày qua. Cần xem xét giảm giá xả hàng.`,
+        title: `Hàng tồn kho ứ đọng: ${sku}`,
+        message: `Sản phẩm ${sku} không có giao dịch bán hàng trong ${daysSinceLastSale ?? 90} ngày qua. Cần xem xét giảm giá xả hàng.`,
         reasonJson: { daysSinceLastSale, overstockScore, deadStockSeverity },
       };
     } else if (overstockScore >= 50) {
@@ -117,8 +117,8 @@ export class AlertService {
         type: 'OVERSTOCK',
         severity: overstockScore >= 75 ? 'WARNING' : 'INFO',
         riskScore: overstockScore,
-        title: `Cảnh báo thừa hàng: SKU ${sku}`,
-        message: `SKU ${sku} có mức tồn kho vượt ngưỡng an toàn so với tốc độ tiêu thụ hiện tại.`,
+        title: `Cảnh báo thừa hàng: ${sku}`,
+        message: `Sản phẩm ${sku} có mức tồn kho vượt ngưỡng an toàn so với tốc độ tiêu thụ hiện tại.`,
         reasonJson: { overstockScore, availableStock },
       };
     }
@@ -137,8 +137,8 @@ export class AlertService {
         type: 'SLOW_MOVING',
         severity: 'WARNING',
         riskScore: 0,
-        title: `Slow-moving inventory: SKU ${sku}`,
-        message: `SKU ${sku} has not recorded a sale for ${daysSinceLastSale ?? 'multiple'} days.`,
+        title: `Hàng bán chậm: ${sku}`,
+        message: `Sản phẩm ${sku} không ghi nhận doanh số bán trong ${daysSinceLastSale ?? 'nhiều'} ngày.`,
         reasonJson: { isSlowMoving, daysSinceLastSale, overstockScore },
       };
     }
@@ -159,11 +159,11 @@ export class AlertService {
         type: 'UNUSUAL_DEMAND',
         severity: sev,
         riskScore: Math.min(100, Math.round(Math.abs(unusualDemand.zScore) * 20)),
-        title: `Nhu cầu bất thường: SKU ${sku}`,
+        title: `Nhu cầu bất thường: ${sku}`,
         message:
           unusualDemand.type === 'NEW_DEMAND_SPIKE'
-            ? `SKU ${sku} bất ngờ phát sinh lượt bán mới sau thời gian dài không có nhu cầu.`
-            : `SKU ${sku} có biến động nhu cầu đột biến (Z-Score: ${unusualDemand.zScore}).`,
+            ? `Sản phẩm ${sku} bất ngờ phát sinh lượt bán mới sau thời gian dài không có nhu cầu.`
+            : `Sản phẩm ${sku} có biến động nhu cầu đột biến (Độ lệch chuẩn Z: ${unusualDemand.zScore}).`,
         reasonJson: unusualDemand,
       };
     }
@@ -292,6 +292,30 @@ export class AlertService {
         total,
         totalPages: Math.ceil(total / query.limit),
       },
+    };
+  }
+
+  async getStats(storeId: number) {
+    const [criticalCount, warningCount, infoCount, openCount, acknowledgedCount, resolvedCount, totalCount] =
+      await Promise.all([
+        this.prisma.alert.count({ where: { storeId, status: { in: ['OPEN', 'ACKNOWLEDGED'] }, severity: 'CRITICAL' } }),
+        this.prisma.alert.count({ where: { storeId, status: { in: ['OPEN', 'ACKNOWLEDGED'] }, severity: 'WARNING' } }),
+        this.prisma.alert.count({ where: { storeId, status: { in: ['OPEN', 'ACKNOWLEDGED'] }, severity: 'INFO' } }),
+        this.prisma.alert.count({ where: { storeId, status: 'OPEN' } }),
+        this.prisma.alert.count({ where: { storeId, status: 'ACKNOWLEDGED' } }),
+        this.prisma.alert.count({ where: { storeId, status: 'RESOLVED' } }),
+        this.prisma.alert.count({ where: { storeId } }),
+      ]);
+
+    return {
+      criticalCount,
+      warningCount,
+      infoCount,
+      openCount,
+      acknowledgedCount,
+      resolvedCount,
+      totalCount,
+      activeCount: openCount + acknowledgedCount,
     };
   }
 
