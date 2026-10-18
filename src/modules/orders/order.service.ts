@@ -331,16 +331,22 @@ export class OrderService {
 
       const lockedOrder = lockedOrders[0];
 
+      if (lockedOrder.status === 'FULFILLED') {
+        throw new ConflictError(
+          'Đơn hàng đã hoàn thành FULFILLED không thể hủy trực tiếp. Vui lòng sử dụng tính năng Trả hàng (Returns)'
+        );
+      }
+
       if (lockedOrder.status === 'CANCELED') {
         return order;
       }
 
-      // Guard transition to CANCELED (support DRAFT, CONFIRMED, and FULFILLED)
+      // Guard transition to CANCELED (only DRAFT and CONFIRMED)
       const updateResult = await tx.order.updateMany({
         where: {
           id: orderId,
           storeId,
-          status: { in: ['DRAFT', 'CONFIRMED', 'FULFILLED'] },
+          status: { in: ['DRAFT', 'CONFIRMED'] },
         },
         data: {
           status: 'CANCELED',
@@ -353,9 +359,9 @@ export class OrderService {
         throw new ConflictError('Không thể chuyển trạng thái đơn hàng sang CANCELED');
       }
 
-      // If order was CONFIRMED or FULFILLED, atomically restock items into inventory
+      // If order was CONFIRMED, atomically restock items into inventory
       let restockMovements: Array<{ id: number; stockItemId: number; delta: number; beforeQuantity: number; afterQuantity: number }> = [];
-      if (['CONFIRMED', 'FULFILLED'].includes(lockedOrder.status)) {
+      if (lockedOrder.status === 'CONFIRMED') {
         if (!defaultWarehouse) {
           throw new NotFoundError('Không tìm thấy kho mặc định để hoàn trả tồn kho');
         }

@@ -10,6 +10,7 @@ import {
   getRefreshTokenExpiry,
 } from '../../common/utils/jwt';
 import { ConflictError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
+import { env } from '../../config/env';
 import { z } from 'zod';
 import { registerSchema, sendRegisterOtpSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, verifyOtpSchema, resetPasswordSchema } from './auth.schema';
 import { AuditLogService } from '../../common/services/audit-log.service';
@@ -325,27 +326,6 @@ export class AuthService {
     }
 
     if (session.revokedAt !== null) {
-      const now = new Date();
-      const revokedAgoMs = now.getTime() - session.revokedAt.getTime();
-      // Grace period: If the session was revoked within 30 seconds, this is a concurrent request
-      // from the same client session. Do NOT revoke all sessions.
-      if (revokedAgoMs <= 30000) {
-        const user = session.user;
-        if (user && user.isActive && (!user.storeId || user.store?.isActive)) {
-          const tokenPayload = {
-            userId: user.id,
-            email: user.email,
-            role: user.role,
-            storeId: user.storeId,
-          };
-          const newAccessToken = generateAccessToken(tokenPayload);
-          return {
-            accessToken: newAccessToken,
-            refreshToken: token,
-          };
-        }
-      }
-
       // Token reuse / replay attack detected! Revoke all sessions for this user for security
       await this.prisma.authSession.updateMany({
         where: { userId: session.userId, revokedAt: null },
@@ -534,11 +514,14 @@ export class AuthService {
       return publicResult;
     }
 
-    // Sinh mã OTP 6 chữ số ngẫu nhiên
+    // Sinh mã OTP 6 chữ số ngẫu nhiên và token kèm chữ ký HMAC
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const rawToken = crypto.randomBytes(32).toString('hex');
+    const sig = crypto
+      .createHmac('sha256', env.JWT_SECRET || 'stockpilot_secret')
+      .update(`${user.id}:${otp}:${expiresAt.getTime()}`)
+      .digest('hex');
+    const rawToken = `${otp}.${sig}`;
     const tokenHash = hashToken(rawToken);
-    const otpHash = hashToken(`${user.id}:otp:${otp}`);
 
     // Vô hiệu hóa các mã reset trước đó của user này
     await this.prisma.passwordResetToken.updateMany({
@@ -546,20 +529,11 @@ export class AuthService {
       data: { usedAt: new Date() },
     });
 
-    // Lưu token cho link / legacy API token
+    // Lưu đúng 1 token duy nhất cho reset password
     await this.prisma.passwordResetToken.create({
       data: {
         userId: user.id,
         tokenHash,
-        expiresAt,
-      },
-    });
-
-    // Lưu token cho mã OTP 6 chữ số
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: otpHash,
         expiresAt,
       },
     });
@@ -588,6 +562,7 @@ export class AuthService {
 
     if (process.env.NODE_ENV !== 'production') {
       publicResult.resetToken = rawToken;
+      publicResult.otp = otp;
     }
 
     return {
@@ -605,31 +580,35 @@ export class AuthService {
       throw new ValidationError('Mã OTP không chính xác hoặc tài khoản không hợp lệ');
     }
 
-    const otpHash = hashToken(`${user.id}:otp:${input.otp.trim()}`);
-    const token = await this.prisma.passwordResetToken.findUnique({
-      where: { tokenHash: otpHash },
+    const token = await this.prisma.passwordResetToken.findFirst({
+      where: {
+        userId: user.id,
+        usedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    if (!token || token.usedAt || token.expiresAt <= now || token.userId !== user.id) {
+    if (!token) {
       throw new ValidationError('Mã OTP không chính xác hoặc đã hết hạn');
     }
 
-    // Sinh resetToken cho bước tiếp theo
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = hashToken(resetToken);
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+    const otpInput = input.otp.trim();
+    const sig = crypto
+      .createHmac('sha256', env.JWT_SECRET || 'stockpilot_secret')
+      .update(`${user.id}:${otpInput}:${token.expiresAt.getTime()}`)
+      .digest('hex');
+    const expectedRawToken = `${otpInput}.${sig}`;
+    const expectedHash = hashToken(expectedRawToken);
+    const legacyOtpHash = hashToken(`${user.id}:otp:${otpInput}`);
 
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        expiresAt,
-      },
-    });
+    if (token.tokenHash !== expectedHash && token.tokenHash !== legacyOtpHash) {
+      throw new ValidationError('Mã OTP không chính xác hoặc đã hết hạn');
+    }
 
     return {
       valid: true,
-      resetToken,
+      resetToken: expectedRawToken,
       email: user.email,
       phone: input.phone,
     };
@@ -663,17 +642,34 @@ export class AuthService {
           throw new ValidationError('Tài khoản không tồn tại hoặc đã bị khóa');
         }
 
-        const otpHash = hashToken(`${user.id}:otp:${input.otp.trim()}`);
-        const token = await tx.passwordResetToken.findUnique({
-          where: { tokenHash: otpHash },
+        const activeToken = await tx.passwordResetToken.findFirst({
+          where: {
+            userId: user.id,
+            usedAt: null,
+            expiresAt: { gt: now },
+          },
+          orderBy: { createdAt: 'desc' },
         });
 
-        if (!token || token.usedAt || token.expiresAt <= now || token.userId !== user.id) {
+        if (!activeToken) {
+          throw new ValidationError('Mã OTP không chính xác hoặc đã hết hạn');
+        }
+
+        const otpInput = input.otp.trim();
+        const sig = crypto
+          .createHmac('sha256', env.JWT_SECRET || 'stockpilot_secret')
+          .update(`${user.id}:${otpInput}:${activeToken.expiresAt.getTime()}`)
+          .digest('hex');
+        const expectedRawToken = `${otpInput}.${sig}`;
+        const expectedHash = hashToken(expectedRawToken);
+        const legacyOtpHash = hashToken(`${user.id}:otp:${otpInput}`);
+
+        if (activeToken.tokenHash !== expectedHash && activeToken.tokenHash !== legacyOtpHash) {
           throw new ValidationError('Mã OTP không chính xác hoặc đã hết hạn');
         }
 
         targetUserId = user.id;
-        targetTokenId = token.id;
+        targetTokenId = activeToken.id;
       } else {
         throw new ValidationError('Thiếu thông tin token hoặc OTP để đặt lại mật khẩu');
       }
