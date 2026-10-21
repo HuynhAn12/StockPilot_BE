@@ -34,6 +34,7 @@ import { posRouter } from './modules/pos/pos.routes';
 import { auditLogRouter } from './modules/audit-logs/audit-log.routes';
 import { uploadRouter } from './modules/upload/upload.routes';
 import { scannerRouter } from './modules/scanner/scanner.routes';
+import { publicRouter } from './modules/public/public.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -150,6 +151,7 @@ export function createApp(): Express {
   app.use(tenantResolverMiddleware);
 
   // Module routes
+  app.use('/api/v1/public', publicRouter);
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/users', userRouter);
   app.use('/api/v1/categories', categoryRouter);
