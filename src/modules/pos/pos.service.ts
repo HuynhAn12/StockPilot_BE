@@ -75,9 +75,9 @@ export class PosService {
       if (discountAmount.gt(subtotalAmount)) {
         throw new ValidationError('POS sale discount cannot exceed subtotal');
       }
-      let totalAmount = subtotalAmount.minus(discountAmount).plus(taxAmount).toDecimalPlaces(2);
-      if (input.totalAmount !== undefined && Number(input.totalAmount) > 0) {
-        totalAmount = new Prisma.Decimal(input.totalAmount).toDecimalPlaces(2);
+      const totalAmount = subtotalAmount.minus(discountAmount).plus(taxAmount).toDecimalPlaces(2);
+      if (input.totalAmount !== undefined && !new Prisma.Decimal(input.totalAmount).equals(totalAmount)) {
+        throw new ValidationError('Tổng tiền thanh toán không khớp với tính toán của hệ thống');
       }
       const orderItemsData: Prisma.OrderItemUncheckedCreateWithoutOrderInput[] = [];
       let allocatedRefundableSum = new Prisma.Decimal(0);
