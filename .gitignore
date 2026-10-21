@@ -40,6 +40,11 @@ Thumbs.db
 # Temporary workspace instruction files
 flow*.md
 STOCKPILOT_*.md
+ADMIN_*.md
+PROJECT_COMPLETE_GUIDE.md
+PROJECT_DOCUMENTATION.md
+MEMORY.md
+RULES.md
 *.tmp
 prisma/*.sql
 !prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql
