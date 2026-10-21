@@ -187,6 +187,30 @@ export class PricingService {
     };
   }
 
+  async listPriceHistories(storeId: number) {
+    return this.prisma.priceHistory.findMany({
+      where: { storeId },
+      orderBy: { changedAt: 'desc' },
+      take: 50,
+      include: {
+        stockItem: {
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+          },
+        },
+        changedBy: {
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+          },
+        },
+      },
+    });
+  }
+
   async acceptRecommendation(storeId: number, userId: number, recommendationId: number, applyToStockItem = true) {
     return this.prisma.$transaction(async (tx) => {
       const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
