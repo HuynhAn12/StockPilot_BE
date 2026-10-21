@@ -182,7 +182,7 @@ export class AlertService {
       });
 
       if (!existing) {
-        await this.prisma.alert.create({
+        const createdAlert = await this.prisma.alert.create({
           data: {
             storeId,
             stockItemId,
@@ -199,6 +199,29 @@ export class AlertService {
             openedAt: new Date(),
           },
         });
+
+        try {
+          const storeUsers = await this.prisma.user.findMany({
+            where: { OR: [{ storeId }, { role: 'ADMIN' }], isActive: true },
+            select: { id: true },
+          });
+          if (storeUsers.length > 0) {
+            await this.prisma.notification.createMany({
+              data: storeUsers.map((u) => ({
+                storeId,
+                userId: u.id,
+                type: 'alert',
+                title: trigger.title,
+                message: trigger.message,
+                entityType: 'ALERT',
+                entityId: String(createdAlert.id),
+                isRead: false,
+              })),
+            });
+          }
+        } catch (_err) {
+          // Ignore notification dispatch error so alert creation is not blocked
+        }
       } else {
         const shouldReopen = existing.status === 'RESOLVED';
         await this.prisma.alert.update({
@@ -317,6 +340,10 @@ export class AlertService {
       totalCount,
       activeCount: openCount + acknowledgedCount,
     };
+  }
+
+  async getAlertStats(storeId: number) {
+    return this.getStats(storeId);
   }
 
   async acknowledgeAlert(storeId: number, alertId: number, userId?: number) {

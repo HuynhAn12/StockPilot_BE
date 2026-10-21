@@ -23,7 +23,7 @@ export const createProductSchema = z.object({
   name: z.string().min(1, 'Tên sản phẩm không được để trống'),
   code: z.string().min(1, 'Mã sản phẩm không được để trống').regex(/^[A-Za-z0-9_-]+$/, 'Mã sản phẩm chỉ chứa ký tự chữ cái, số, gạch nối hoặc gạch dưới'),
   description: z.string().optional(),
-  imageUrl: z.string().optional().or(z.literal('')),
+  imageUrl: z.string().optional().or(z.literal('')).nullable(),
   items: z.array(stockItemInputSchema).min(1, 'Sản phẩm phải có ít nhất 1 mã SP/biến thể'),
 }).superRefine((input, ctx) => {
   const seen = new Set<string>();

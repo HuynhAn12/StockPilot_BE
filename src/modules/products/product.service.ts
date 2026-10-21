@@ -20,8 +20,9 @@ export class ProductService {
 
     where.isActive = typeof query?.isActive === 'boolean' ? query.isActive : true;
 
-    if (query?.q && typeof query.q === 'string' && query.q.trim().length > 0) {
-      const keyword = query.q.trim();
+    const rawKeyword = query?.q || query?.search;
+    if (rawKeyword && typeof rawKeyword === 'string' && rawKeyword.trim().length > 0) {
+      const keyword = rawKeyword.trim();
       where.OR = [
         { name: { contains: keyword } },
         { code: { contains: keyword } },
@@ -302,8 +303,8 @@ export class ProductService {
           ...(input.name ? { name: input.name.trim() } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+          ...(input.imageUrl !== undefined ? { imageUrl: finalImageUrl || null } : {}),
           ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-          ...((input as any).imageUrl !== undefined ? { imageUrl: finalImageUrl || null } : {}),
         },
         include: {
           category: true,

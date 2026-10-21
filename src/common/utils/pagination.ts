@@ -13,6 +13,7 @@ export const paginationQuerySchema = z.object({
 
 export const productListQuerySchema = paginationQuerySchema.extend({
   q: z.string().optional(),
+  search: z.string().optional(),
   categoryId: z.coerce.number().int().positive().optional(),
   isActive: z.preprocess((val) => {
     if (val === 'true' || val === true) return true;
@@ -62,6 +63,7 @@ export const movementListQuerySchema = paginationQuerySchema.extend({
 export const inventoryBalanceQuerySchema = paginationQuerySchema.extend({
   warehouseId: z.coerce.number().int().positive().optional(),
   stockItemId: z.coerce.number().int().positive().optional(),
+  productId: z.coerce.number().int().positive().optional(),
 });
 
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
