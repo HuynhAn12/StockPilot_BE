@@ -39,11 +39,26 @@ export class UserController {
       const user = await userService.updateStaff(storeId, staffId, req.body, req.user!.userId);
       return res.status(200).json({
         success: true,
-        message: 'Cap nhat nhan vien thanh cong',
+        message: 'Cập nhật nhân viên thành công',
         data: user,
       });
     } catch (error) {
       next(error);
     }
   }
+
+  async deleteStaff(req: Request, res: Response, next: NextFunction) {
+    try {
+      const storeId = req.user!.storeId!;
+      const staffId = Number(req.params.id);
+      const result = await userService.deleteStaff(storeId, staffId, req.user!.userId);
+      return res.status(200).json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
+

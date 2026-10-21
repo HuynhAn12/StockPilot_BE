@@ -154,6 +154,26 @@ export class OrderService {
         },
       });
 
+      // Tạo thông báo thực tế gửi tới người dùng trong cửa hàng
+      const storeUsers = await tx.user.findMany({
+        where: { OR: [{ storeId }, { role: 'ADMIN' }], isActive: true },
+        select: { id: true },
+      });
+      if (storeUsers.length > 0) {
+        await tx.notification.createMany({
+          data: storeUsers.map((u) => ({
+            storeId,
+            userId: u.id,
+            type: 'order',
+            title: `Đơn hàng mới: ${order.orderNumber}`,
+            message: `Hóa đơn bán lẻ trị giá ${Number(totalAmount).toLocaleString('vi-VN')} đ đã được lập thành công.`,
+            entityType: 'ORDER',
+            entityId: String(order.id),
+            isRead: false,
+          })),
+        });
+      }
+
       return order;
     });
   }
@@ -441,7 +461,7 @@ export class OrderService {
 
     const where: any = {
       storeId,
-      ...(status ? { status: status as any } : {}),
+      ...(status && status !== 'ALL' ? { status: status as any } : {}),
     };
 
     const andConditions: any[] = [];
@@ -454,6 +474,7 @@ export class OrderService {
           { orderNumber: { contains: term } },
           { customerName: { contains: term } },
           { customerPhone: { contains: term } },
+          { createdBy: { fullName: { contains: term } } },
         ],
       });
     }
@@ -616,6 +637,11 @@ export class OrderService {
       transferTotal,
       walletCount,
       walletTotal,
+      customerCount: activeOrderCount,
+      draftCount: 0,
+      confirmedCount: 0,
+      fulfilledCount: activeOrderCount,
+      canceledCount: 0,
     };
 
     const timeframeCounts = {

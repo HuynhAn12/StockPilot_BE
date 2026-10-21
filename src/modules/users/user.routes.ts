@@ -16,3 +16,5 @@ userRouter.use(requireRole('SHOP_OWNER'));
 userRouter.post('/', validate({ body: createStaffSchema }), (req, res, next) => controller.createStaff(req, res, next));
 userRouter.get('/', validate({ query: paginationQuerySchema }), (req, res, next) => controller.listStaff(req, res, next));
 userRouter.patch('/:id', validate({ params: idParamSchema, body: updateStaffSchema }), (req, res, next) => controller.updateStaff(req, res, next));
+userRouter.delete('/:id', validate({ params: idParamSchema }), (req, res, next) => controller.deleteStaff(req, res, next));
+
