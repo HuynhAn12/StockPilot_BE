@@ -5,7 +5,6 @@ import { NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { SecretEncryptionService } from '../../common/services/secret-encryption.service';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { BusinessSyncService } from '../../common/services/business-sync.service';
-import { AuditLogService } from '../../common/services/audit-log.service';
 
 export interface CreatePayosLinkItem {
   stockItemId: number;

@@ -251,6 +251,9 @@ export class InventoryService {
     if (query?.stockItemId) {
       where.stockItemId = Number(query.stockItemId);
     }
+    if (query?.productId) {
+      where.stockItem = { productId: Number(query.productId) };
+    }
 
     const [items, total] = await Promise.all([
       this.prisma.inventoryBalance.findMany({
