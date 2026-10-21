@@ -7,8 +7,9 @@ const notificationService = new NotificationService();
 export class NotificationController {
   async list(req: Request, res: Response, next: NextFunction) {
     try {
+      const storeId = req.user?.storeId || 1;
       const result = await notificationService.list(
-        req.user!.storeId!,
+        storeId,
         req.user!.userId,
         (req as any).validatedQuery || req.query
       );
@@ -24,7 +25,8 @@ export class NotificationController {
 
   async markRead(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await notificationService.markRead(req.user!.storeId!, req.user!.userId, Number(req.params.id));
+      const storeId = req.user?.storeId || 1;
+      const result = await notificationService.markRead(storeId, req.user!.userId, Number(req.params.id));
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);
@@ -33,7 +35,8 @@ export class NotificationController {
 
   async markAllRead(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await notificationService.markAllRead(req.user!.storeId!, req.user!.userId);
+      const storeId = req.user?.storeId || 1;
+      const result = await notificationService.markAllRead(storeId, req.user!.userId);
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);

@@ -27,7 +27,7 @@ pricingRouter.get(
 // Get price change history
 pricingRouter.get(
   '/history',
-  requireRole('SHOP_OWNER'),
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
   controller.getHistory
 );
 

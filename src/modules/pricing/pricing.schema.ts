@@ -1,10 +1,17 @@
 import { z } from 'zod';
 
 export const pricingListQuerySchema = z.object({
-  status: z.enum(['PENDING', 'ACCEPTED', 'REJECTED', 'MODIFIED', 'EXPIRED']).optional(),
+  status: z
+    .string()
+    .optional()
+    .transform((val) => {
+      if (!val || val.toUpperCase() === 'ALL') return undefined;
+      return val.toUpperCase();
+    })
+    .pipe(z.enum(['PENDING', 'ACCEPTED', 'REJECTED', 'MODIFIED', 'EXPIRED']).optional()),
   stockItemId: z.coerce.number().int().optional(),
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
 export const pricingActionParamsSchema = z.object({

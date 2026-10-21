@@ -6,19 +6,21 @@ import { prisma } from '../../config/db';
 export const auditLogRouter = Router();
 
 auditLogRouter.use(authMiddleware);
-auditLogRouter.use(requireStoreScope);
 auditLogRouter.use(requireRole('ADMIN'));
 
 auditLogRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const storeId = req.user!.storeId!;
+    const storeId = req.user?.storeId || (req.query.storeId ? parseInt(req.query.storeId as string) : undefined);
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 50));
     const skip = (page - 1) * limit;
     const entityType = req.query.entityType as string | undefined;
     const search = req.query.search as string | undefined;
 
-    const where: any = { storeId };
+    const where: any = {};
+    if (storeId) {
+      where.storeId = storeId;
+    }
     if (entityType && entityType !== 'ALL') {
       where.entityType = entityType;
     }

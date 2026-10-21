@@ -26,6 +26,19 @@ export class PricingController {
     }
   };
 
+  history = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const storeId = req.user!.storeId!;
+      const result = await this.service.listPriceHistories(storeId);
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
   accept = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
