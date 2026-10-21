@@ -219,7 +219,9 @@ export class AlertService {
               })),
             });
           }
-        } catch (_) {}
+        } catch (_err) {
+          // Ignore notification dispatch error so alert creation is not blocked
+        }
       } else {
         const shouldReopen = existing.status === 'RESOLVED';
         await this.prisma.alert.update({
