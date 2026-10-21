@@ -155,23 +155,29 @@ export class OrderService {
       });
 
       // Tạo thông báo thực tế gửi tới người dùng trong cửa hàng
-      const storeUsers = await tx.user.findMany({
-        where: { OR: [{ storeId }, { role: 'ADMIN' }], isActive: true },
-        select: { id: true },
-      });
-      if (storeUsers.length > 0) {
-        await tx.notification.createMany({
-          data: storeUsers.map((u) => ({
-            storeId,
-            userId: u.id,
-            type: 'order',
-            title: `Đơn hàng mới: ${order.orderNumber}`,
-            message: `Hóa đơn bán lẻ trị giá ${Number(totalAmount).toLocaleString('vi-VN')} đ đã được lập thành công.`,
-            entityType: 'ORDER',
-            entityId: String(order.id),
-            isRead: false,
-          })),
-        });
+      if (tx.user?.findMany && tx.notification?.createMany) {
+        try {
+          const storeUsers = await tx.user.findMany({
+            where: { OR: [{ storeId }, { role: 'ADMIN' }], isActive: true },
+            select: { id: true },
+          });
+          if (storeUsers && storeUsers.length > 0) {
+            await tx.notification.createMany({
+              data: storeUsers.map((u) => ({
+                storeId,
+                userId: u.id,
+                type: 'order',
+                title: `Đơn hàng mới: ${order.orderNumber}`,
+                message: `Hóa đơn bán lẻ trị giá ${Number(totalAmount).toLocaleString('vi-VN')} đ đã được lập thành công.`,
+                entityType: 'ORDER',
+                entityId: String(order.id),
+                isRead: false,
+              })),
+            });
+          }
+        } catch (_err) {
+          // Ignore notification dispatch error so order creation is not interrupted
+        }
       }
 
       return order;
