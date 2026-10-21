@@ -426,6 +426,7 @@ model Payment {
 
   @@unique([storeId, clientRequestKey])
   @@unique([storeId, provider, providerReference])
+  @@unique([provider, providerReference])
   @@index([storeId, orderId])
   @@index([storeId, status, createdAt])
   @@map("payments")

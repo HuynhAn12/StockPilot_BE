@@ -15,6 +15,12 @@ posRouter.post(
   (req, res, next) => controller.handleMomoIpn(req, res, next)
 );
 
+// Public Webhook IPN from PayOS (No auth required, verified by Checksum Key HMAC-SHA256)
+posRouter.post(
+  '/payos/webhook',
+  (req, res, next) => controller.handlePayosWebhook(req, res, next)
+);
+
 posRouter.use(authMiddleware);
 posRouter.use(requireStoreScope);
 
