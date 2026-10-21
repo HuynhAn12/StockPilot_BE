@@ -911,3 +911,19 @@ model SystemSetting {
   @@index([updatedById])
   @@map("system_settings")
 }
+
+model ContactLead {
+  id        Int      @id @default(autoincrement())
+  fullName  String   @db.VarChar(191)
+  phone     String   @db.VarChar(20)
+  email     String?  @db.VarChar(191)
+  storeName String?  @db.VarChar(191)
+  industry  String?  @db.VarChar(100)
+  note      String?  @db.Text
+  status    String   @default("NEW") @db.VarChar(50)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@map("contact_leads")
+}
