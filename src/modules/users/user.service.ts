@@ -59,7 +59,7 @@ export class UserService {
 
   async listStoreUsers(storeId: number, query?: any) {
     const page = Number(query?.page) || 1;
-    const limit = Number(query?.limit) || 20;
+    const limit = Number(query?.limit) || 50;
     const skip = (page - 1) * limit;
 
     const [items, total] = await Promise.all([
@@ -80,8 +80,50 @@ export class UserService {
       prisma.user.count({ where: { storeId } }),
     ]);
 
+    const userIds = items.map((u) => u.id);
+    const statsMap = new Map<number, { completedOrdersCount: number; totalAmountPaid: number }>();
+
+    if (userIds.length > 0) {
+      try {
+        const orderStats = await prisma.order.groupBy({
+          by: ['createdById'],
+          where: {
+            storeId,
+            createdById: { in: userIds },
+            status: { in: ['CONFIRMED', 'FULFILLED'] },
+          },
+          _count: {
+            id: true,
+          },
+          _sum: {
+            totalAmount: true,
+          },
+        });
+
+        for (const stat of orderStats) {
+          if (stat.createdById !== null && stat.createdById !== undefined) {
+            statsMap.set(stat.createdById, {
+              completedOrdersCount: stat._count.id || 0,
+              totalAmountPaid: Number(stat._sum.totalAmount || 0),
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to aggregate user order stats:', err);
+      }
+    }
+
+    const itemsWithStats = items.map((u) => {
+      const stats = statsMap.get(u.id) || { completedOrdersCount: 0, totalAmountPaid: 0 };
+      return {
+        ...u,
+        completedOrdersCount: stats.completedOrdersCount,
+        totalAmountPaid: stats.totalAmountPaid,
+      };
+    });
+
     return {
-      items,
+      items: itemsWithStats,
       pagination: {
         page,
         limit,
@@ -108,15 +150,28 @@ export class UserService {
       throw new NotFoundError('Khong tim thay nhan vien trong cua hang');
     }
 
-    if (existing.role !== 'WAREHOUSE_STAFF') {
-      throw new ForbiddenError('Chi co the cap nhat tai khoan WAREHOUSE_STAFF qua API nhan vien');
+    if (existing.role === 'SHOP_OWNER' && input.isActive === false) {
+      throw new ForbiddenError('Không thể khóa tài khoản Chủ cửa hàng (SHOP_OWNER)');
     }
+
+    if (input.email && input.email.toLowerCase().trim() !== existing.email.toLowerCase()) {
+      const emailConflict = await prisma.user.findUnique({
+        where: { email: input.email.toLowerCase().trim() },
+      });
+      if (emailConflict) {
+        throw new ConflictError('Email này đã được sử dụng bởi người dùng khác');
+      }
+    }
+
+    const passwordHash = input.password ? await hashPassword(input.password) : undefined;
 
     return prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id: staffId },
         data: {
           ...(input.fullName !== undefined ? { fullName: input.fullName.trim() } : {}),
+          ...(input.email !== undefined ? { email: input.email.toLowerCase().trim() } : {}),
+          ...(passwordHash !== undefined ? { passwordHash } : {}),
           ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
         },
         select: {
@@ -130,7 +185,7 @@ export class UserService {
         },
       });
 
-      if (input.isActive === false && existing.isActive) {
+      if ((input.isActive === false && existing.isActive) || passwordHash) {
         await tx.authSession.updateMany({
           where: { userId: staffId, revokedAt: null },
           data: { revokedAt: new Date() },
@@ -162,4 +217,70 @@ export class UserService {
       return updated;
     });
   }
+
+  async deleteStaff(storeId: number, staffId: number, actorUserId?: number) {
+    const existing = await prisma.user.findFirst({
+      where: { id: staffId, storeId },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        isActive: true,
+        storeId: true,
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundError('Không tìm thấy nhân viên trong cửa hàng');
+    }
+
+    if (existing.role !== 'WAREHOUSE_STAFF') {
+      throw new ForbiddenError('Chỉ có thể xóa tài khoản nhân viên (WAREHOUSE_STAFF)');
+    }
+
+    if (actorUserId && actorUserId === staffId) {
+      throw new ForbiddenError('Không thể tự xóa chính mình');
+    }
+
+    return prisma.$transaction(async (tx) => {
+      // First revoke any active sessions
+      await tx.authSession.deleteMany({
+        where: { userId: staffId },
+      });
+
+      // Delete password reset tokens
+      await tx.passwordResetToken.deleteMany({
+        where: { userId: staffId },
+      });
+
+      // Delete user notifications
+      await tx.notification.deleteMany({
+        where: { userId: staffId },
+      });
+
+      // Delete user
+      await tx.user.delete({
+        where: { id: staffId },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: actorUserId ?? null,
+        action: 'USER_DELETED',
+        entityType: 'USER',
+        entityId: staffId,
+        beforeJson: {
+          userId: existing.id,
+          fullName: existing.fullName,
+          role: existing.role,
+          email: existing.email,
+          storeId: existing.storeId,
+        },
+      });
+
+      return { success: true, message: 'Đã xóa nhân viên thành công' };
+    });
+  }
 }
+
