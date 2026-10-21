@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authMiddleware } from '../../common/middleware/auth';
-import { requireStoreScope, requireRole } from '../../common/middleware/rbac';
+import { requireRole } from '../../common/middleware/rbac';
 import { prisma } from '../../config/db';
 
 export const auditLogRouter = Router();
