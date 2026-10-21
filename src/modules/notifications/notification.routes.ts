@@ -8,16 +8,10 @@ import { notificationIdParamSchema, notificationListQuerySchema } from './notifi
 
 export const notificationRouter = Router();
 const controller = new NotificationController();
-const storeOperatorRoles = [Role.SHOP_OWNER, Role.WAREHOUSE_STAFF, Role.ADMIN];
+const storeOperatorRoles = [Role.SHOP_OWNER, Role.WAREHOUSE_STAFF];
 
 notificationRouter.use(authMiddleware);
-notificationRouter.use((req, res, next) => {
-  if (req.user?.role === Role.ADMIN) {
-    if (!req.user.storeId) req.user.storeId = 1;
-    return next();
-  }
-  return requireStoreScope(req, res, next);
-});
+notificationRouter.use(requireStoreScope);
 notificationRouter.use(requireRole(...storeOperatorRoles));
 
 notificationRouter.get('/settings', (req, res, next) => controller.getSettings(req, res, next));
