@@ -57,14 +57,17 @@ export class PosPayosService {
   /**
    * Sinh orderCode độc nhất có phân vùng store và kiểm tra trùng lặp trong Database
    * PayOS yêu cầu orderCode là số nguyên dương <= 9007199254740991 (Number.MAX_SAFE_INTEGER)
-   * Định dạng 14 chữ số: 4 số mã store partition + 7 số timestamp (ms) + 3 số ngẫu nhiên
+   * Định dạng 15 chữ số: "1" + 4 số mã store partition + 7 số timestamp (ms) + 3 số ngẫu nhiên
+   * (fallback: "2" + 9 số timestamp + 5 số ngẫu nhiên)
    */
   async generateUniqueOrderCode(storeId: number): Promise<number> {
     for (let attempt = 0; attempt < 10; attempt++) {
       const storePart = String(Math.abs(storeId) % 10000).padStart(4, '0');
       const timePart = Date.now().toString().slice(-7);
       const randPart = Math.floor(Math.random() * 900 + 100).toString();
-      const candidateCode = Number(`${storePart}${timePart}${randPart}`);
+      // Leading "1" keeps the zero-padded store partition when converted to a number, so codes
+      // are always 15 digits (max 199999999999999 < Number.MAX_SAFE_INTEGER).
+      const candidateCode = Number(`1${storePart}${timePart}${randPart}`);
 
       // Kiểm tra xung đột trên toàn hệ thống bằng provider_providerReference
       const existing = await this.db.payment.findUnique({
@@ -85,7 +88,8 @@ export class PosPayosService {
     // Fallback an toàn nếu vòng lặp thử lại vượt ngưỡng
     const fallbackTime = Date.now().toString().slice(-9);
     const fallbackRand = Math.floor(Math.random() * 90000 + 10000).toString();
-    return Number(`${fallbackTime}${fallbackRand}`);
+    // Leading "2" keeps 15 digits and can never collide with the "1"-prefixed partitioned codes.
+    return Number(`2${fallbackTime}${fallbackRand}`);
   }
 
   /**
