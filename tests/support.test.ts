@@ -17,6 +17,7 @@ jest.mock('../src/config/db', () => ({
       groupBy: jest.fn(),
     },
     supportTicketMessage: { create: jest.fn() },
+    supportTicketAttachment: { findUnique: jest.fn() },
     storePaymentConfig: { findFirst: jest.fn() },
     importJob: { findMany: jest.fn() },
     notification: { create: jest.fn() },
@@ -59,11 +60,10 @@ describe('Support tickets', () => {
 
       expect(res.status).toBe(201);
       expect(db.supportTicket.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          storeId: 1,
-          createdById: 1,
-          messages: { create: { authorId: 1, body: 'File có 500 sản phẩm' } },
-        }),
+        data: expect.objectContaining({ storeId: 1, createdById: 1, lastStoreMessageAt: expect.any(Date) }),
+      });
+      expect(db.supportTicketMessage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ ticketId: 10, authorId: 1, body: 'File có 500 sản phẩm', attachments: { create: [] } }),
       });
     });
 
@@ -116,7 +116,7 @@ describe('Support tickets', () => {
     });
 
     it('reopens a resolved ticket when the store replies', async () => {
-      db.supportTicket.findFirst.mockResolvedValue({ id: 10, status: 'RESOLVED' });
+      db.supportTicket.findFirst.mockResolvedValue({ id: 10, status: 'RESOLVED', subject: 'x', store: { name: 'Store A' } });
       db.supportTicketMessage.create.mockResolvedValue({ id: 5 });
 
       const res = await request(app).post('/api/v1/support/tickets/10/messages').set(auth(1)).send({ body: 'Vẫn còn lỗi' });
@@ -125,7 +125,7 @@ describe('Support tickets', () => {
       expect(res.body.data.status).toBe('OPEN');
       expect(db.supportTicket.update).toHaveBeenCalledWith({
         where: { id: 10 },
-        data: expect.objectContaining({ status: 'OPEN', resolvedAt: null }),
+        data: expect.objectContaining({ status: 'OPEN', resolvedAt: null, lastStoreMessageAt: expect.any(Date) }),
       });
     });
 
@@ -155,7 +155,7 @@ describe('Support tickets', () => {
 
       expect(res.status).toBe(200);
       expect(db.supportTicket.findMany.mock.calls[0][0].where).toEqual({ status: { not: 'RESOLVED' } });
-      expect(res.body.summary).toEqual({ OPEN: 2, IN_PROGRESS: 0, WAITING_STORE: 0, RESOLVED: 5, unanswered: 2 });
+      expect(res.body.summary).toEqual({ OPEN: 2, IN_PROGRESS: 0, WAITING_STORE: 0, RESOLVED: 5, unanswered: 2, unread: 0 });
     });
 
     it('a public reply hands the ticket back to the store and notifies the requester', async () => {
@@ -183,7 +183,9 @@ describe('Support tickets', () => {
         .set(auth(3))
         .send({ body: 'Khách hàng VIP, ưu tiên', isInternal: true });
 
-      expect(db.supportTicketMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ isInternal: true, fromAdmin: true }) });
+      expect(db.supportTicketMessage.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ isInternal: true, fromAdmin: true }) })
+      );
       expect(db.supportTicket.update).not.toHaveBeenCalled();
       expect(db.notification.create).not.toHaveBeenCalled();
     });
@@ -217,5 +219,132 @@ describe('Support tickets', () => {
 
       expect(res.body.data.storeContext).toEqual({ payos: 'NOT_CONFIGURED', recentImports: [expect.objectContaining({ id: 'job-1' })] });
     });
+  });
+describe('attachments and read state', () => {
+    const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+
+    it('stores real images sent with a reply, typed from their bytes', async () => {
+      db.supportTicket.findFirst.mockResolvedValue({ id: 10, status: 'OPEN', subject: 'x', store: { name: 'Store A' } });
+      db.supportTicketMessage.create.mockResolvedValue({ id: 6, attachments: [] });
+
+      const res = await request(app)
+        .post('/api/v1/support/tickets/10/messages')
+        .set(auth(1))
+        .field('body', '')
+        .attach('files', PNG, { filename: 'loi.png', contentType: 'image/png' });
+
+      expect(res.status).toBe(201);
+      const data = db.supportTicketMessage.create.mock.calls[0][0].data;
+      expect(data.attachments.create).toEqual([
+        expect.objectContaining({ ticketId: 10, fileName: 'loi.png', mimeType: 'image/png', size: PNG.length }),
+      ]);
+    });
+
+    it('rejects a file that only pretends to be an image', async () => {
+      db.supportTicket.findFirst.mockResolvedValue({ id: 10, status: 'OPEN', subject: 'x', store: { name: 'Store A' } });
+
+      const res = await request(app)
+        .post('/api/v1/support/tickets/10/messages')
+        .set(auth(1))
+        .field('body', 'xem file')
+        .attach('files', Buffer.from('<script>alert(1)</script>'), { filename: 'x.png', contentType: 'image/png' });
+
+      expect(res.status).toBe(400);
+      expect(db.supportTicketMessage.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty reply without images', async () => {
+      const res = await request(app).post('/api/v1/support/tickets/10/messages').set(auth(1)).send({ body: '   ' });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects more than 3 images', async () => {
+      let req = request(app).post('/api/v1/support/tickets/10/messages').set(auth(1)).field('body', 'nhiều ảnh');
+      for (let i = 0; i < 4; i += 1) req = req.attach('files', PNG, { filename: `a${i}.png`, contentType: 'image/png' });
+
+      const res = await req;
+
+      expect(res.status).toBe(400);
+    });
+
+    it('serves an attachment only to its own store and never from internal notes', async () => {
+      db.supportTicketAttachment.findUnique.mockResolvedValue({
+        id: 3, fileName: 'loi.png', mimeType: 'image/png', data: PNG, message: { isInternal: false, ticket: { storeId: 1 } },
+      });
+
+      const own = await request(app).get('/api/v1/support/attachments/3').set(auth(1));
+      expect(own.status).toBe(200);
+      expect(own.headers['content-type']).toBe('image/png');
+      expect(own.headers['x-content-type-options']).toBe('nosniff');
+
+      const other = await request(app).get('/api/v1/support/attachments/3').set(auth(4));
+      expect(other.status).toBe(404);
+
+      db.supportTicketAttachment.findUnique.mockResolvedValue({
+        id: 4, fileName: 'noi-bo.png', mimeType: 'image/png', data: PNG, message: { isInternal: true, ticket: { storeId: 1 } },
+      });
+      const internal = await request(app).get('/api/v1/support/attachments/4').set(auth(1));
+      expect(internal.status).toBe(404);
+    });
+
+    it('flags tickets with unseen support replies and marks them read when opened', async () => {
+      const replied = new Date('2026-10-22T10:00:00Z');
+      db.supportTicket.findMany.mockResolvedValue([
+        { id: 10, lastAdminMessageAt: replied, storeReadAt: new Date('2026-10-22T09:00:00Z') },
+        { id: 11, lastAdminMessageAt: replied, storeReadAt: new Date('2026-10-22T11:00:00Z') },
+      ]);
+      db.supportTicket.count.mockResolvedValue(2);
+
+      const list = await request(app).get('/api/v1/support/tickets').set(auth(1));
+      expect(list.body.data.map((t: any) => t.unread)).toEqual([true, false]);
+
+      const count = await request(app).get('/api/v1/support/unread-count').set(auth(1));
+      expect(count.body.data).toEqual({ unread: 1 });
+
+      db.supportTicket.findFirst.mockResolvedValue({
+        id: 10, storeId: 1, lastAdminMessageAt: replied, storeReadAt: null, messages: [],
+      });
+      await request(app).get('/api/v1/support/tickets/10').set(auth(1));
+      expect(db.supportTicket.update).toHaveBeenCalledWith({ where: { id: 10 }, data: { storeReadAt: expect.any(Date) } });
+    });
+
+    it('a public admin reply records the admin message time for the store unread badge', async () => {
+      db.supportTicket.findUnique.mockResolvedValue({ id: 10, storeId: 1, status: 'OPEN', subject: 'x', createdById: 1, firstResponseAt: null });
+      db.supportTicketMessage.create.mockResolvedValue({ id: 9 });
+
+      await request(app).post('/api/v1/admin/support/tickets/10/messages').set(auth(3)).field('body', 'Đã kiểm tra').field('isInternal', 'false');
+
+      expect(db.supportTicket.update).toHaveBeenCalledWith({
+        where: { id: 10 },
+        data: expect.objectContaining({ lastAdminMessageAt: expect.any(Date), status: 'WAITING_STORE' }),
+      });
+    });
+  });
+});
+
+describe('Support ticket filters', () => {
+  const app = createApp();
+  beforeEach(() => {
+    jest.clearAllMocks();
+    db.user.findUnique.mockImplementation(({ where }: any) => Promise.resolve(users[where.id] ?? null));
+    db.supportTicket.findMany.mockResolvedValue([]);
+    db.supportTicket.count.mockResolvedValue(0);
+    db.supportTicket.groupBy.mockResolvedValue([]);
+  });
+
+  it('filters by priority', async () => {
+    const res = await request(app).get('/api/v1/admin/support/tickets?priority=HIGH&status=ACTIVE').set(auth(3));
+    expect(res.status).toBe(200);
+    expect(db.supportTicket.findMany.mock.calls[0][0].where).toEqual({ status: { not: 'RESOLVED' }, priority: 'HIGH' });
+  });
+
+  it('filters by assignee or unassigned tickets', async () => {
+    await request(app).get('/api/v1/admin/support/tickets?assigneeId=3').set(auth(3));
+    expect(db.supportTicket.findMany.mock.calls[0][0].where).toEqual({ assigneeId: 3 });
+
+    db.supportTicket.findMany.mockClear();
+    await request(app).get('/api/v1/admin/support/tickets?unassigned=true').set(auth(3));
+    expect(db.supportTicket.findMany.mock.calls[0][0].where).toEqual({ assigneeId: null });
   });
 });
