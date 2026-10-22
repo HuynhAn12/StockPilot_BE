@@ -23,6 +23,11 @@ export interface CreatePayosLinkInput {
   items: CreatePayosLinkItem[];
 }
 
+/** A parallel webhook/polling run already settled this order (unique constraint race); safe to ignore. */
+function isConcurrentSettlementConflict(err: any): boolean {
+  return err?.code === 'P2002';
+}
+
 export class PosPayosService {
   constructor(
     private readonly db: PrismaClient = defaultPrisma,
@@ -549,7 +554,7 @@ export class PosPayosService {
             {
               storeId,
               warehouseId: warehouse.id,
-              userId: order.createdById || 1,
+              userId: order.createdById ?? null,
               referenceType: 'POS_SALE',
               referenceId: order.orderNumber,
               idempotencyKey: `POS_PAYOS_DEDUCT_${order.id}`,
@@ -566,6 +571,7 @@ export class PosPayosService {
           });
         });
       } catch (transErr: any) {
+        if (!isConcurrentSettlementConflict(transErr)) throw transErr;
         console.warn(`[PayOS Polling] Xung đột xử lý đơn ${order.orderNumber}:`, transErr?.message);
       }
 
@@ -736,7 +742,7 @@ export class PosPayosService {
           {
             storeId,
             warehouseId: warehouse.id,
-            userId: order.createdById || 1,
+            userId: order.createdById ?? null,
             referenceType: 'POS_SALE',
             referenceId: order.orderNumber,
             idempotencyKey: `POS_PAYOS_DEDUCT_${order.id}`,
@@ -752,6 +758,8 @@ export class PosPayosService {
         });
       });
     } catch (transErr: any) {
+      // Rethrow real failures so PayOS retries the webhook instead of treating an unsettled order as done.
+      if (!isConcurrentSettlementConflict(transErr)) throw transErr;
       console.warn(`[PayOS Webhook] Trùng thanh toán hoặc xung đột đơn ${order.orderNumber}:`, transErr?.message);
     }
 

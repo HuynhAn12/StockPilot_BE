@@ -459,6 +459,9 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
         (call: any) => (call[1] as any).idempotencyKey === `POS_PAYOS_DEDUCT_${order.id}`
       );
       expect(deductCallsForOrder.length).toBe(1);
+      // Orders without a creator must not be attributed to an arbitrary user (previously hard-coded to user 1,
+      // which broke on a fresh database and mislabeled movements in other tenants).
+      expect((deductCallsForOrder[0][1] as any).userId).toBeNull();
 
       // syncAfterSale was called exactly once
       expect(syncAfterSaleSpy).toHaveBeenCalledTimes(1);
