@@ -58,3 +58,9 @@ export class InsufficientStockError extends AppError {
     super(message, 409, 'INSUFFICIENT_STOCK', details);
   }
 }
+
+export class RateLimitedError extends AppError {
+  constructor(message = 'Bạn đã vượt quá giới hạn sử dụng. Vui lòng thử lại sau.', details?: any) {
+    super(message, 429, 'RATE_LIMITED', details);
+  }
+}

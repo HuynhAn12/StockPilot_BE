@@ -14,6 +14,10 @@ publicRouter.get('/stats', (req, res, next) =>
   controller.getPlatformStats(req, res, next)
 );
 
+publicRouter.get('/platform-status', (req, res, next) =>
+  controller.getPlatformStatus(req, res, next)
+);
+
 publicRouter.get('/pricing', (req, res, next) =>
   controller.getPricingPlans(req, res, next)
 );

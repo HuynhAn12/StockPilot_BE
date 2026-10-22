@@ -2,9 +2,17 @@ import { z } from 'zod';
 
 export const upsertPayosConfigSchema = z
   .object({
-    clientId: z.string().trim().min(1).max(500),
-    apiKey: z.string().trim().min(1).max(1000),
-    checksumKey: z.string().trim().min(1).max(1000),
+    clientId: z.string().trim().max(500).optional(),
+    apiKey: z.string().trim().max(1000).optional(),
+    checksumKey: z.string().trim().max(1000).optional(),
     isActive: z.boolean().optional(),
+  })
+  .strict();
+
+export const testPayosConfigSchema = z
+  .object({
+    clientId: z.string().trim().max(500).optional(),
+    apiKey: z.string().trim().max(1000).optional(),
+    checksumKey: z.string().trim().max(1000).optional(),
   })
   .strict();
