@@ -1,8 +1,25 @@
--- AlterTable
-ALTER TABLE `contact_leads` ADD COLUMN `assigneeId` INTEGER NULL,
-    ADD COLUMN `lastContactedAt` DATETIME(3) NULL,
-    ADD COLUMN `lastSubmittedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-    ADD COLUMN `submissionCount` INTEGER NOT NULL DEFAULT 1;
+-- CreateTable
+CREATE TABLE IF NOT EXISTS `contact_leads` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `fullName` VARCHAR(191) NOT NULL,
+    `phone` VARCHAR(20) NOT NULL,
+    `email` VARCHAR(191) NULL,
+    `storeName` VARCHAR(191) NULL,
+    `industry` VARCHAR(100) NULL,
+    `note` TEXT NULL,
+    `status` VARCHAR(50) NOT NULL DEFAULT 'NEW',
+    `assigneeId` INTEGER NULL,
+    `submissionCount` INTEGER NOT NULL DEFAULT 1,
+    `lastSubmittedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `lastContactedAt` DATETIME(3) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+
+    INDEX `contact_leads_status_createdAt_idx`(`status`, `createdAt`),
+    INDEX `contact_leads_phone_idx`(`phone`),
+    INDEX `contact_leads_assigneeId_idx`(`assigneeId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- AlterTable
 ALTER TABLE `support_tickets` ADD COLUMN `adminReadAt` DATETIME(3) NULL,
@@ -11,7 +28,7 @@ ALTER TABLE `support_tickets` ADD COLUMN `adminReadAt` DATETIME(3) NULL,
     ADD COLUMN `storeReadAt` DATETIME(3) NULL;
 
 -- CreateTable
-CREATE TABLE `contact_lead_notes` (
+CREATE TABLE IF NOT EXISTS `contact_lead_notes` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `leadId` INTEGER NOT NULL,
     `authorId` INTEGER NULL,
@@ -25,7 +42,7 @@ CREATE TABLE `contact_lead_notes` (
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- CreateTable
-CREATE TABLE `support_ticket_attachments` (
+CREATE TABLE IF NOT EXISTS `support_ticket_attachments` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `messageId` INTEGER NOT NULL,
     `ticketId` INTEGER NOT NULL,
@@ -40,12 +57,6 @@ CREATE TABLE `support_ticket_attachments` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateIndex
-CREATE INDEX `contact_leads_phone_idx` ON `contact_leads`(`phone`);
-
--- CreateIndex
-CREATE INDEX `contact_leads_assigneeId_idx` ON `contact_leads`(`assigneeId`);
-
 -- AddForeignKey
 ALTER TABLE `contact_leads` ADD CONSTRAINT `contact_leads_assigneeId_fkey` FOREIGN KEY (`assigneeId`) REFERENCES `users`(`id`) ON DELETE SET NULL ON UPDATE CASCADE;
 
@@ -57,7 +68,6 @@ ALTER TABLE `contact_lead_notes` ADD CONSTRAINT `contact_lead_notes_authorId_fke
 
 -- AddForeignKey
 ALTER TABLE `support_ticket_attachments` ADD CONSTRAINT `support_ticket_attachments_messageId_fkey` FOREIGN KEY (`messageId`) REFERENCES `support_ticket_messages`(`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
 
 -- Existing leads: their last submission is their creation time, not the migration time.
 UPDATE `contact_leads` SET `lastSubmittedAt` = `createdAt`;
