@@ -21,12 +21,18 @@ export const createTicketSchema = z
   })
   .strict();
 
-export const replySchema = z.object({ body: messageBody }).strict();
+/** Replies may be image-only; the service rejects a reply with neither text nor images. */
+const optionalBody = z.string().trim().max(5000, 'Nội dung tối đa 5.000 ký tự').default('');
+
+/** Multipart forms send every field as a string. */
+const formBoolean = z.preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean());
+
+export const replySchema = z.object({ body: optionalBody }).strict();
 
 export const adminReplySchema = z
   .object({
-    body: messageBody,
-    isInternal: z.boolean().default(false),
+    body: optionalBody,
+    isInternal: formBoolean.default(false),
   })
   .strict();
 
@@ -48,11 +54,16 @@ export const adminTicketListQuerySchema = paginationQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(100).default(30),
   status: z.preprocess(emptyToUndefined, z.enum([...SUPPORT_STATUSES, 'ACTIVE'] as const).optional()),
   category: z.preprocess(emptyToUndefined, z.enum(SUPPORT_CATEGORIES).optional()),
+  priority: z.preprocess(emptyToUndefined, z.enum(SUPPORT_PRIORITIES).optional()),
   storeId: z.coerce.number().int().positive().optional(),
+  assigneeId: z.coerce.number().int().positive().optional(),
+  unassigned: z.preprocess((v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v), z.boolean().optional()),
   search: z.preprocess(emptyToUndefined, z.string().trim().max(191).optional()),
 });
 
 export type CreateTicketInput = z.infer<typeof createTicketSchema>;
+export const attachmentParamSchema = z.object({ attachmentId: z.coerce.number().int().positive() });
+
 export type AdminReplyInput = z.infer<typeof adminReplySchema>;
 export type AdminUpdateTicketInput = z.infer<typeof adminUpdateTicketSchema>;
 export type StoreTicketListQuery = z.infer<typeof storeTicketListQuerySchema>;

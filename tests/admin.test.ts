@@ -41,6 +41,12 @@ jest.mock('../src/config/db', () => ({
       findMany: jest.fn(),
       findUnique: jest.fn(),
       update: jest.fn(),
+      groupBy: jest.fn(),
+    },
+    supportTicket: {
+      groupBy: jest.fn(),
+      count: jest.fn(),
+      findMany: jest.fn(),
     },
     storePaymentConfig: {
       findMany: jest.fn(),
@@ -90,6 +96,10 @@ describe('Admin API', () => {
     });
     db.auditLog.create.mockResolvedValue({ id: 1n });
     db.authSession.groupBy.mockResolvedValue([]);
+    db.authSession.count.mockResolvedValue(0);
+    db.contactLead.groupBy.mockResolvedValue([]);
+    db.supportTicket.groupBy.mockResolvedValue([]);
+    db.store.findMany.mockResolvedValue([]);
     db.systemSetting.findUnique.mockResolvedValue(null);
     db.systemSetting.findMany.mockResolvedValue([]);
   });
@@ -111,7 +121,7 @@ describe('Admin API', () => {
 
   describe('GET /admin/dashboard', () => {
     it('returns platform counters and serialized recent audit logs', async () => {
-      db.store.count.mockResolvedValueOnce(5).mockResolvedValueOnce(4);
+      db.store.count.mockResolvedValueOnce(5).mockResolvedValueOnce(4).mockResolvedValueOnce(2);
       db.user.groupBy.mockResolvedValue([
         { role: 'SHOP_OWNER', _count: { _all: 5 } },
         { role: 'WAREHOUSE_STAFF', _count: { _all: 12 } },
@@ -122,6 +132,16 @@ describe('Admin API', () => {
       db.contactLead.count.mockResolvedValue(3);
       db.auditLog.findMany.mockResolvedValue([
         { id: 99n, action: 'LOGIN', entityType: 'USER', createdAt: new Date(), user: null, store: null },
+      ]);
+      db.contactLead.groupBy.mockResolvedValue([
+        { status: 'NEW', _count: { _all: 3 } },
+        { status: 'CONTACTED', _count: { _all: 2 } },
+        { status: 'CONVERTED', _count: { _all: 5 } },
+      ]);
+      db.authSession.count.mockResolvedValue(8);
+      db.supportTicket.groupBy.mockResolvedValue([
+        { status: 'OPEN', _count: { _all: 3 } },
+        { status: 'RESOLVED', _count: { _all: 7 } },
       ]);
 
       const res = await request(app).get('/api/v1/admin/dashboard').set(auth(adminToken));
@@ -137,6 +157,164 @@ describe('Admin API', () => {
       expect(res.body.data.auditEventsToday).toBe(37);
       expect(res.body.data.newLeads).toBe(3);
       expect(res.body.data.recentAuditLogs[0].id).toBe('99');
+      expect(res.body.data.growth).toEqual({
+        leads30d: 3,
+        leadsByStatus: { NEW: 3, CONTACTED: 2, CONVERTED: 5, REJECTED: 0 },
+        conversionRate: 50,
+        newStores30d: 2,
+        idleStores: [],
+      });
+      expect(res.body.data.supportSummary).toEqual([
+        { status: 'OPEN', _count: { _all: 3 } },
+        { status: 'RESOLVED', _count: { _all: 7 } },
+      ]);
+      expect(res.body.data.activeSessionsCount).toBe(8);
+    });
+
+    it('detects idle stores based on owner last login and store creation date', async () => {
+      const now = new Date();
+      const twentyDaysAgo = new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000);
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+      const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+
+      db.store.count.mockResolvedValue(10);
+      db.user.groupBy.mockResolvedValue([]);
+      db.user.count.mockResolvedValue(0);
+      db.auditLog.count.mockResolvedValue(0);
+      db.contactLead.count.mockResolvedValue(0);
+      db.auditLog.findMany.mockResolvedValue([]);
+      db.contactLead.groupBy.mockResolvedValue([]);
+      db.supportTicket.groupBy.mockResolvedValue([]);
+      db.authSession.count.mockResolvedValue(2);
+
+      // 4 stores to test all idle branches:
+      // 1. Idle: Created 30 days ago, owner logged in 20 days ago (> 14 days)
+      // 2. Idle: Created 20 days ago, owner never logged in (> 14 days)
+      // 3. Active: Created 30 days ago, owner logged in 2 days ago (<= 14 days)
+      // 4. Active: Created 5 days ago, owner never logged in (<= 14 days)
+      db.store.findMany.mockResolvedValue([
+        {
+          id: 101,
+          name: 'Idle Store With Old Login',
+          code: 'IDLE01',
+          phone: '0901111111',
+          address: '123 Test St',
+          isActive: true,
+          createdAt: thirtyDaysAgo,
+          users: [
+            {
+              id: 51,
+              fullName: 'Old Owner',
+              email: 'old@idle.test',
+              createdAt: thirtyDaysAgo,
+              sessions: [{ createdAt: twentyDaysAgo }],
+            },
+          ],
+        },
+        {
+          id: 102,
+          name: 'Idle Store Never Logged In',
+          code: 'IDLE02',
+          phone: null,
+          address: null,
+          isActive: true,
+          createdAt: twentyDaysAgo,
+          users: [
+            {
+              id: 52,
+              fullName: 'Never Logged In Owner',
+              email: 'never@idle.test',
+              createdAt: twentyDaysAgo,
+              sessions: [],
+            },
+          ],
+        },
+        {
+          id: 103,
+          name: 'Active Store Recent Login',
+          code: 'ACT01',
+          phone: '0902222222',
+          address: '456 Active Ave',
+          isActive: true,
+          createdAt: thirtyDaysAgo,
+          users: [
+            {
+              id: 53,
+              fullName: 'Recent Owner',
+              email: 'recent@active.test',
+              createdAt: thirtyDaysAgo,
+              sessions: [{ createdAt: twoDaysAgo }],
+            },
+          ],
+        },
+        {
+          id: 104,
+          name: 'New Store No Login Yet',
+          code: 'NEW01',
+          phone: null,
+          address: null,
+          isActive: true,
+          createdAt: fiveDaysAgo,
+          users: [
+            {
+              id: 54,
+              fullName: 'New Owner',
+              email: 'new@fresh.test',
+              createdAt: fiveDaysAgo,
+              sessions: [],
+            },
+          ],
+        },
+      ]);
+
+      const res = await request(app).get('/api/v1/admin/dashboard').set(auth(adminToken));
+
+      expect(res.status).toBe(200);
+      const idle = res.body.data.growth.idleStores;
+      expect(idle).toHaveLength(2);
+
+      const idle1 = idle.find((s: any) => s.id === 101);
+      expect(idle1).toBeDefined();
+      expect(idle1.code).toBe('IDLE01');
+      expect(idle1.daysIdle).toBeGreaterThanOrEqual(19);
+      expect(idle1.owner.email).toBe('old@idle.test');
+
+      const idle2 = idle.find((s: any) => s.id === 102);
+      expect(idle2).toBeDefined();
+      expect(idle2.code).toBe('IDLE02');
+      expect(idle2.lastLoginAt).toBeNull();
+      expect(idle2.daysIdle).toBeGreaterThanOrEqual(19);
+      expect(idle2.owner.email).toBe('never@idle.test');
+
+      // Non-idle stores should not be present
+      expect(idle.find((s: any) => s.id === 103)).toBeUndefined();
+      expect(idle.find((s: any) => s.id === 104)).toBeUndefined();
+    });
+
+    it('calculates conversion rate safely when totalLeads is 0', async () => {
+      db.store.count.mockResolvedValue(0);
+      db.user.groupBy.mockResolvedValue([]);
+      db.user.count.mockResolvedValue(0);
+      db.auditLog.count.mockResolvedValue(0);
+      db.contactLead.count.mockResolvedValue(0);
+      db.auditLog.findMany.mockResolvedValue([]);
+      db.contactLead.groupBy.mockResolvedValue([]);
+      db.supportTicket.groupBy.mockResolvedValue([]);
+      db.authSession.count.mockResolvedValue(0);
+      db.store.findMany.mockResolvedValue([]);
+
+      const res = await request(app).get('/api/v1/admin/dashboard').set(auth(adminToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.growth.conversionRate).toBe(0);
+      expect(res.body.data.growth.leads30d).toBe(0);
+      expect(res.body.data.growth.leadsByStatus).toEqual({
+        NEW: 0,
+        CONTACTED: 0,
+        CONVERTED: 0,
+        REJECTED: 0,
+      });
     });
   });
 
@@ -411,6 +589,17 @@ describe('Admin API', () => {
       expect(res.body.data[0].id).toBe('5');
     });
 
+    it('filters by actor role on the server so pagination stays correct', async () => {
+      db.auditLog.findMany.mockResolvedValue([]);
+      db.auditLog.count.mockResolvedValue(0);
+
+      await request(app).get('/api/v1/admin/audit-logs?actorRole=SHOP_OWNER').set(auth(adminToken));
+      expect(db.auditLog.findMany.mock.calls[0][0].where).toEqual({ user: { is: { role: 'SHOP_OWNER' } } });
+
+      await request(app).get('/api/v1/admin/audit-logs?actorRole=SYSTEM').set(auth(adminToken));
+      expect(db.auditLog.findMany.mock.calls[1][0].where).toEqual({ userId: null });
+    });
+
     it('rejects an inverted date range', async () => {
       const res = await request(app)
         .get('/api/v1/admin/audit-logs?from=2026-10-31&to=2026-10-01')
@@ -536,40 +725,7 @@ describe('Admin API', () => {
     });
   });
 
-  describe('leads', () => {
-    it('lists leads filtered by status', async () => {
-      db.contactLead.findMany.mockResolvedValue([{ id: 5, fullName: 'Lead', status: 'NEW' }]);
-      db.contactLead.count.mockResolvedValue(1);
-
-      const res = await request(app).get('/api/v1/admin/leads?status=NEW').set(auth(adminToken));
-
-      expect(res.status).toBe(200);
-      expect(db.contactLead.findMany.mock.calls[0][0].where).toEqual({ status: 'NEW' });
-      expect(res.body.data).toHaveLength(1);
-    });
-
-    it('rejects an unknown lead status', async () => {
-      const res = await request(app).patch('/api/v1/admin/leads/5/status').set(auth(adminToken)).send({ status: 'WON' });
-      expect(res.status).toBe(400);
-    });
-
-    it('updates lead status with an audit log', async () => {
-      db.contactLead.findUnique.mockResolvedValue({ id: 5, status: 'NEW' });
-      db.contactLead.update.mockResolvedValue({ id: 5, status: 'CONTACTED' });
-
-      const res = await request(app)
-        .patch('/api/v1/admin/leads/5/status')
-        .set(auth(adminToken))
-        .send({ status: 'CONTACTED' });
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.status).toBe('CONTACTED');
-      expect(db.auditLog.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ action: 'LEAD_STATUS_UPDATED', entityType: 'CONTACT_LEAD', entityId: '5' }),
-      });
-    });
-  });
-describe('production safeguards', () => {
+  describe('production safeguards', () => {
     it('requires a reason before locking a user', async () => {
       const res = await request(app).patch('/api/v1/admin/users/2/status').set(auth(adminToken)).send({ isActive: false });
 
@@ -806,5 +962,80 @@ describe('production safeguards', () => {
       expect(snap.avgLatencyMs).toBe(20);
       expect(snap.recentServerErrors[0]).toEqual(expect.objectContaining({ path: '/b', requestId: 'r1' }));
     });
+  });
+});
+
+describe('Admin edits', () => {
+  const app = createApp();
+  const adminToken = generateAccessToken({ userId: 3, email: 'admin@stockpilot.test', role: 'ADMIN', storeId: null });
+  const ownerToken = generateAccessToken({ userId: 1, email: 'owner@store-a.test', role: 'SHOP_OWNER', storeId: 1 });
+  const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    db.user.findUnique.mockImplementation(({ where }: any) => Promise.resolve(authUsers[where.id] ?? null));
+    db.auditLog.create.mockResolvedValue({ id: 1n });
+  });
+
+  it('renames a user and records the before/after name', async () => {
+    db.user.update.mockResolvedValue({ ...authUsers[2], fullName: 'Trần Thị Mai' });
+
+    const res = await request(app).patch('/api/v1/admin/users/2').set(auth(adminToken)).send({ fullName: 'Trần Thị Mai' });
+
+    expect(res.status).toBe(200);
+    expect(db.user.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 2 }, data: { fullName: 'Trần Thị Mai' } }));
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'USER_UPDATED', beforeJson: { fullName: 'Staff A' }, afterJson: { fullName: 'Trần Thị Mai' } }),
+    });
+  });
+
+  it('does not let admins change email or role through the profile endpoint', async () => {
+    const res = await request(app).patch('/api/v1/admin/users/2').set(auth(adminToken)).send({ fullName: 'X Y', role: 'ADMIN' });
+
+    expect(res.status).toBe(400);
+    expect(db.user.update).not.toHaveBeenCalled();
+  });
+
+  it('edits store contact details, logs only changed fields, and never changes the store code', async () => {
+    db.store.findUnique.mockResolvedValue({ id: 1, name: 'Store A', phone: '0901', address: null });
+    db.store.update.mockResolvedValue({ id: 1, name: 'Store A', code: 'store-a', phone: '0912345678', address: 'Đà Nẵng' });
+
+    const res = await request(app)
+      .patch('/api/v1/admin/stores/1')
+      .set(auth(adminToken))
+      .send({ name: 'Store A', phone: '0912345678', address: 'Đà Nẵng' });
+
+    expect(res.status).toBe(200);
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'STORE_UPDATED',
+        beforeJson: { phone: '0901', address: null },
+        afterJson: { phone: '0912345678', address: 'Đà Nẵng' },
+      }),
+    });
+
+    const codeChange = await request(app).patch('/api/v1/admin/stores/1').set(auth(adminToken)).send({ code: 'hacked' });
+    expect(codeChange.status).toBe(400);
+  });
+
+  it('filters stores by PayOS state', async () => {
+    db.store.findMany.mockResolvedValue([]);
+    db.store.count.mockResolvedValue(0);
+    db.storePaymentConfig.count.mockResolvedValue(0);
+    db.storePaymentConfig.findMany.mockResolvedValue([]);
+
+    await request(app).get('/api/v1/admin/stores?payos=NOT_CONFIGURED').set(auth(adminToken));
+    expect(db.store.findMany.mock.calls[0][0].where).toEqual({ paymentConfigs: { none: { provider: 'PAYOS' } } });
+
+    await request(app).get('/api/v1/admin/stores?payos=DISABLED').set(auth(adminToken));
+    expect(db.store.findMany.mock.calls[1][0].where).toEqual({ paymentConfigs: { some: { provider: 'PAYOS', isActive: false } } });
+
+    const bad = await request(app).get('/api/v1/admin/stores?payos=MOMO').set(auth(adminToken));
+    expect(bad.status).toBe(400);
+  });
+
+  it('rejects shop owners on admin edit endpoints', async () => {
+    const res = await request(app).patch('/api/v1/admin/stores/1').set(auth(ownerToken)).send({ name: 'Mine now' });
+    expect(res.status).toBe(403);
   });
 });

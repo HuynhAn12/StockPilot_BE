@@ -13,12 +13,12 @@ import {
   AdminAiUsageQuery,
   AdminAuditLogFilter,
   AdminAuditLogQuery,
-  AdminLeadListQuery,
   AdminStoreListQuery,
   AdminUserListQuery,
   CreateAdminUserInput,
   RevokeSessionsInput,
-  UpdateLeadStatusInput,
+  UpdateStoreInput,
+  UpdateUserProfileInput,
   UpdateStatusInput,
 } from './admin.schema';
 
@@ -30,7 +30,24 @@ export interface RequestMeta {
 export const AUDIT_EXPORT_MAX_ROWS = 5000;
 const DEFAULT_AI_USAGE_WINDOW_DAYS = 30;
 /** A store with no login for this many days is reported as idle. */
-const STORE_IDLE_DAYS = 14;
+export const STORE_IDLE_DAYS = 14;
+
+export interface IdleStoreItem {
+  id: number;
+  name: string;
+  code: string;
+  phone: string | null;
+  address: string | null;
+  isActive: boolean;
+  createdAt: Date;
+  lastLoginAt: Date | null;
+  daysIdle: number;
+  owner: {
+    id: number;
+    fullName: string;
+    email: string;
+  } | null;
+}
 
 const auditLogInclude = {
   user: { select: { id: true, fullName: true, email: true, role: true } },
@@ -61,24 +78,140 @@ export class AdminService {
   // ---------------------------------------------------------------------------
 
   async getDashboard() {
-    const { startUtc, endUtc } = businessDateRangeToUtc(toBusinessDateKey(new Date()));
+    const now = new Date();
+    const { startUtc, endUtc } = businessDateRangeToUtc(toBusinessDateKey(now));
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const idleThreshold = new Date(now.getTime() - STORE_IDLE_DAYS * 24 * 60 * 60 * 1000);
 
-    const [totalStores, activeStores, usersByRole, lockedUsers, auditEventsToday, newLeads, recentLogs] =
-      await Promise.all([
-        prisma.store.count(),
-        prisma.store.count({ where: { isActive: true } }),
-        prisma.user.groupBy({ by: ['role'], _count: { _all: true } }),
-        prisma.user.count({ where: { isActive: false } }),
-        prisma.auditLog.count({ where: { createdAt: { gte: startUtc, lt: endUtc } } }),
-        prisma.contactLead.count({ where: { status: 'NEW' } }),
-        prisma.auditLog.findMany({ include: auditLogInclude, orderBy: { createdAt: 'desc' }, take: 10 }),
-      ]);
+    const [
+      totalStores,
+      activeStores,
+      usersByRole,
+      lockedUsers,
+      auditEventsToday,
+      newLeads,
+      recentLogs,
+      leads30d,
+      leadStatusGroups,
+      newStores30d,
+      activeStoresList,
+      activeSessionsCount,
+      supportSummary,
+    ] = await Promise.all([
+      prisma.store.count(),
+      prisma.store.count({ where: { isActive: true } }),
+      prisma.user.groupBy({ by: ['role'], _count: { _all: true } }),
+      prisma.user.count({ where: { isActive: false } }),
+      prisma.auditLog.count({ where: { createdAt: { gte: startUtc, lt: endUtc } } }),
+      prisma.contactLead.count({ where: { status: 'NEW' } }),
+      prisma.auditLog.findMany({ include: auditLogInclude, orderBy: { createdAt: 'desc' }, take: 10 }),
+      prisma.contactLead.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.contactLead.groupBy({ by: ['status'], _count: { _all: true } }),
+      prisma.store.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.store.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          phone: true,
+          address: true,
+          isActive: true,
+          createdAt: true,
+          users: {
+            where: { role: 'SHOP_OWNER' },
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              createdAt: true,
+              sessions: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: { createdAt: true },
+              },
+            },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+      }),
+      prisma.authSession.count({ where: { revokedAt: null, expiresAt: { gt: now } } }),
+      prisma.supportTicket.groupBy({ by: ['status'], _count: { _all: true } }),
+    ]);
 
     const byRole = { SHOP_OWNER: 0, WAREHOUSE_STAFF: 0, ADMIN: 0 };
-    for (const row of usersByRole) {
+    for (const row of usersByRole ?? []) {
       byRole[row.role] = row._count._all;
     }
     const totalUsers = byRole.SHOP_OWNER + byRole.WAREHOUSE_STAFF + byRole.ADMIN;
+
+    // Leads by status & conversion rate
+    const leadsByStatus: Record<string, number> = {
+      NEW: 0,
+      CONTACTED: 0,
+      CONVERTED: 0,
+      REJECTED: 0,
+    };
+    for (const row of leadStatusGroups ?? []) {
+      leadsByStatus[row.status] = row._count._all;
+    }
+    const totalLeads = Object.values(leadsByStatus).reduce((a, b) => a + b, 0);
+    const conversionRate = totalLeads === 0
+      ? 0
+      : Number(((leadsByStatus.CONVERTED / totalLeads) * 100).toFixed(2));
+
+    // Fallback login map in case sessions relation wasn't loaded in mocks
+    const storeList = activeStoresList ?? [];
+    const ownerIdsWithoutSessions: number[] = [];
+    for (const store of storeList) {
+      for (const user of store.users ?? []) {
+        if ((user as any).sessions === undefined) {
+          ownerIdsWithoutSessions.push(user.id);
+        }
+      }
+    }
+    const fallbackLoginMap = ownerIdsWithoutSessions.length > 0
+      ? await this.getLastLoginMap(ownerIdsWithoutSessions)
+      : new Map<number, Date>();
+
+    // Idle stores: stopped operating > 14 days, checked via shop owner's latest login or createdAt if never logged in
+    const idleStores: IdleStoreItem[] = [];
+    for (const store of storeList) {
+      let latestOwnerLogin: Date | null = null;
+      for (const user of store.users ?? []) {
+        const userLogin = user.sessions?.[0]?.createdAt ?? fallbackLoginMap.get(user.id) ?? null;
+        if (userLogin) {
+          const d = new Date(userLogin);
+          if (!latestOwnerLogin || d > latestOwnerLogin) {
+            latestOwnerLogin = d;
+          }
+        }
+      }
+
+      const referenceDate = latestOwnerLogin ?? new Date(store.createdAt);
+      if (referenceDate < idleThreshold) {
+        const primaryOwner = store.users?.[0] ?? null;
+        const daysIdle = Math.floor((now.getTime() - referenceDate.getTime()) / (24 * 60 * 60 * 1000));
+        idleStores.push({
+          id: store.id,
+          name: store.name,
+          code: store.code,
+          phone: store.phone ?? null,
+          address: store.address ?? null,
+          isActive: store.isActive,
+          createdAt: store.createdAt,
+          lastLoginAt: latestOwnerLogin,
+          daysIdle,
+          owner: primaryOwner
+            ? {
+                id: primaryOwner.id,
+                fullName: primaryOwner.fullName,
+                email: primaryOwner.email,
+              }
+            : null,
+        });
+      }
+    }
 
     return {
       stores: { total: totalStores, active: activeStores, inactive: totalStores - activeStores },
@@ -90,7 +223,16 @@ export class AdminService {
       },
       auditEventsToday,
       newLeads,
-      recentAuditLogs: recentLogs.map(serializeAuditLog),
+      recentAuditLogs: (recentLogs ?? []).map(serializeAuditLog),
+      growth: {
+        leads30d: leads30d ?? 0,
+        leadsByStatus,
+        conversionRate,
+        newStores30d: newStores30d ?? 0,
+        idleStores,
+      },
+      supportSummary: supportSummary ?? [],
+      activeSessionsCount: activeSessionsCount ?? 0,
     };
   }
 
@@ -241,6 +383,30 @@ export class AdminService {
     });
   }
 
+  async updateUserProfile(userId: number, input: UpdateUserProfileInput, actorUserId: number, meta: RequestMeta = {}) {
+    const existing = await prisma.user.findUnique({ where: { id: userId }, select: adminUserSelect });
+    if (!existing) {
+      throw new NotFoundError('Không tìm thấy người dùng');
+    }
+    if (existing.fullName === input.fullName) return existing;
+
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({ where: { id: userId }, data: { fullName: input.fullName }, select: adminUserSelect });
+      await AuditLogService.create(tx, {
+        storeId: existing.storeId,
+        userId: actorUserId,
+        action: 'USER_UPDATED',
+        entityType: 'USER',
+        entityId: userId,
+        beforeJson: { fullName: existing.fullName },
+        afterJson: { fullName: updated.fullName },
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      });
+      return updated;
+    });
+  }
+
   /** Signs the user out of every device without locking the account. */
   async revokeUserSessions(userId: number, input: RevokeSessionsInput, actorUserId: number, meta: RequestMeta = {}) {
     if (userId === actorUserId) {
@@ -344,6 +510,11 @@ export class AdminService {
     const { page, limit } = query;
     const where: Prisma.StoreWhereInput = {
       ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.payos === 'NOT_CONFIGURED'
+        ? { paymentConfigs: { none: { provider: 'PAYOS' } } }
+        : query.payos
+          ? { paymentConfigs: { some: { provider: 'PAYOS', isActive: query.payos === 'ACTIVE' } } }
+          : {}),
       ...(query.search
         ? {
             OR: [
@@ -527,6 +698,45 @@ export class AdminService {
       },
       paymentConfigs,
     };
+  }
+
+  async updateStore(storeId: number, input: UpdateStoreInput, actorUserId: number, meta: RequestMeta = {}) {
+    const existing = await prisma.store.findUnique({
+      where: { id: storeId },
+      select: { id: true, name: true, phone: true, address: true },
+    });
+    if (!existing) {
+      throw new NotFoundError('Không tìm thấy cửa hàng');
+    }
+
+    // Empty strings clear optional contact fields.
+    const data = {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.phone !== undefined ? { phone: input.phone || null } : {}),
+      ...(input.address !== undefined ? { address: input.address || null } : {}),
+    };
+    const changed = (Object.keys(data) as Array<keyof typeof data>).filter((key) => data[key] !== existing[key]);
+    if (changed.length === 0) return existing;
+
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.store.update({
+        where: { id: storeId },
+        data,
+        select: { id: true, name: true, code: true, phone: true, address: true, isActive: true, updatedAt: true },
+      });
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: actorUserId,
+        action: 'STORE_UPDATED',
+        entityType: 'STORE',
+        entityId: storeId,
+        beforeJson: Object.fromEntries(changed.map((k) => [k, existing[k]])),
+        afterJson: Object.fromEntries(changed.map((k) => [k, updated[k]])),
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      });
+      return updated;
+    });
   }
 
   async updateStoreStatus(storeId: number, input: UpdateStatusInput, actorUserId: number, meta: RequestMeta = {}) {
@@ -831,73 +1041,17 @@ export class AdminService {
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // Contact leads (landing page)
-  // ---------------------------------------------------------------------------
-
-  async listLeads(query: AdminLeadListQuery) {
-    const { page, limit } = query;
-    const where: Prisma.ContactLeadWhereInput = {
-      ...(query.status ? { status: query.status } : {}),
-      ...(query.search
-        ? {
-            OR: [
-              { fullName: { contains: query.search } },
-              { phone: { contains: query.search } },
-              { email: { contains: query.search } },
-              { storeName: { contains: query.search } },
-            ],
-          }
-        : {}),
-    };
-
-    const [items, total] = await Promise.all([
-      prisma.contactLead.findMany({
-        where,
-        orderBy: { createdAt: query.order },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.contactLead.count({ where }),
-    ]);
-
-    return buildPaginationResult(items, total, page, limit);
-  }
-
-  async updateLeadStatus(leadId: number, input: UpdateLeadStatusInput, actorUserId: number, meta: RequestMeta = {}) {
-    const existing = await prisma.contactLead.findUnique({ where: { id: leadId } });
-    if (!existing) {
-      throw new NotFoundError('Không tìm thấy khách hàng tiềm năng');
-    }
-
-    if (existing.status === input.status) {
-      return existing;
-    }
-
-    return prisma.$transaction(async (tx) => {
-      const updated = await tx.contactLead.update({ where: { id: leadId }, data: { status: input.status } });
-
-      await AuditLogService.create(tx, {
-        storeId: null,
-        userId: actorUserId,
-        action: 'LEAD_STATUS_UPDATED',
-        entityType: 'CONTACT_LEAD',
-        entityId: leadId,
-        beforeJson: { status: existing.status },
-        afterJson: { status: updated.status },
-        ipAddress: meta.ipAddress,
-        userAgent: meta.userAgent,
-      });
-
-      return updated;
-    });
-  }
 }
 
 function buildAuditLogWhere(filter: AdminAuditLogFilter): Prisma.AuditLogWhereInput {
   return {
     ...(filter.storeId ? { storeId: filter.storeId } : {}),
     ...(filter.userId ? { userId: filter.userId } : {}),
+    ...(filter.actorRole === 'SYSTEM'
+      ? { userId: null }
+      : filter.actorRole
+        ? { user: { is: { role: filter.actorRole } } }
+        : {}),
     ...(filter.action ? { action: { contains: filter.action } } : {}),
     ...(filter.entityType ? { entityType: filter.entityType } : {}),
     ...(filter.from || filter.to
