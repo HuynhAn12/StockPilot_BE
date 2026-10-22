@@ -9,7 +9,8 @@ import {
   hashToken,
   getRefreshTokenExpiry,
 } from '../../common/utils/jwt';
-import { ConflictError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
+import { ConflictError, ForbiddenError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
+import { SystemSettingsService } from '../../common/services/system-settings.service';
 import { env } from '../../config/env';
 import { z } from 'zod';
 import { registerSchema, sendRegisterOtpSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, verifyOtpSchema, resetPasswordSchema } from './auth.schema';
@@ -29,6 +30,7 @@ export class AuthService {
   }
 
   async sendRegisterOtp(input: z.infer<typeof sendRegisterOtpSchema>) {
+    await this.assertSignupEnabled();
     const email = input.email.toLowerCase().trim();
 
     // 1. Kiểm tra email đã tồn tại hay chưa
@@ -82,6 +84,7 @@ export class AuthService {
   }
 
   async registerOwner(input: z.infer<typeof registerSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
+    await this.assertSignupEnabled();
     const email = input.email.toLowerCase().trim();
 
     // 1. Xác thực mã OTP đăng ký (bắt buộc trong production)
@@ -228,6 +231,12 @@ export class AuthService {
         },
       };
     });
+  }
+
+  private async assertSignupEnabled() {
+    if (!(await SystemSettingsService.get('signup.enabled', this.prisma))) {
+      throw new ForbiddenError('StockPilot đang tạm ngừng nhận đăng ký cửa hàng mới. Vui lòng để lại thông tin liên hệ để được hỗ trợ.');
+    }
   }
 
   async login(input: z.infer<typeof loginSchema>, meta?: { userAgent?: string; ipAddress?: string }) {

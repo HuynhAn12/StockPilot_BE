@@ -4,6 +4,7 @@ import { PayOS } from '@payos/node';
 import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { SecretEncryptionService } from '../../common/services/secret-encryption.service';
+import { PAYOS_CONFIG_UNREADABLE_MESSAGE } from '../store-payment-config/store-payment-config.service';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { BusinessSyncService } from '../../common/services/business-sync.service';
 
@@ -47,8 +48,9 @@ export class PosPayosService {
 
       return { clientId, apiKey, checksumKey };
     } catch (err) {
+      // Configured but unreadable (encryption key changed): say so instead of "not configured".
       console.error(`[PayOS] Không thể giải mã credentials cho storeId ${storeId}:`, err);
-      return null;
+      throw new ValidationError(PAYOS_CONFIG_UNREADABLE_MESSAGE);
     }
   }
 
