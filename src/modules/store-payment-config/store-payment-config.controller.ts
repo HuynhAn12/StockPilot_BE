@@ -3,10 +3,17 @@ import { StorePaymentConfigService } from './store-payment-config.service';
 
 const service = new StorePaymentConfigService();
 
+function getRequestOrigin(req: Request): string {
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+  const host = req.get('x-forwarded-host') || req.get('host');
+  if (!host) return '';
+  return `${proto}://${host}`;
+}
+
 export class StorePaymentConfigController {
   async getPayosStatus(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await service.getPayosStatus(req.user!.storeId!);
+      const result = await service.getPayosStatus(req.user!.storeId!, getRequestOrigin(req));
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       return next(error);
@@ -15,10 +22,32 @@ export class StorePaymentConfigController {
 
   async upsertPayosConfig(req: Request, res: Response, next: NextFunction) {
     try {
-      const result = await service.upsertPayosConfig(req.user!.storeId!, req.user!.userId, req.body);
+      const result = await service.upsertPayosConfig(
+        req.user!.storeId!,
+        req.user!.userId,
+        req.body,
+        getRequestOrigin(req)
+      );
       return res.status(200).json({
         success: true,
         message: 'PayOS configuration saved',
+        data: result,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async testPayosConnection(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await service.testPayosConnection(
+        req.user!.storeId!,
+        req.body,
+        getRequestOrigin(req)
+      );
+      return res.status(200).json({
+        success: result.success,
+        message: result.message,
         data: result,
       });
     } catch (error) {
@@ -53,4 +82,3 @@ export class StorePaymentConfigController {
     }
   }
 }
-

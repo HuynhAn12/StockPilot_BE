@@ -121,6 +121,28 @@ enum StockTakeStatus {
   CANCELED
 }
 
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_STORE
+  RESOLVED
+}
+
+enum SupportTicketCategory {
+  DATA_IMPORT
+  PAYMENT
+  ACCOUNT
+  BUG
+  HOW_TO
+  OTHER
+}
+
+enum SupportTicketPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
 enum AiInteractionStatus {
   SUCCESS
   FAILED
@@ -164,6 +186,7 @@ model Store {
   aiInteractions         AiInteraction[]
   idempotencyRequests    IdempotencyRequest[]
   paymentConfigs         StorePaymentConfig[]
+  supportTickets         SupportTicket[]
 
   @@map("stores")
 }
@@ -179,20 +202,23 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  store             Store?                  @relation(fields: [storeId], references: [id], onDelete: SetNull)
-  sessions          AuthSession[]
-  passwordResetTokens PasswordResetToken[]
-  stockMovements    StockMovement[]
-  ordersCreated     Order[]
-  returnsCreated    ReturnOrder[]
-  importJobsCreated ImportJob[]
-  pricingDecided    PricingRecommendation[]
-  priceHistories    PriceHistory[]
-  stockTakesCreated StockTake[]
-  notifications     Notification[]
-  auditLogs         AuditLog[]
-  aiInteractions    AiInteraction[]
-  systemSettingsUpdated SystemSetting[]
+  store                  Store?                  @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  sessions               AuthSession[]
+  passwordResetTokens    PasswordResetToken[]
+  stockMovements         StockMovement[]
+  ordersCreated          Order[]
+  returnsCreated         ReturnOrder[]
+  importJobsCreated      ImportJob[]
+  pricingDecided         PricingRecommendation[]
+  priceHistories         PriceHistory[]
+  stockTakesCreated      StockTake[]
+  notifications          Notification[]
+  auditLogs              AuditLog[]
+  aiInteractions         AiInteraction[]
+  systemSettingsUpdated  SystemSetting[]
+  supportTicketsCreated  SupportTicket[]         @relation("SupportTicketCreatedBy")
+  supportTicketsAssigned SupportTicket[]         @relation("SupportTicketAssignee")
+  supportMessages        SupportTicketMessage[]
 
   @@index([storeId])
   @@map("users")
@@ -240,10 +266,10 @@ model Warehouse {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  store     Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  balances  InventoryBalance[]
-  movements StockMovement[]
-  stockTakes StockTake[]
+  store              Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  balances           InventoryBalance[]
+  movements          StockMovement[]
+  stockTakes         StockTake[]
   restockReturnItems ReturnItem[]
 
   @@index([storeId])
@@ -360,10 +386,10 @@ model StockMovement {
   createdById    Int?
   createdAt      DateTime     @default(now())
 
-  store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  stockItem StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
-  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  store                Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  warehouse            Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  stockItem            StockItem       @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  createdBy            User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
   stockTakeAdjustments StockTakeItem[]
 
   @@index([storeId, stockItemId, createdAt])
@@ -372,26 +398,26 @@ model StockMovement {
 }
 
 model Order {
-  id              Int         @id @default(autoincrement())
-  storeId         Int
-  orderNumber     String      @db.VarChar(100)
-  status          OrderStatus @default(DRAFT)
-  customerName    String?     @db.VarChar(255)
-  customerPhone   String?     @db.VarChar(50)
-  customerAddress String?     @db.VarChar(255)
-  subtotalAmount  Decimal     @default(0.00) @db.Decimal(15, 2)
-  discountAmount  Decimal     @default(0.00) @db.Decimal(15, 2)
-  taxAmount       Decimal     @default(0.00) @db.Decimal(15, 2)
-  totalAmount     Decimal     @default(0.00) @db.Decimal(15, 2)
-  note            String?     @db.Text
-  confirmedAt     DateTime?
-  fulfilledAt     DateTime?
-  canceledAt      DateTime?
-  cancelReason    String?     @db.Text
+  id               Int         @id @default(autoincrement())
+  storeId          Int
+  orderNumber      String      @db.VarChar(100)
+  status           OrderStatus @default(DRAFT)
+  customerName     String?     @db.VarChar(255)
+  customerPhone    String?     @db.VarChar(50)
+  customerAddress  String?     @db.VarChar(255)
+  subtotalAmount   Decimal     @default(0.00) @db.Decimal(15, 2)
+  discountAmount   Decimal     @default(0.00) @db.Decimal(15, 2)
+  taxAmount        Decimal     @default(0.00) @db.Decimal(15, 2)
+  totalAmount      Decimal     @default(0.00) @db.Decimal(15, 2)
+  note             String?     @db.Text
+  confirmedAt      DateTime?
+  fulfilledAt      DateTime?
+  canceledAt       DateTime?
+  cancelReason     String?     @db.Text
   clientRequestKey String?     @db.VarChar(200)
-  createdById     Int?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  createdById      Int?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
   store     Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
   createdBy User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
@@ -426,6 +452,7 @@ model Payment {
 
   @@unique([storeId, clientRequestKey])
   @@unique([storeId, provider, providerReference])
+  @@unique([provider, providerReference])
   @@index([storeId, orderId])
   @@index([storeId, status, createdAt])
   @@map("payments")
@@ -494,11 +521,11 @@ model ReturnItem {
   note               String?  @db.Text
   createdAt          DateTime @default(now())
 
-  store       Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  returnOrder ReturnOrder @relation(fields: [returnOrderId], references: [id], onDelete: Cascade)
-  orderItem   OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-  stockItem   StockItem   @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
-  restockWarehouse Warehouse? @relation(fields: [restockWarehouseId], references: [id], onDelete: SetNull)
+  store            Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  returnOrder      ReturnOrder @relation(fields: [returnOrderId], references: [id], onDelete: Cascade)
+  orderItem        OrderItem   @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  stockItem        StockItem   @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  restockWarehouse Warehouse?  @relation(fields: [restockWarehouseId], references: [id], onDelete: SetNull)
 
   @@index([storeId, returnOrderId])
   @@index([orderItemId])
@@ -544,7 +571,7 @@ model ImportJobItem {
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  importJob ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  importJob ImportJob  @relation(fields: [importJobId], references: [id], onDelete: Cascade)
   stockItem StockItem? @relation(fields: [stockItemId], references: [id], onDelete: SetNull)
 
   @@unique([importJobId, rowNumber])
@@ -765,21 +792,21 @@ model DecisionSnapshot {
 }
 
 model StockTake {
-  id            Int             @id @default(autoincrement())
-  storeId       Int
-  warehouseId   Int
-  status        StockTakeStatus @default(DRAFT)
-  startedAt     DateTime?
-  completedAt   DateTime?
-  note          String?         @db.Text
-  createdById   Int?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id          Int             @id @default(autoincrement())
+  storeId     Int
+  warehouseId Int
+  status      StockTakeStatus @default(DRAFT)
+  startedAt   DateTime?
+  completedAt DateTime?
+  note        String?         @db.Text
+  createdById Int?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
-  store      Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  warehouse  Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  createdBy  User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  items      StockTakeItem[]
+  store     Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdBy User?           @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items     StockTakeItem[]
 
   @@index([storeId, warehouseId, status, createdAt])
   @@index([createdById])
@@ -811,17 +838,17 @@ model StockTakeItem {
 }
 
 model Notification {
-  id         Int      @id @default(autoincrement())
+  id         Int       @id @default(autoincrement())
   storeId    Int
   userId     Int?
-  type       String   @db.VarChar(50)
-  title      String   @db.VarChar(255)
-  message    String   @db.Text
-  entityType String?  @db.VarChar(50)
-  entityId   String?  @db.VarChar(100)
-  isRead     Boolean  @default(false)
+  type       String    @db.VarChar(50)
+  title      String    @db.VarChar(255)
+  message    String    @db.Text
+  entityType String?   @db.VarChar(50)
+  entityId   String?   @db.VarChar(100)
+  isRead     Boolean   @default(false)
   readAt     DateTime?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
   user  User? @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -854,16 +881,16 @@ model AuditLog {
 }
 
 model StorePaymentConfig {
-  id                   Int             @id @default(autoincrement())
+  id                   Int                   @id @default(autoincrement())
   storeId              Int
   provider             PaymentConfigProvider
-  clientIdEncrypted    String          @db.Text
-  apiKeyEncrypted      String          @db.Text
-  checksumKeyEncrypted String          @db.Text
-  isActive             Boolean         @default(true)
+  clientIdEncrypted    String                @db.Text
+  apiKeyEncrypted      String                @db.Text
+  checksumKeyEncrypted String                @db.Text
+  isActive             Boolean               @default(true)
   configuredAt         DateTime?
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -926,4 +953,50 @@ model ContactLead {
 
   @@index([status, createdAt])
   @@map("contact_leads")
+}
+
+/// Support request from a store to the platform team (shop ↔ admin).
+model SupportTicket {
+  id              Int                   @id @default(autoincrement())
+  storeId         Int
+  createdById     Int?
+  assigneeId      Int?
+  subject         String                @db.VarChar(200)
+  category        SupportTicketCategory
+  priority        SupportTicketPriority @default(NORMAL)
+  status          SupportTicketStatus   @default(OPEN)
+  lastMessageAt   DateTime              @default(now())
+  firstResponseAt DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  store     Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  createdBy User?                  @relation("SupportTicketCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignee  User?                  @relation("SupportTicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages  SupportTicketMessage[]
+
+  @@index([storeId, createdAt])
+  @@index([status, lastMessageAt])
+  @@index([createdById])
+  @@index([assigneeId])
+  @@map("support_tickets")
+}
+
+/// A reply in a support ticket. isInternal notes are visible to admins only.
+model SupportTicketMessage {
+  id         Int      @id @default(autoincrement())
+  ticketId   Int
+  authorId   Int?
+  fromAdmin  Boolean  @default(false)
+  isInternal Boolean  @default(false)
+  body       String   @db.Text
+  createdAt  DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([authorId])
+  @@map("support_ticket_messages")
 }
