@@ -1,0 +1,221 @@
+import request from 'supertest';
+import { createApp } from '../src/app';
+import { generateAccessToken } from '../src/common/utils/jwt';
+import { prisma } from '../src/config/db';
+
+jest.mock('../src/config/db', () => ({
+  prisma: {
+    user: { findUnique: jest.fn() },
+    store: { findUnique: jest.fn(), findFirst: jest.fn() },
+    supportTicket: {
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      count: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      groupBy: jest.fn(),
+    },
+    supportTicketMessage: { create: jest.fn() },
+    storePaymentConfig: { findFirst: jest.fn() },
+    importJob: { findMany: jest.fn() },
+    notification: { create: jest.fn() },
+    auditLog: { create: jest.fn() },
+    $queryRaw: jest.fn(),
+    $transaction: jest.fn((callback) => callback(prisma)),
+  },
+}));
+
+const db = prisma as any;
+
+const users: Record<number, any> = {
+  1: { id: 1, email: 'owner@a.test', role: 'SHOP_OWNER', storeId: 1, isActive: true, store: { isActive: true } },
+  2: { id: 2, email: 'staff@a.test', role: 'WAREHOUSE_STAFF', storeId: 1, isActive: true, store: { isActive: true } },
+  3: { id: 3, email: 'admin@stockpilot.test', role: 'ADMIN', storeId: null, isActive: true, store: null },
+  4: { id: 4, email: 'owner@b.test', role: 'SHOP_OWNER', storeId: 2, isActive: true, store: { isActive: true } },
+};
+
+const token = (id: number) =>
+  generateAccessToken({ userId: id, email: users[id].email, role: users[id].role, storeId: users[id].storeId });
+const auth = (id: number) => ({ Authorization: `Bearer ${token(id)}` });
+
+describe('Support tickets', () => {
+  const app = createApp();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    db.user.findUnique.mockImplementation(({ where }: any) => Promise.resolve(users[where.id] ?? null));
+    db.auditLog.create.mockResolvedValue({ id: 1n });
+  });
+
+  describe('store side', () => {
+    it('creates a ticket with its first message for the caller store only', async () => {
+      db.supportTicket.create.mockResolvedValue({ id: 10, storeId: 1, category: 'DATA_IMPORT' });
+
+      const res = await request(app)
+        .post('/api/v1/support/tickets')
+        .set(auth(1))
+        .send({ subject: 'Cần nhập dữ liệu từ KiotViet', category: 'DATA_IMPORT', message: 'File có 500 sản phẩm' });
+
+      expect(res.status).toBe(201);
+      expect(db.supportTicket.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          storeId: 1,
+          createdById: 1,
+          messages: { create: { authorId: 1, body: 'File có 500 sản phẩm' } },
+        }),
+      });
+    });
+
+    it('ignores a storeId sent by the client', async () => {
+      const res = await request(app)
+        .post('/api/v1/support/tickets')
+        .set(auth(1))
+        .send({ subject: 'Hỏi về thanh toán', category: 'PAYMENT', message: 'Xin chào', storeId: 2 });
+
+      expect(res.status).toBe(400);
+      expect(db.supportTicket.create).not.toHaveBeenCalled();
+    });
+
+    it('lets warehouse staff open tickets too', async () => {
+      db.supportTicket.create.mockResolvedValue({ id: 11, storeId: 1, category: 'BUG' });
+
+      const res = await request(app)
+        .post('/api/v1/support/tickets')
+        .set(auth(2))
+        .send({ subject: 'Máy quét mã vạch lỗi', category: 'BUG', message: 'Không quét được' });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('only finds tickets inside the caller store', async () => {
+      db.supportTicket.findFirst.mockResolvedValue(null);
+
+      const res = await request(app).get('/api/v1/support/tickets/10').set(auth(4));
+
+      expect(res.status).toBe(404);
+      expect(db.supportTicket.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 10, storeId: 2 } }));
+    });
+
+    it('never returns internal notes and hides admin names', async () => {
+      db.supportTicket.findFirst.mockResolvedValue({
+        id: 10,
+        storeId: 1,
+        messages: [
+          { id: 1, body: 'Xin hỗ trợ', fromAdmin: false, author: { id: 1, fullName: 'Owner A' } },
+          { id: 2, body: 'Đã xử lý', fromAdmin: true, author: { id: 3, fullName: 'Lê Quản Trị' } },
+        ],
+      });
+
+      const res = await request(app).get('/api/v1/support/tickets/10').set(auth(1));
+
+      expect(res.status).toBe(200);
+      expect(db.supportTicket.findFirst.mock.calls[0][0].include.messages.where).toEqual({ isInternal: false });
+      expect(res.body.data.messages[1].author).toEqual({ id: null, fullName: 'Đội hỗ trợ StockPilot' });
+      expect(JSON.stringify(res.body)).not.toContain('Lê Quản Trị');
+    });
+
+    it('reopens a resolved ticket when the store replies', async () => {
+      db.supportTicket.findFirst.mockResolvedValue({ id: 10, status: 'RESOLVED' });
+      db.supportTicketMessage.create.mockResolvedValue({ id: 5 });
+
+      const res = await request(app).post('/api/v1/support/tickets/10/messages').set(auth(1)).send({ body: 'Vẫn còn lỗi' });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.status).toBe('OPEN');
+      expect(db.supportTicket.update).toHaveBeenCalledWith({
+        where: { id: 10 },
+        data: expect.objectContaining({ status: 'OPEN', resolvedAt: null }),
+      });
+    });
+
+    it('does not let admins use the store endpoints', async () => {
+      const res = await request(app).get('/api/v1/support/tickets').set(auth(3));
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('admin side', () => {
+    it('rejects shop owners', async () => {
+      const res = await request(app).get('/api/v1/admin/support/tickets').set(auth(1));
+
+      expect(res.status).toBe(403);
+    });
+
+    it('lists tickets with status counters', async () => {
+      db.supportTicket.findMany.mockResolvedValue([{ id: 10 }]);
+      db.supportTicket.count.mockResolvedValueOnce(1).mockResolvedValueOnce(2);
+      db.supportTicket.groupBy.mockResolvedValue([
+        { status: 'OPEN', _count: { _all: 2 } },
+        { status: 'RESOLVED', _count: { _all: 5 } },
+      ]);
+
+      const res = await request(app).get('/api/v1/admin/support/tickets?status=ACTIVE').set(auth(3));
+
+      expect(res.status).toBe(200);
+      expect(db.supportTicket.findMany.mock.calls[0][0].where).toEqual({ status: { not: 'RESOLVED' } });
+      expect(res.body.summary).toEqual({ OPEN: 2, IN_PROGRESS: 0, WAITING_STORE: 0, RESOLVED: 5, unanswered: 2 });
+    });
+
+    it('a public reply hands the ticket back to the store and notifies the requester', async () => {
+      db.supportTicket.findUnique.mockResolvedValue({ id: 10, storeId: 1, status: 'OPEN', subject: 'KiotViet', createdById: 1, firstResponseAt: null });
+      db.supportTicketMessage.create.mockResolvedValue({ id: 7 });
+
+      const res = await request(app).post('/api/v1/admin/support/tickets/10/messages').set(auth(3)).send({ body: 'Bạn gửi file giúp mình' });
+
+      expect(res.status).toBe(201);
+      expect(db.supportTicket.update).toHaveBeenCalledWith({
+        where: { id: 10 },
+        data: expect.objectContaining({ status: 'WAITING_STORE', firstResponseAt: expect.any(Date) }),
+      });
+      expect(db.notification.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ storeId: 1, userId: 1, entityType: 'SUPPORT_TICKET', entityId: '10' }),
+      });
+    });
+
+    it('an internal note changes nothing the store can see', async () => {
+      db.supportTicket.findUnique.mockResolvedValue({ id: 10, storeId: 1, status: 'OPEN', subject: 'x', createdById: 1, firstResponseAt: null });
+      db.supportTicketMessage.create.mockResolvedValue({ id: 8 });
+
+      await request(app)
+        .post('/api/v1/admin/support/tickets/10/messages')
+        .set(auth(3))
+        .send({ body: 'Khách hàng VIP, ưu tiên', isInternal: true });
+
+      expect(db.supportTicketMessage.create).toHaveBeenCalledWith({ data: expect.objectContaining({ isInternal: true, fromAdmin: true }) });
+      expect(db.supportTicket.update).not.toHaveBeenCalled();
+      expect(db.notification.create).not.toHaveBeenCalled();
+    });
+
+    it('resolving records resolvedAt and an audit entry', async () => {
+      db.supportTicket.findUnique.mockResolvedValue({ id: 10, storeId: 1, status: 'IN_PROGRESS', priority: 'NORMAL', assigneeId: null });
+      db.supportTicket.update.mockResolvedValue({ id: 10, status: 'RESOLVED', priority: 'NORMAL', assigneeId: null });
+
+      const res = await request(app).patch('/api/v1/admin/support/tickets/10').set(auth(3)).send({ status: 'RESOLVED' });
+
+      expect(res.status).toBe(200);
+      expect(db.supportTicket.update.mock.calls[0][0].data).toEqual({ status: 'RESOLVED', resolvedAt: expect.any(Date) });
+      expect(db.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'SUPPORT_TICKET_UPDATED', storeId: 1 }) });
+    });
+
+    it('only assigns tickets to active admins', async () => {
+      db.supportTicket.findUnique.mockResolvedValue({ id: 10, storeId: 1, status: 'OPEN', priority: 'NORMAL', assigneeId: null });
+
+      const res = await request(app).patch('/api/v1/admin/support/tickets/10').set(auth(3)).send({ assigneeId: 1 });
+
+      expect(res.status).toBe(400);
+      expect(db.supportTicket.update).not.toHaveBeenCalled();
+    });
+
+    it('includes store payment and import context for data-import tickets', async () => {
+      db.supportTicket.findUnique.mockResolvedValue({ id: 10, storeId: 1, messages: [] });
+      db.storePaymentConfig.findFirst.mockResolvedValue(null);
+      db.importJob.findMany.mockResolvedValue([{ id: 'job-1', type: 'PRODUCTS', status: 'COMMITTED' }]);
+
+      const res = await request(app).get('/api/v1/admin/support/tickets/10').set(auth(3));
+
+      expect(res.body.data.storeContext).toEqual({ payos: 'NOT_CONFIGURED', recentImports: [expect.objectContaining({ id: 'job-1' })] });
+    });
+  });
+});

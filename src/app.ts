@@ -35,6 +35,8 @@ import { auditLogRouter } from './modules/audit-logs/audit-log.routes';
 import { uploadRouter } from './modules/upload/upload.routes';
 import { scannerRouter } from './modules/scanner/scanner.routes';
 import { publicRouter } from './modules/public/public.routes';
+import { adminRouter } from './modules/admin/admin.routes';
+import { adminSupportRouter, supportRouter } from './modules/support/support.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -174,6 +176,9 @@ export function createApp(): Express {
   app.use('/api/v1/store/payment-config', storePaymentConfigRouter);
   app.use('/api/v1/store-payment-config', storePaymentConfigRouter);
   app.use('/api/v1/pos', posRouter);
+  app.use('/api/v1/admin/support', adminSupportRouter);
+  app.use('/api/v1/admin', adminRouter);
+  app.use('/api/v1/support', supportRouter);
   app.use('/api/v1/audit-logs', auditLogRouter);
   app.use('/api/v1/upload', uploadRouter);
   app.use('/api/v1/scanner', scannerRouter);

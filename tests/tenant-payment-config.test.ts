@@ -4,6 +4,8 @@ import { generateAccessToken } from '../src/common/utils/jwt';
 import { SecretEncryptionService } from '../src/common/services/secret-encryption.service';
 import { prisma } from '../src/config/db';
 import { env, isValidAes256Key } from '../src/config/env';
+import { PAYOS_CONFIG_UNREADABLE_MESSAGE } from '../src/modules/store-payment-config/store-payment-config.service';
+import { PosPayosService } from '../src/modules/pos/pos-payos.service';
 
 jest.mock('../src/config/db', () => ({
   prisma: {
@@ -357,6 +359,68 @@ describe('Tenant context and store payment config foundation', () => {
     expect(bodyText).not.toContain('api-key-hidden');
     expect(bodyText).not.toContain('checksum-hidden');
     expect(bodyText).not.toContain('Encrypted');
+  });
+
+  describe('when stored credentials were encrypted with a different key', () => {
+    // Well-formed v1 payload whose auth tag cannot verify under the current key.
+    const unreadable = 'v1:AAAAAAAAAAAAAAAA:AAAAAAAAAAAAAAAAAAAAAA==:AAAA';
+    const unreadableConfig = {
+      id: 11,
+      storeId: 1,
+      provider: 'PAYOS',
+      clientIdEncrypted: unreadable,
+      apiKeyEncrypted: unreadable,
+      checksumKeyEncrypted: unreadable,
+      isActive: true,
+      configuredAt: new Date('2026-10-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-10-01T00:00:00.000Z'),
+    };
+
+    it('GET status still answers 200 and asks the owner to re-enter credentials', async () => {
+      (prisma.storePaymentConfig.findUnique as jest.Mock).mockResolvedValue(unreadableConfig);
+
+      const response = await request(app).get('/api/v1/store/payment-config/payos').set(auth(ownerToken)).expect(200);
+
+      expect(response.body.data).toEqual(
+        expect.objectContaining({ configured: true, clientIdMasked: null, needsReentry: true, message: PAYOS_CONFIG_UNREADABLE_MESSAGE })
+      );
+    });
+
+    it('rejects a partial update that would keep an unreadable secret', async () => {
+      (prisma.storePaymentConfig.findUnique as jest.Mock).mockResolvedValue(unreadableConfig);
+
+      const response = await request(app)
+        .put('/api/v1/store/payment-config/payos')
+        .set(auth(ownerToken))
+        .send({ apiKey: 'payos-api-key-new' })
+        .expect(400);
+
+      expect(response.body.error.message).toContain('nhập lại đầy đủ');
+      expect(prisma.storePaymentConfig.upsert).not.toHaveBeenCalled();
+    });
+
+    it('accepts a full re-entry and stores freshly encrypted values', async () => {
+      (prisma.storePaymentConfig.findUnique as jest.Mock).mockResolvedValue(unreadableConfig);
+      (prisma.storePaymentConfig.upsert as jest.Mock).mockImplementation(({ update }) =>
+        Promise.resolve({ ...unreadableConfig, ...update })
+      );
+
+      const response = await request(app)
+        .put('/api/v1/store/payment-config/payos')
+        .set(auth(ownerToken))
+        .send({ clientId: 'payos-client-789', apiKey: 'payos-api-key-789', checksumKey: 'payos-checksum-789' })
+        .expect(200);
+
+      const saved = (prisma.storePaymentConfig.upsert as jest.Mock).mock.calls[0][0].update;
+      expect(SecretEncryptionService.decrypt(saved.apiKeyEncrypted)).toBe('payos-api-key-789');
+      expect(response.body.data.needsReentry).toBe(false);
+    });
+
+    it('POS reports the real cause instead of "not configured"', async () => {
+      const db = { storePaymentConfig: { findUnique: jest.fn().mockResolvedValue(unreadableConfig) } } as any;
+
+      await expect(new PosPayosService(db).getStorePayosCredentials(1)).rejects.toThrow(PAYOS_CONFIG_UNREADABLE_MESSAGE);
+    });
   });
 
   it('supports encryption round-trip and rejects tampered payloads safely', () => {
