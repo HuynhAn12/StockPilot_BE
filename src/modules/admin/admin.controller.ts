@@ -121,6 +121,24 @@ export class AdminController {
     }
   }
 
+  async updateUserProfile(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await adminService.updateUserProfile(Number(req.params.id), req.body, req.user!.userId, requestMeta(req));
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateStore(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await adminService.updateStore(Number(req.params.id), req.body, req.user!.userId, requestMeta(req));
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async revokeUserSessions(req: Request, res: Response, next: NextFunction) {
     try {
       const data = await adminService.revokeUserSessions(Number(req.params.id), req.body, req.user!.userId, requestMeta(req));
@@ -175,21 +193,4 @@ export class AdminController {
     }
   }
 
-  async listLeads(req: Request, res: Response, next: NextFunction) {
-    try {
-      const result = await adminService.listLeads(req.query as any);
-      return res.status(200).json({ success: true, data: result.items, pagination: result.pagination });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async updateLeadStatus(req: Request, res: Response, next: NextFunction) {
-    try {
-      const data = await adminService.updateLeadStatus(Number(req.params.id), req.body, req.user!.userId, requestMeta(req));
-      return res.status(200).json({ success: true, message: 'Cập nhật trạng thái khách hàng tiềm năng thành công', data });
-    } catch (error) {
-      next(error);
-    }
-  }
 }

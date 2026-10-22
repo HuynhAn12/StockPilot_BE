@@ -219,6 +219,8 @@ model User {
   supportTicketsCreated  SupportTicket[]         @relation("SupportTicketCreatedBy")
   supportTicketsAssigned SupportTicket[]         @relation("SupportTicketAssignee")
   supportMessages        SupportTicketMessage[]
+  leadsAssigned          ContactLead[]           @relation("ContactLeadAssignee")
+  leadNotes              ContactLeadNote[]
 
   @@index([storeId])
   @@map("users")
@@ -940,36 +942,68 @@ model SystemSetting {
 }
 
 model ContactLead {
-  id        Int      @id @default(autoincrement())
-  fullName  String   @db.VarChar(191)
-  phone     String   @db.VarChar(20)
-  email     String?  @db.VarChar(191)
-  storeName String?  @db.VarChar(191)
-  industry  String?  @db.VarChar(100)
-  note      String?  @db.Text
-  status    String   @default("NEW") @db.VarChar(50)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              Int       @id @default(autoincrement())
+  fullName        String    @db.VarChar(191)
+  phone           String    @db.VarChar(20)
+  email           String?   @db.VarChar(191)
+  storeName       String?   @db.VarChar(191)
+  industry        String?   @db.VarChar(100)
+  note            String?   @db.Text
+  status          String    @default("NEW") @db.VarChar(50)
+  assigneeId      Int?
+  /// Repeat submissions with the same phone are merged into one lead.
+  submissionCount Int       @default(1)
+  lastSubmittedAt DateTime  @default(now())
+  lastContactedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  assignee User?             @relation("ContactLeadAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  notes    ContactLeadNote[]
 
   @@index([status, createdAt])
+  @@index([phone])
+  @@index([assigneeId])
   @@map("contact_leads")
+}
+
+/// Care log for a lead: calls, emails, meetings, free notes and status changes.
+model ContactLeadNote {
+  id        Int      @id @default(autoincrement())
+  leadId    Int
+  authorId  Int?
+  type      String   @default("NOTE") @db.VarChar(20)
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+
+  lead   ContactLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  author User?       @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+  @@index([authorId])
+  @@map("contact_lead_notes")
 }
 
 /// Support request from a store to the platform team (shop ↔ admin).
 model SupportTicket {
-  id              Int                   @id @default(autoincrement())
-  storeId         Int
-  createdById     Int?
-  assigneeId      Int?
-  subject         String                @db.VarChar(200)
-  category        SupportTicketCategory
-  priority        SupportTicketPriority @default(NORMAL)
-  status          SupportTicketStatus   @default(OPEN)
-  lastMessageAt   DateTime              @default(now())
-  firstResponseAt DateTime?
-  resolvedAt      DateTime?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
+  id                 Int                   @id @default(autoincrement())
+  storeId            Int
+  createdById        Int?
+  assigneeId         Int?
+  subject            String                @db.VarChar(200)
+  category           SupportTicketCategory
+  priority           SupportTicketPriority @default(NORMAL)
+  status             SupportTicketStatus   @default(OPEN)
+  lastMessageAt      DateTime              @default(now())
+  /// Read tracking: a side has unread messages when the other side wrote after its last read.
+  lastStoreMessageAt DateTime?
+  lastAdminMessageAt DateTime?
+  storeReadAt        DateTime?
+  adminReadAt        DateTime?
+  firstResponseAt    DateTime?
+  resolvedAt         DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
   store     Store                  @relation(fields: [storeId], references: [id], onDelete: Cascade)
   createdBy User?                  @relation("SupportTicketCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -993,10 +1027,30 @@ model SupportTicketMessage {
   body       String   @db.Text
   createdAt  DateTime @default(now())
 
-  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  author User?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  ticket      SupportTicket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author      User?                     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  attachments SupportTicketAttachment[]
 
   @@index([ticketId, createdAt])
   @@index([authorId])
   @@map("support_ticket_messages")
+}
+
+/// Image attached to a support message. Stored in the database (private, survives redeploys) and
+/// served only through an authorised endpoint, never through a public URL.
+model SupportTicketAttachment {
+  id        Int      @id @default(autoincrement())
+  messageId Int
+  ticketId  Int
+  fileName  String   @db.VarChar(200)
+  mimeType  String   @db.VarChar(50)
+  size      Int
+  data      Bytes    @db.LongBlob
+  createdAt DateTime @default(now())
+
+  message SupportTicketMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([ticketId])
+  @@map("support_ticket_attachments")
 }
