@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { SystemSettingsService } from '../../common/services/system-settings.service';
 import { PublicService } from './public.service';
 
 export class PublicController {
@@ -27,6 +28,22 @@ export class PublicController {
       return res.status(200).json({
         success: true,
         data: stats,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /** Platform banner and sign-up availability, shown on the landing page and inside every store. */
+  async getPlatformStatus(req: Request, res: Response, next: NextFunction) {
+    try {
+      const [banner, signupEnabled] = await Promise.all([
+        SystemSettingsService.get('maintenance.banner'),
+        SystemSettingsService.get('signup.enabled'),
+      ]);
+      return res.status(200).json({
+        success: true,
+        data: { announcement: banner.enabled ? banner.message : null, signupEnabled },
       });
     } catch (error) {
       next(error);

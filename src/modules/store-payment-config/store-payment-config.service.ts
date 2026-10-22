@@ -6,6 +6,19 @@ import { AuditLogService } from '../../common/services/audit-log.service';
 import { SecretEncryptionService } from '../../common/services/secret-encryption.service';
 import { NotFoundError, ValidationError } from '../../common/errors/app-error';
 
+/** Shown when stored credentials were encrypted with a different PAYMENT_CONFIG_ENCRYPTION_KEY. */
+export const PAYOS_CONFIG_UNREADABLE_MESSAGE =
+  'Không đọc được cấu hình PayOS đã lưu vì khóa mã hóa trên máy chủ đã thay đổi. Chủ cửa hàng cần vào Cài đặt và nhập lại Client ID, API Key và Checksum Key.';
+
+function canDecrypt(serialized: string): boolean {
+  try {
+    SecretEncryptionService.decrypt(serialized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface UpsertPayosConfigInput {
   clientId?: string;
   apiKey?: string;
@@ -64,13 +77,22 @@ export class StorePaymentConfigService {
       };
     }
 
-    const clientId = SecretEncryptionService.decrypt(config.clientIdEncrypted);
+    // Still return the status when secrets are unreadable so the owner can open settings and re-enter them.
+    let clientIdMasked: string | null = null;
+    let needsReentry = false;
+    try {
+      clientIdMasked = maskSecret(SecretEncryptionService.decrypt(config.clientIdEncrypted));
+    } catch {
+      needsReentry = true;
+    }
 
     return {
       provider: config.provider,
       configured: true,
       active: config.isActive,
-      clientIdMasked: maskSecret(clientId),
+      clientIdMasked,
+      needsReentry,
+      ...(needsReentry ? { message: PAYOS_CONFIG_UNREADABLE_MESSAGE } : {}),
       configuredAt: config.configuredAt,
       updatedAt: config.updatedAt,
       ...urlInfo,
@@ -102,6 +124,17 @@ export class StorePaymentConfigService {
       if (!hasNewClientId || !hasNewApiKey || !hasNewChecksumKey) {
         throw new ValidationError(
           'Vui lòng cung cấp đầy đủ Client ID, API Key và Checksum Key cho lần cấu hình đầu tiên.'
+        );
+      }
+    } else {
+      // Fields left blank keep their stored value, which only works if that value is still readable.
+      const keptUnreadable =
+        (!hasNewClientId && !canDecrypt(existing.clientIdEncrypted)) ||
+        (!hasNewApiKey && !canDecrypt(existing.apiKeyEncrypted)) ||
+        (!hasNewChecksumKey && !canDecrypt(existing.checksumKeyEncrypted));
+      if (keptUnreadable) {
+        throw new ValidationError(
+          'Cấu hình PayOS cũ không còn đọc được (khóa mã hóa trên máy chủ đã thay đổi). Vui lòng nhập lại đầy đủ Client ID, API Key và Checksum Key.'
         );
       }
     }
@@ -187,6 +220,7 @@ export class StorePaymentConfigService {
       configured: true,
       active: config.isActive,
       clientIdMasked: maskSecret(clientId),
+      needsReentry: false,
       configuredAt: config.configuredAt,
       updatedAt: config.updatedAt,
       ...urlInfo,
