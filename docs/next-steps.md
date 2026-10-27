@@ -14,6 +14,12 @@ Tài liệu này xác định giao ước dữ liệu (Data Contracts) và thứ
   - Dead Stock `> 90 ngày`: Đề xuất giảm 10% - 15%.
   - Dead Stock `> 180 ngày`: Đề xuất giảm 20% - 30%, đảm bảo `New Price >= Cost Price * (1 + Min Margin)`.
 
+> **Trạng thái triển khai (DECISION_ENGINE_V2):** các công thức trên đã được hiện thực với những làm rõ sau (chi tiết tại `docs/BUSINESS_RULES.md` DEC-004…DEC-011, PRI-005…PRI-009):
+> - Giá sàn dùng **biên lợi nhuận gộp trên giá bán**: `New Price >= Cost / (1 − Min Margin)`. Công thức này chặt hơn `Cost × (1 + Min Margin)` và là định nghĩa duy nhất nhất quán với `expectedMarginPct` (cũng tính trên giá bán). Với Min Margin = 20%, công thức `Cost × 1.2` chỉ cho biên 16,7%.
+> - Ngưỡng dead stock lấy từ cấu hình (`deadStockDays`, mặc định 90); mức nghiêm trọng bắt đầu tại `2 × deadStockDays` (mặc định 180). SKU chưa từng bán được tính tuổi từ lần nhập kho đầu tiên.
+> - `SS = z · σ · √L` với `z = Φ⁻¹(serviceLevel)` và σ là độ lệch chuẩn mẫu. μ, σ chỉ dùng các ngày đã trọn vẹn trong khoảng SKU thực sự được bán.
+> - Khi lịch sử ít hơn `minimumHistoryDays`: trả `INSUFFICIENT_DATA`, giá giữ nguyên (`MAINTAIN`), ROP = `minStockLevel`.
+
 ### 1.2. Hợp đồng Dữ liệu (Data Contract)
 ```typescript
 interface DecisionEngineOutput {

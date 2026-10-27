@@ -254,6 +254,26 @@ Warehouse staff must not receive sensitive cost or margin fields.
 
 Exports that expose owner-sensitive revenue, refund, cost, margin, or pricing decision data are limited to `SHOP_OWNER`. Operational exports may be available to `WAREHOUSE_STAFF` only when sensitive fields are omitted or absent.
 
+### PRI-005
+
+Pricing recommendations, price history, and pricing notifications are visible to `SHOP_OWNER` only. Staff responses are built from an allowlist (`decision-view.ts`), never by redacting owner output.
+
+### PRI-006
+
+At most one `PENDING` recommendation exists per SKU. It becomes `EXPIRED` when the engine no longer recommends a change, when the SKU's selling or cost price is changed through product management or import (same transaction), or when `expiresAt` passes (nightly job).
+
+### PRI-007
+
+Accepting a recommendation revalidates it against the current state: the selling price and the cost price must equal those the engine used, and the recommended price must respect the minimum-margin floor of the current config. Otherwise the request fails with `409` and nothing changes.
+
+### PRI-008
+
+Every selling-price change writes `PriceHistory` in the same transaction: recommendation accept/modify, manual product update (`MANUAL_UPDATE`), and import (`IMPORT`).
+
+### PRI-009
+
+The price floor is a gross margin on the selling price: `minimumPrice = ceil1000(cost / (1 − minimumMarginPct))`. This is stricter than `cost × (1 + minimumMarginPct)` and is the only definition consistent with `expectedMarginPct`, which is also computed on the selling price.
+
 ## Notifications
 
 ### NOT-001
@@ -268,6 +288,24 @@ Minimal Notification Center APIs do not expose `userId = null` notification rows
 
 Marking notifications as read is idempotent and only changes the authenticated user's own notification rows.
 
+### NOT-004
+
+Alert notifications go to the store's own `SHOP_OWNER` and `WAREHOUSE_STAFF` users only, never to platform `ADMIN` accounts.
+
+## Alerts
+
+### ALR-001
+
+`WAREHOUSE_STAFF` may view and acknowledge alerts (with an optional note) to report them; each staff acknowledgement notifies the store owners in the same transaction. Only `SHOP_OWNER` may resolve an alert manually.
+
+### ALR-002
+
+Allowed transitions: `OPEN → ACKNOWLEDGED → RESOLVED` and `OPEN → RESOLVED`. Acknowledging a resolved alert returns `409`; repeating an acknowledgement or a resolution is a no-op.
+
+### ALR-003
+
+Alerts are edge-triggered: the engine resolves an alert when its condition clears and reopens it (with a notification) when the condition recurs. A manually resolved alert is not reopened while its condition persists.
+
 ## Decision Engine
 
 ### DEC-001
@@ -281,6 +319,38 @@ AI must not replace business formulas, thresholds, or deterministic scoring.
 ### DEC-003
 
 Alerts use the current taxonomy: `LOW_STOCK`, `STOCKOUT`, `OVERSTOCK`, `SLOW_MOVING`, `DEAD_STOCK`, and `UNUSUAL_DEMAND`.
+
+### DEC-004
+
+GET endpoints never recompute or write. Recomputation (`recomputeSku`) runs in one transaction that locks the SKU row and writes alerts, the pricing recommendation, notifications, and an append-only `DecisionSnapshot` together. It is triggered after commits (never inside a business transaction), by the nightly job, and by `POST /decision-engine/recalculate`.
+
+### DEC-005
+
+Demand estimates use complete business days only (the series ends the day before the evaluation date) and the SKU's exposure H: days since the earlier of its first sale or first stock-in, capped at 90. Averages divide by `min(window, H)`; σ is the sample standard deviation.
+
+### DEC-006
+
+`SS = z · σ · √L` with `z = Φ⁻¹(serviceLevel)`; `ROP = max(minStockLevel, ceil(μ · L + SS))`. When available stock ≤ ROP the suggested order quantity is `min(maxStock − available, ceil(μ · (L + targetCoverageDays) + SS − available))`; open purchase orders are not modelled.
+
+### DEC-007
+
+When H < `minimumHistoryDays` the result is `INSUFFICIENT_DATA`: no statistical SS/ROP (ROP = `minStockLevel`), no days of cover, no anomaly detection, and no demand-based price change (`MAINTAIN`). Fact-based outputs still apply: stockout/low-stock against configured levels, overstock against `maxStockLevel`, selling below cost or below the margin floor, and dead stock by age.
+
+### DEC-008
+
+Slow-moving and dead stock use the configured `slowMovingDays` and `deadStockDays`; critical dead stock starts at `2 × deadStockDays` (180 days by default). A SKU that never sold ages from its first stock-in.
+
+### DEC-009
+
+Unusual demand compares the mean of the last 3 complete days with a disjoint baseline of up to 30 earlier exposed days using `z = (x̄ − μ) / (σ / √3)`, only when at least 5 units are expected in the window.
+
+### DEC-010
+
+The overview and the alert sync share one risk classification (`risk-classification.ts`) with the store's `highRiskThreshold`, so dashboard counts and alerts agree.
+
+### DEC-011
+
+Engine config must satisfy `lowRiskThreshold < highRiskThreshold < criticalRiskThreshold` and `slowMovingDays < deadStockDays`.
 
 ## AI
 

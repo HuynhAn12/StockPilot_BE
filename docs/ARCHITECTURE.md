@@ -61,6 +61,19 @@ Per-store payment provider credentials are stored through a dedicated store paym
 
 The Decision Engine is deterministic TypeScript. It computes inventory risks, alert data, snapshots, and pricing recommendations from authorized store data and persisted configuration. AI must not replace the deterministic formulas or mutate decision outputs.
 
+Read and write paths are separated:
+
+- Read: `GET /decision-engine/sku/:id` and `/overview` return the latest `DecisionSnapshot` with a freshness flag (`stale`, `snapshotAt`, `source`). They never write; a SKU without a usable snapshot is evaluated in memory (`source: LIVE`).
+- Write: `DecisionEngineService.recomputeSku` locks the StockItem row (store-scoped), evaluates inside the transaction, and writes alerts, notifications, the pricing recommendation, and the snapshot atomically. It is idempotent, so concurrent or repeated runs converge.
+- Role projection: `decision-view.ts` builds the staff view from an allowlist (D9); the sensitive-fields middleware is a second layer.
+
+Triggers:
+
+- Post-commit: `BusinessSyncService` enqueues SKUs on `DecisionRecomputeQueue`, an in-process queue that coalesces per (store, SKU) and drains one batch at a time. Business transactions never run the engine. Delivery is at-most-once; the nightly job bounds staleness.
+- Nightly: `DecisionScheduler` (minute ticker, `DECISION_NIGHTLY_HOUR` in `APP_TIMEZONE`, enabled by default only in production) calls `DecisionJobsService.runNightly`. It runs once per business date across instances, rebuilds the last 3 days of summaries, recomputes every active SKU in keyset pages, expires overdue recommendations, and prunes snapshots older than 90 days.
+- On demand: `POST /decision-engine/recalculate` (owner) processes a bounded page per call with a cursor.
+- Exclusivity: `DbLeaseService` keeps expiring leases as internal rows in `system_settings` (no migration; MySQL `GET_LOCK` is connection-bound and does not suit Prisma's pool). Leases only avoid duplicate work; correctness relies on the row lock and idempotency.
+
 ## AI Assistant
 
 Assistant endpoints are read-only explanation wrappers around already authorized deterministic output. They must not mutate inventory, orders, returns, alerts, pricing, or recommendations, and they must minimize data sent to external AI providers.
@@ -71,7 +84,7 @@ The executable database schema is `prisma/schema.prisma`; migration history is `
 
 ## Background Jobs
 
-No continuously running background worker is part of the current app startup. Maintenance work is represented by explicit scripts such as `npm run maintenance:rebuild-summary-v10`.
+The API process starts the Decision Engine scheduler (nightly reconciliation; see Decision Engine) when `DECISION_SCHEDULER_ENABLED=true`, or by default when `NODE_ENV=production`. On shutdown it stops the scheduler and flushes the post-commit recompute queue. There is no separate worker process or message broker. Other maintenance work is represented by explicit scripts such as `npm run maintenance:rebuild-summary-v10`.
 
 ## Deployment Assumptions
 
