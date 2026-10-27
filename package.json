@@ -8,7 +8,7 @@
     "build": "tsc",
     "lint": "eslint src/ tests/",
     "start": "node dist/server.js",
-    "security:audit": "npm audit --omit=dev",
+    "security:audit": "npm audit --omit=dev --audit-level=critical",
     "db:backup": "node scripts/backup-db.js",
     "db:restore": "node scripts/restore-db.js",
     "db:seed": "tsx scripts/seed.ts",
