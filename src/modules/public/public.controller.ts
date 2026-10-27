@@ -11,6 +11,10 @@ export class PublicController {
 
   async createLead(req: Request, res: Response, next: NextFunction) {
     try {
+      // Bot filled the hidden honeypot: answer like a success but store nothing.
+      if (req.body.website) {
+        return res.status(201).json({ success: true, message: 'Đăng ký nhận tư vấn thành công!', data: null });
+      }
       const result = await this.publicService.createLead(req.body);
       return res.status(201).json({
         success: true,

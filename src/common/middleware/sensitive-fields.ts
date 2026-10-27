@@ -17,6 +17,21 @@ const SENSITIVE_KEYS = new Set([
   'cogs',
   'tiedCapital',
   'capital',
+  // Decision Engine / pricing derivatives: floor price and minimum margin allow back-solving cost (D9).
+  'minimumPrice',
+  'minimumMarginPct',
+  'maxMarkdownPct',
+  'maxMarkupPct',
+  'expectedMarginPct',
+  'curMargin',
+  'lossPerUnit',
+  'costValue',
+  'deadStockCostValue',
+  'totalDeadStockCostValue',
+  'totalEstimateCost',
+  'totalTiedCapital',
+  'pricingEvaluation',
+  'pricingRecommendation',
 ]);
 
 /**

@@ -2,10 +2,13 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { prisma } from './config/db';
 import { logger } from './common/logger';
+import { BusinessSyncService } from './common/services/business-sync.service';
+import { DecisionScheduler, isDecisionSchedulerEnabled } from './modules/decision-engine/decision-scheduler';
 
 async function startServer() {
   let isShuttingDown = false;
   const serverRef: { current?: ReturnType<ReturnType<typeof createApp>['listen']> } = {};
+  const decisionScheduler = isDecisionSchedulerEnabled() ? new DecisionScheduler() : null;
 
   const shutdown = async (signal: string, exitCode = 0) => {
     if (isShuttingDown) {
@@ -38,6 +41,10 @@ async function startServer() {
         });
       }
 
+      // Let an in-flight nightly run and queued post-commit recomputations finish (bounded by SHUTDOWN_TIMEOUT_MS).
+      await decisionScheduler?.stop();
+      await BusinessSyncService.getInstance().flush();
+
       await prisma.$disconnect();
       logger.info('shutdown_completed', { signal });
       clearTimeout(forceExit);
@@ -68,6 +75,8 @@ async function startServer() {
       headersTimeoutMs: env.HEADERS_TIMEOUT_MS,
     });
   });
+
+  decisionScheduler?.start();
 
   serverRef.current.requestTimeout = env.REQUEST_TIMEOUT_MS;
   serverRef.current.keepAliveTimeout = env.KEEP_ALIVE_TIMEOUT_MS;

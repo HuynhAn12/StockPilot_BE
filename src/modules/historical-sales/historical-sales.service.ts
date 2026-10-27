@@ -4,6 +4,7 @@ import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { HistoricalSaleRowInput } from './historical-sales.schema';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 
 export class HistoricalSalesService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
@@ -319,6 +320,18 @@ export class HistoricalSalesService {
 
       return summaryResult;
     });
+
+    // Post-commit: imported history changes demand metrics; rebuild the imported summary range first.
+    const importedSoldAt = itemsToInsert.map((item) => new Date((item.resultJson as { soldAt: string }).soldAt).getTime());
+    const importedStockItemIds = itemsToInsert
+      .map((item) => item.stockItemId)
+      .filter((id): id is number => typeof id === 'number');
+    BusinessSyncService.fireAndForget(this.prisma, (sync) =>
+      sync.syncAfterHistoricalImport(storeId, importedStockItemIds, {
+        from: new Date(Math.min(...importedSoldAt)),
+        to: new Date(Math.max(...importedSoldAt)),
+      })
+    );
 
     return {
       jobId,

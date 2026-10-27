@@ -240,3 +240,45 @@ export async function sendPasswordResetOtpEmail({ to, name, otp, expiresMinutes 
     return { sent: false, simulated: true };
   }
 }
+
+export interface PlatformEmail {
+  to: string | string[];
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+/**
+ * Generic transactional email (admin alerts, notices). Without SMTP credentials it only logs the subject,
+ * never the body, so personal data does not end up in logs.
+ */
+export async function sendPlatformEmail({ to, subject, text, html }: PlatformEmail): Promise<{ sent: boolean; simulated?: boolean }> {
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const port = Number(process.env.SMTP_PORT) || 465;
+  const secure = process.env.SMTP_SECURE === 'true' || port === 465;
+  const user = process.env.SMTP_USER || process.env.GMAIL_USER || '';
+  const pass = process.env.SMTP_PASS || process.env.GMAIL_PASS || process.env.GMAIL_APP_PASSWORD || '';
+  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.vn>');
+  const recipients = Array.isArray(to) ? to : [to];
+
+  if (recipients.length === 0) return { sent: false };
+  if (!user || !pass) {
+    logger.info(`[Email Service - Giả lập SMTP] Bỏ qua email "${subject}" tới ${recipients.length} người nhận`);
+    return { sent: false, simulated: true };
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: { user, pass },
+      tls: { rejectUnauthorized: process.env.NODE_ENV === 'production' },
+    });
+    await transporter.sendMail({ from, bcc: recipients, subject, text, html });
+    return { sent: true };
+  } catch (err: any) {
+    logger.error(`[Email Service] Gửi email "${subject}" thất bại: ${err?.message || err}`);
+    return { sent: false };
+  }
+}

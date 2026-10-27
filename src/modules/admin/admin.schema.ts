@@ -25,7 +25,6 @@ const dateRangeRefinement = {
   message: 'Khoảng thời gian không hợp lệ: "from" phải trước hoặc bằng "to"',
 };
 
-export const LEAD_STATUSES = ['NEW', 'CONTACTED', 'CONVERTED', 'REJECTED'] as const;
 
 export const adminUserListQuerySchema = paginationQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -76,11 +75,15 @@ export const adminStoreListQuerySchema = paginationQuerySchema.extend({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: optionalTrimmedString,
   isActive: optionalBooleanQuery,
+  /** ACTIVE / DISABLED = PayOS connected and on/off; NOT_CONFIGURED = cash only. */
+  payos: z.preprocess(emptyOrAllToUndefined, z.enum(['ACTIVE', 'DISABLED', 'NOT_CONFIGURED']).optional()),
 });
 
 const auditLogFilterShape = {
   storeId: z.coerce.number().int().positive().optional(),
   userId: z.coerce.number().int().positive().optional(),
+  /** Role of the actor, or SYSTEM for automated jobs (no user). */
+  actorRole: z.preprocess(emptyOrAllToUndefined, z.enum(['ADMIN', 'SHOP_OWNER', 'WAREHOUSE_STAFF', 'SYSTEM']).optional()),
   action: optionalTrimmedString,
   entityType: z.preprocess(emptyOrAllToUndefined, z.string().trim().max(50).optional()),
   search: optionalTrimmedString,
@@ -106,18 +109,31 @@ export const adminAiUsageQuerySchema = z
   })
   .refine(dateRangeRefinement.check, { message: dateRangeRefinement.message, path: ['from'] });
 
-export const adminLeadListQuerySchema = paginationQuerySchema.extend({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
-  search: optionalTrimmedString,
-  status: z.preprocess(emptyOrAllToUndefined, z.enum(LEAD_STATUSES).optional()),
-});
 
-export const updateLeadStatusSchema = z
+/** Admins may correct a display name; email, role and store stay under the account owner's control. */
+export const updateUserProfileSchema = z
   .object({
-    status: z.enum(LEAD_STATUSES, { errorMap: () => ({ message: 'Trạng thái lead không hợp lệ' }) }),
+    fullName: z.string().trim().min(2, 'Họ tên phải có ít nhất 2 ký tự').max(255),
   })
   .strict();
 
+/** Store code is the tenant subdomain and is not editable. */
+export const updateStoreSchema = z
+  .object({
+    name: z.string().trim().min(2, 'Tên cửa hàng phải có ít nhất 2 ký tự').max(255).optional(),
+    phone: z
+      .string()
+      .trim()
+      .max(50)
+      .regex(/^[0-9+.\s()-]*$/, 'Số điện thoại chứa ký tự không hợp lệ')
+      .optional(),
+    address: z.string().trim().max(255).optional(),
+  })
+  .strict()
+  .refine((data) => Object.keys(data).length > 0, { message: 'Không có thay đổi nào' });
+
+export type UpdateUserProfileInput = z.infer<typeof updateUserProfileSchema>;
+export type UpdateStoreInput = z.infer<typeof updateStoreSchema>;
 export type AdminUserListQuery = z.infer<typeof adminUserListQuerySchema>;
 export type CreateAdminUserInput = z.infer<typeof createAdminUserSchema>;
 export type UpdateStatusInput = z.infer<typeof updateStatusSchema>;
@@ -125,6 +141,4 @@ export type AdminStoreListQuery = z.infer<typeof adminStoreListQuerySchema>;
 export type AdminAuditLogQuery = z.infer<typeof adminAuditLogQuerySchema>;
 export type AdminAuditLogFilter = z.infer<typeof adminAuditLogExportQuerySchema>;
 export type AdminAiUsageQuery = z.infer<typeof adminAiUsageQuerySchema>;
-export type AdminLeadListQuery = z.infer<typeof adminLeadListQuerySchema>;
-export type UpdateLeadStatusInput = z.infer<typeof updateLeadStatusSchema>;
 export type RevokeSessionsInput = z.infer<typeof revokeSessionsSchema>;

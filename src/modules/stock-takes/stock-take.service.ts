@@ -7,6 +7,7 @@ import {
   UpdateStockTakeCountsInput,
 } from './stock-take.schema';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 
 type TransactionClient = Omit<
   PrismaClient,
@@ -304,6 +305,15 @@ export class StockTakeService {
       });
 
       return this.getStockTakeOrThrow(storeId, id, tx);
+    }).then((completed) => {
+      // Post-commit: only SKUs whose count produced an adjustment movement changed inventory.
+      BusinessSyncService.fireAndForget(this.prisma, (sync) =>
+        sync.syncAfterInventoryMovement(
+          storeId,
+          completed.items.filter((item) => item.adjustmentMovementId !== null).map((item) => item.stockItemId)
+        )
+      );
+      return completed;
     });
   }
 
