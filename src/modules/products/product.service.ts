@@ -1,9 +1,12 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createProductSchema, updateProductSchema } from './product.schema';
 import { toDecimal } from '../../common/utils/decimal';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { PricingService } from '../pricing/pricing.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 import { uploadImageBuffer } from '../upload/upload.service';
 
 export class ProductService {
@@ -295,6 +298,29 @@ export class ProductService {
             ...(newCostPrice !== undefined ? { costPrice: newCostPrice } : {}),
           },
         });
+
+        // Pricing recommendations computed on the old price/cost basis must not be acceptable anymore,
+        // and manual selling-price changes are recorded in PriceHistory (same transaction).
+        const stockItemIds = existingProduct.stockItems.map((item) => item.id);
+        await PricingService.expirePendingRecommendations(tx, storeId, stockItemIds);
+        if (newSellingPrice !== undefined) {
+          const changed = existingProduct.stockItems.filter(
+            (item) => !new Prisma.Decimal(item.sellingPrice).equals(new Prisma.Decimal(newSellingPrice))
+          );
+          if (changed.length > 0) {
+            await tx.priceHistory.createMany({
+              data: changed.map((item) => ({
+                storeId,
+                stockItemId: item.id,
+                oldPrice: item.sellingPrice,
+                newPrice: new Prisma.Decimal(newSellingPrice),
+                source: 'MANUAL_UPDATE',
+                changedById: userId ?? null,
+                reason: 'Selling price updated from product management',
+              })),
+            });
+          }
+        }
       }
 
       const updated = await tx.product.update({
@@ -341,6 +367,16 @@ export class ProductService {
         },
       });
 
+      return updated;
+    }).then((updated) => {
+      // Post-commit: price/cost or active-state changes alter pricing and risk evaluation.
+      const priceChanged =
+        input.sellingPrice !== undefined || input.salePrice !== undefined || input.costPrice !== undefined;
+      if (priceChanged || input.isActive !== undefined) {
+        BusinessSyncService.fireAndForget(prisma, (sync) =>
+          sync.syncAfterPriceChange(storeId, updated.stockItems.map((item) => item.id))
+        );
+      }
       return updated;
     });
   }

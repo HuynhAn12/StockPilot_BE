@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 export type ImportJobItemStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
 import { prisma as defaultPrisma } from '../../config/db';
 import { z } from 'zod';
@@ -13,6 +13,8 @@ import { toDecimal } from '../../common/utils/decimal';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
+import { PricingService } from '../pricing/pricing.service';
 
 export interface ImportIssue {
   row: number;
@@ -559,6 +561,27 @@ export class ImportExportService {
                 });
                 stockItemId = updated.id;
                 updatedSkus++;
+
+                // A changed price/cost basis invalidates pending pricing recommendations, and every
+                // selling-price change is recorded in PriceHistory, atomically with the row.
+                const sellingChanged = !new Prisma.Decimal(existingSku.sellingPrice).equals(updated.sellingPrice);
+                const costChanged = !new Prisma.Decimal(existingSku.costPrice).equals(updated.costPrice);
+                if (sellingChanged || costChanged) {
+                  await PricingService.expirePendingRecommendations(tx, storeId, [updated.id]);
+                }
+                if (sellingChanged) {
+                  await tx.priceHistory.create({
+                    data: {
+                      storeId,
+                      stockItemId: updated.id,
+                      oldPrice: existingSku.sellingPrice,
+                      newPrice: updated.sellingPrice,
+                      source: 'IMPORT',
+                      changedById: userId,
+                      reason: `Bulk import job #${job.id}, row #${rowNumber}`,
+                    },
+                  });
+                }
               } else {
                 const created = await tx.stockItem.create({
                   data: {
@@ -720,6 +743,19 @@ export class ImportExportService {
             summary: result.summary,
           },
         });
+      });
+
+      // Post-commit: imported prices, thresholds, and stock levels change the Decision Engine inputs.
+      // Fire-and-forget and isolated: the import has committed, so a trigger failure must not fail it.
+      BusinessSyncService.fireAndForget(this.prisma, async (sync) => {
+        const importedItems = await this.prisma.importJobItem.findMany({
+          where: { importJobId: job.id, status: 'COMPLETED', stockItemId: { not: null } },
+          select: { stockItemId: true },
+        });
+        await sync.syncAfterInventoryMovement(
+          storeId,
+          importedItems.map((item) => item.stockItemId as number)
+        );
       });
 
       return result;

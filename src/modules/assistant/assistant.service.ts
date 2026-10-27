@@ -1,12 +1,23 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Role } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { DecisionEngineService } from '../decision-engine/decision-engine.service';
+import { toOverviewSummaryView, toSkuDecisionView } from '../decision-engine/decision-view';
 import { toNumber } from '../../common/utils/decimal';
+import { canViewFinancials } from '../../common/utils/role-access';
 
 function formatVND(n: number): string {
   return Math.round(n).toLocaleString('vi-VN') + ' đ';
 }
 
+/** Shown to non-owner viewers when a question needs cost, margin, revenue, or pricing decisions (D9). */
+export const FINANCIAL_DATA_RESTRICTED_MESSAGE =
+  'Xin lỗi, tài khoản Nhân viên chỉ được phép tra cứu số lượng tồn kho và nghiệp vụ vận hành. Vui lòng liên hệ Chủ cửa hàng để xem dữ liệu tài chính.';
+
+/**
+ * Template-based assistant. Every method takes the viewer role and builds staff answers without
+ * financial content in the first place (fail-closed: an unknown role gets the staff view), instead
+ * of generating owner text and redacting it afterwards.
+ */
 export class AssistantService {
   constructor(
     private readonly prisma: PrismaClient = defaultPrisma,
@@ -16,8 +27,11 @@ export class AssistantService {
   /**
    * Generates a deterministic, factual explanation for a SKU's decision engine state.
    */
-  async explainSku(storeId: number, stockItemId: number, question?: string) {
-    const analysis = await this.decisionEngineService.analyzeSku(storeId, stockItemId);
+  async explainSku(storeId: number, stockItemId: number, question?: string, viewerRole?: Role) {
+    // Read-only: same read model as the Decision Engine screen; never syncs alerts, recommendations, or snapshots.
+    const { analysis } = await this.decisionEngineService.getSkuDecision(storeId, stockItemId);
+    const canSeeFinancials = canViewFinancials(viewerRole);
+    const view = toSkuDecisionView(analysis, viewerRole);
 
     const alerts = await this.prisma.alert.findMany({
       where: {
@@ -35,20 +49,22 @@ export class AssistantService {
       },
     });
 
-    const recommendation = await this.prisma.pricingRecommendation.findFirst({
-      where: {
-        storeId,
-        stockItemId,
-        status: 'PENDING',
-      },
-      select: {
-        currentPrice: true,
-        recommendedPrice: true,
-        discountPct: true,
-        action: true,
-        reasonJson: true,
-      },
-    });
+    const recommendation = canSeeFinancials
+      ? await this.prisma.pricingRecommendation.findFirst({
+          where: {
+            storeId,
+            stockItemId,
+            status: 'PENDING',
+          },
+          select: {
+            currentPrice: true,
+            recommendedPrice: true,
+            discountPct: true,
+            action: true,
+            reasonJson: true,
+          },
+        })
+      : null;
 
     const context = {
       product: {
@@ -56,24 +72,28 @@ export class AssistantService {
         sku: analysis.sku,
         name: analysis.productName,
         category: analysis.categoryName,
-        costPrice: analysis.pricing.costPrice,
+        ...(canSeeFinancials ? { costPrice: analysis.pricing.costPrice } : {}),
         sellingPrice: analysis.pricing.sellingPrice,
       },
-      inventory: analysis.inventory,
-      demand: analysis.demand,
-      coverage: analysis.coverage,
-      risk: analysis.risk,
-      confidence: analysis.confidence,
-      engineConfig: analysis.engineConfig,
+      inventory: view.inventory,
+      demand: view.demand,
+      coverage: view.coverage,
+      risk: view.risk,
+      confidence: view.confidence,
+      engineConfig: view.engineConfig,
       activeAlerts: alerts,
       pricingRecommendation: recommendation,
     };
+
+    const priceLine = canSeeFinancials
+      ? `- **Giá bán:** ${formatVND(analysis.pricing.sellingPrice)} | **Giá vốn:** ${formatVND(analysis.pricing.costPrice)} | **Biên lợi nhuận:** **${analysis.pricing.expectedMarginPct}%**\n`
+      : `- **Giá bán:** ${formatVND(analysis.pricing.sellingPrice)}\n`;
 
     const paragraphs: string[] = [];
     paragraphs.push(
       `### Phân tích chi tiết: ${analysis.productName} (Mã: ${analysis.sku})\n\n` +
       `- **Tồn kho khả dụng:** **${analysis.inventory.available}** đơn vị (Tổng tồn thực tế: ${analysis.inventory.onHand}, Đang giữ chỗ: ${analysis.inventory.reserved})\n` +
-      `- **Giá bán:** ${formatVND(analysis.pricing.sellingPrice)} | **Giá vốn:** ${formatVND(analysis.pricing.costPrice)} | **Biên lợi nhuận:** **${analysis.pricing.expectedMarginPct}%**\n` +
+      priceLine +
       `- **Tốc độ tiêu thụ trung bình:** **${analysis.demand.avg30}** đơn vị/ngày (Xu hướng: ${analysis.demand.trend})\n` +
       `- **Độ tin cậy số liệu:** ${analysis.confidence.score}/100 (${analysis.confidence.level})`
     );
@@ -96,7 +116,9 @@ export class AssistantService {
 
     if (analysis.risk.deadStock) {
       paragraphs.push(
-        `⚠️ **HÀNG TỒN Ứ ĐỌNG (DEAD STOCK):** Không ghi nhận lượt bán trong ${analysis.risk.daysSinceLastSale ?? 90} ngày qua, làm đọng khoảng **${formatVND(analysis.risk.deadStockCostValue)}** vốn.`
+        canSeeFinancials
+          ? `⚠️ **HÀNG TỒN Ứ ĐỌNG (DEAD STOCK):** Không ghi nhận lượt bán trong ${analysis.risk.daysSinceLastSale ?? 90} ngày qua, làm đọng khoảng **${formatVND(analysis.risk.deadStockCostValue)}** vốn.`
+          : `⚠️ **HÀNG TỒN Ứ ĐỌNG (DEAD STOCK):** Không ghi nhận lượt bán trong ${analysis.risk.daysSinceLastSale ?? 90} ngày qua (còn ${analysis.inventory.available} đơn vị khả dụng). Vui lòng báo Chủ cửa hàng để quyết định xử lý.`
       );
     } else if (analysis.risk.slowMoving) {
       paragraphs.push(
@@ -123,7 +145,8 @@ export class AssistantService {
   /**
    * Generates store-wide intelligence summary.
    */
-  async explainStoreOverview(storeId: number) {
+  async explainStoreOverview(storeId: number, viewerRole?: Role) {
+    const canSeeFinancials = canViewFinancials(viewerRole);
     const overview = await this.decisionEngineService.getOverview(storeId, {
       riskFilter: 'ALL',
       page: 1,
@@ -134,25 +157,38 @@ export class AssistantService {
       where: { storeId, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
     });
 
-    const pendingRecsCount = await this.prisma.pricingRecommendation.count({
-      where: { storeId, status: 'PENDING' },
-    });
+    const pendingRecsCount = canSeeFinancials
+      ? await this.prisma.pricingRecommendation.count({
+          where: { storeId, status: 'PENDING' },
+        })
+      : 0;
 
-    const summaryText = [
-      `### 📊 TỔNG QUAN TÌNH HÌNH CỬA HÀNG HÔM NAY`,
-      `- **Tổng số sản phẩm đang quản lý:** **${overview.summary.totalSkus}** SP`,
-      `- **Mặt hàng có nguy cơ thiếu/hết hàng:** **${overview.summary.stockoutRiskCount}** SP (Cần ưu tiên nhập)`,
-      `- **Mặt hàng tồn kho quá mức:** **${overview.summary.overstockRiskCount}** SP`,
-      `- **Mặt hàng ứ đọng (Dead Stock):** **${overview.summary.deadStockCount}** SP (Vốn đọng: **${formatVND(overview.summary.totalDeadStockCostValue)}**)`,
-      `- **Cảnh báo rủi ro đang mở:** **${openAlertsCount}** cảnh báo`,
-      `- **Gợi ý tối ưu giá chờ duyệt:** **${pendingRecsCount}** đề xuất`,
-      `\n💡 *Gợi ý thao tác: Bạn có thể vào tab "Cảnh báo rủi ro" để xử lý các mặt hàng hết hàng hoặc tab "Gợi ý giá bán" để duyệt các mức giá mới tối ưu lợi nhuận.*`
-    ].join('\n\n');
+    const summaryLines = canSeeFinancials
+      ? [
+          `### 📊 TỔNG QUAN TÌNH HÌNH CỬA HÀNG HÔM NAY`,
+          `- **Tổng số sản phẩm đang quản lý:** **${overview.summary.totalSkus}** SP`,
+          `- **Mặt hàng có nguy cơ thiếu/hết hàng:** **${overview.summary.stockoutRiskCount}** SP (Cần ưu tiên nhập)`,
+          `- **Mặt hàng tồn kho quá mức:** **${overview.summary.overstockRiskCount}** SP`,
+          `- **Mặt hàng ứ đọng (Dead Stock):** **${overview.summary.deadStockCount}** SP (Vốn đọng: **${formatVND(overview.summary.totalDeadStockCostValue)}**)`,
+          `- **Cảnh báo rủi ro đang mở:** **${openAlertsCount}** cảnh báo`,
+          `- **Gợi ý tối ưu giá chờ duyệt:** **${pendingRecsCount}** đề xuất`,
+          `\n💡 *Gợi ý thao tác: Bạn có thể vào tab "Cảnh báo rủi ro" để xử lý các mặt hàng hết hàng hoặc tab "Gợi ý giá bán" để duyệt các mức giá mới tối ưu lợi nhuận.*`
+        ]
+      : [
+          `### 📊 TỔNG QUAN TÌNH HÌNH KHO HÀNG HÔM NAY`,
+          `- **Tổng số sản phẩm đang quản lý:** **${overview.summary.totalSkus}** SP`,
+          `- **Mặt hàng có nguy cơ thiếu/hết hàng:** **${overview.summary.stockoutRiskCount}** SP (Cần ưu tiên nhập)`,
+          `- **Mặt hàng tồn kho quá mức:** **${overview.summary.overstockRiskCount}** SP`,
+          `- **Mặt hàng ứ đọng (Dead Stock):** **${overview.summary.deadStockCount}** SP`,
+          `- **Cảnh báo rủi ro đang mở:** **${openAlertsCount}** cảnh báo`,
+          `\n💡 *Gợi ý thao tác: Vào tab "Cảnh báo rủi ro", bấm "Đã xem" kèm ghi chú để báo cáo Chủ cửa hàng.*`
+        ];
+    const summaryText = summaryLines.join('\n\n');
 
     return {
       storeId,
       summary: summaryText,
-      metrics: overview.summary,
+      metrics: toOverviewSummaryView(overview.summary, viewerRole),
       openAlertsCount,
       pendingRecommendationsCount: pendingRecsCount,
       generatedAt: new Date().toISOString(),
@@ -162,21 +198,28 @@ export class AssistantService {
   /**
    * Main AI Pilot natural language processing engine that maps questions to database facts.
    */
-  async answerQuestion(storeId: number, question: string, targetStockItemId?: number): Promise<{
+  async answerQuestion(storeId: number, question: string, targetStockItemId?: number, viewerRole?: Role): Promise<{
     answer: string;
     actionLinks?: Array<{ label: string; url: string; variant?: string }>;
     dataSnapshot?: any;
   }> {
     const q = (question || '').toLowerCase().trim();
+    const canSeeFinancials = canViewFinancials(viewerRole);
+    const restricted = () => ({
+      answer: FINANCIAL_DATA_RESTRICTED_MESSAGE,
+      actionLinks: [{ label: 'Xem cảnh báo rủi ro', url: '/alerts' }],
+    });
 
     // Direct SKU explanation if stockItemId provided
     if (targetStockItemId) {
-      const skuResult = await this.explainSku(storeId, targetStockItemId, question);
+      const skuResult = await this.explainSku(storeId, targetStockItemId, question, viewerRole);
       return {
         answer: skuResult.explanation,
         actionLinks: [
           { label: 'Kiểm tra tồn kho', url: `/inventory?search=${encodeURIComponent(skuResult.sku)}` },
-          { label: 'Xem đề xuất giá', url: `/pricing?search=${encodeURIComponent(skuResult.sku)}` },
+          ...(canSeeFinancials
+            ? [{ label: 'Xem đề xuất giá', url: `/pricing?search=${encodeURIComponent(skuResult.sku)}` }]
+            : []),
         ],
         dataSnapshot: skuResult.factualContext,
       };
@@ -185,7 +228,7 @@ export class AssistantService {
     // Check if user is asking about a specific SKU/product by code or name
     const allStockItems = await this.prisma.stockItem.findMany({
       where: { storeId, isActive: true },
-      select: { id: true, sku: true, name: true, costPrice: true, sellingPrice: true },
+      select: { id: true, sku: true, name: true },
     });
 
     const mentionedItem = allStockItems.find(
@@ -193,12 +236,14 @@ export class AssistantService {
     );
 
     if (mentionedItem && (q.includes('giá') || q.includes('tồn') || q.includes('sản phẩm') || q.includes('thế nào') || q.includes('bao nhiêu'))) {
-      const skuResult = await this.explainSku(storeId, mentionedItem.id, question);
+      const skuResult = await this.explainSku(storeId, mentionedItem.id, question, viewerRole);
       return {
         answer: skuResult.explanation,
         actionLinks: [
           { label: 'Xem sản phẩm', url: `/products?search=${encodeURIComponent(mentionedItem.sku)}` },
-          { label: 'Xem đề xuất giá', url: `/pricing?search=${encodeURIComponent(mentionedItem.sku)}` },
+          ...(canSeeFinancials
+            ? [{ label: 'Xem đề xuất giá', url: `/pricing?search=${encodeURIComponent(mentionedItem.sku)}` }]
+            : []),
         ],
         dataSnapshot: skuResult.factualContext,
       };
@@ -210,7 +255,7 @@ export class AssistantService {
         where: { storeId },
         include: {
           stockItem: {
-            select: { id: true, sku: true, name: true, minStockLevel: true, costPrice: true, sellingPrice: true },
+            select: { id: true, sku: true, name: true, minStockLevel: true, costPrice: canSeeFinancials, sellingPrice: true },
           },
         },
       });
@@ -226,7 +271,10 @@ export class AssistantService {
 
       const rows = lowStockItems.map((item, idx) => {
         const status = item.quantity <= 0 ? '🔴 **HẾT HÀNG (0)**' : `🟠 Tồn thấp: **${item.quantity}** (Ngưỡng: ${item.stockItem.minStockLevel})`;
-        return `${idx + 1}. **${item.stockItem.name}** (Mã: \`${item.stockItem.sku}\`)\n   - Tình trạng: ${status}\n   - Giá vốn: ${formatVND(toNumber(item.stockItem.costPrice))} | Giá bán: ${formatVND(toNumber(item.stockItem.sellingPrice))}`;
+        const priceText = canSeeFinancials
+          ? `Giá vốn: ${formatVND(toNumber(item.stockItem.costPrice))} | Giá bán: ${formatVND(toNumber(item.stockItem.sellingPrice))}`
+          : `Giá bán: ${formatVND(toNumber(item.stockItem.sellingPrice))}`;
+        return `${idx + 1}. **${item.stockItem.name}** (Mã: \`${item.stockItem.sku}\`)\n   - Tình trạng: ${status}\n   - ${priceText}`;
       });
 
       const answer = [
@@ -281,7 +329,9 @@ export class AssistantService {
       const sorted = Array.from(map.values()).sort((a, b) => b.sold - a.sold).slice(0, 5);
 
       const rows = sorted.map((item, idx) =>
-        `${idx + 1}. **${item.name}** (\`${item.sku}\`): **${item.sold}** sản phẩm | Doanh thu: **${formatVND(item.revenue)}**`
+        canSeeFinancials
+          ? `${idx + 1}. **${item.name}** (\`${item.sku}\`): **${item.sold}** sản phẩm | Doanh thu: **${formatVND(item.revenue)}**`
+          : `${idx + 1}. **${item.name}** (\`${item.sku}\`): **${item.sold}** sản phẩm`
       );
 
       const answer = [
@@ -294,13 +344,17 @@ export class AssistantService {
 
       return {
         answer,
-        actionLinks: [{ label: 'Xem phân tích chi tiết', url: '/analytics' }],
-        dataSnapshot: sorted,
+        actionLinks: canSeeFinancials ? [{ label: 'Xem phân tích chi tiết', url: '/analytics' }] : [],
+        dataSnapshot: canSeeFinancials ? sorted : sorted.map(({ sku, name, sold }) => ({ sku, name, sold })),
       };
     }
 
     // INTENT 3: Doanh thu và lợi nhuận hôm nay / tuần này
-    if (q.includes('doanh thu') || q.includes('lợi nhuận') || q.includes('tiền lãi') || q.includes('hôm nay') || q.includes('doanh số')) {
+    const asksFinance = q.includes('doanh thu') || q.includes('lợi nhuận') || q.includes('tiền lãi') || q.includes('doanh số');
+    if (!canSeeFinancials && asksFinance) {
+      return restricted();
+    }
+    if (canSeeFinancials && (asksFinance || q.includes('hôm nay'))) {
       const now = new Date();
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
       const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
@@ -353,6 +407,9 @@ export class AssistantService {
 
     // INTENT 4: Bán lỗ hoặc lợi nhuận thấp
     if (q.includes('bán lỗ') || q.includes('lỗ vốn') || q.includes('dưới giá vốn') || q.includes('lợi nhuận thấp') || q.includes('biên thấp')) {
+      if (!canSeeFinancials) {
+        return restricted();
+      }
       const items = await this.prisma.stockItem.findMany({
         where: { storeId, isActive: true },
         select: { id: true, sku: true, name: true, costPrice: true, sellingPrice: true },
@@ -415,7 +472,7 @@ export class AssistantService {
         where: { storeId },
         include: {
           stockItem: {
-            select: { id: true, sku: true, name: true, minStockLevel: true, maxStockLevel: true, costPrice: true },
+            select: { id: true, sku: true, name: true, minStockLevel: true, maxStockLevel: true, costPrice: canSeeFinancials },
           },
         },
       });
@@ -434,14 +491,16 @@ export class AssistantService {
         const suggestQty = Math.max(10, b.stockItem.maxStockLevel - b.quantity);
         const cost = suggestQty * toNumber(b.stockItem.costPrice);
         totalEstimateCost += cost;
-        return `${idx + 1}. **${b.stockItem.name}** (\`${b.stockItem.sku}\`): Hiện còn **${b.quantity}** -> Đề xuất nhập thêm **${suggestQty}** đơn vị (Ước tính vốn: **${formatVND(cost)}**)`;
+        return canSeeFinancials
+          ? `${idx + 1}. **${b.stockItem.name}** (\`${b.stockItem.sku}\`): Hiện còn **${b.quantity}** -> Đề xuất nhập thêm **${suggestQty}** đơn vị (Ước tính vốn: **${formatVND(cost)}**)`
+          : `${idx + 1}. **${b.stockItem.name}** (\`${b.stockItem.sku}\`): Hiện còn **${b.quantity}** -> Đề xuất nhập thêm **${suggestQty}** đơn vị`;
       });
 
       const answer = [
         `### 📋 KẾ HOẠCH ĐỀ XUẤT NHẬP HÀNG (${needsRestock.length} MẶT HÀNG)\n`,
         `Dựa trên số lượng tồn khả dụng và mức tồn tối đa đã cấu hình:\n`,
         ...planRows,
-        `\n- **Tổng ngân sách dự kiến cần chuẩn bị:** **${formatVND(totalEstimateCost)}**`,
+        ...(canSeeFinancials ? [`\n- **Tổng ngân sách dự kiến cần chuẩn bị:** **${formatVND(totalEstimateCost)}**`] : []),
         `\n💡 **Gợi ý:** Bạn có thể liên hệ các đại lý cung cấp ngay để đảm bảo hàng hóa về trước cuối tuần.`,
       ].join('\n');
 
@@ -451,12 +510,15 @@ export class AssistantService {
           { label: 'Tạo phiếu nhập kho', url: '/inventory', variant: 'primary' },
           { label: 'Xem cảnh báo thiếu hàng', url: '/alerts' },
         ],
-        dataSnapshot: { needsRestock, totalEstimateCost },
+        dataSnapshot: canSeeFinancials ? { needsRestock, totalEstimateCost } : { needsRestock },
       };
     }
 
     // INTENT 6: Gợi ý điều chỉnh giá
     if (q.includes('điều chỉnh giá') || q.includes('gợi ý giá') || q.includes('thay đổi giá') || q.includes('đề xuất giá') || q.includes('tối ưu giá')) {
+      if (!canSeeFinancials) {
+        return restricted();
+      }
       const recs = await this.prisma.pricingRecommendation.findMany({
         where: { storeId, status: 'PENDING' },
         include: { stockItem: true },
@@ -493,7 +555,7 @@ export class AssistantService {
         where: { storeId, quantity: { gt: 0 } },
         include: {
           stockItem: {
-            select: { id: true, sku: true, name: true, costPrice: true, sellingPrice: true, maxStockLevel: true, createdAt: true },
+            select: { id: true, sku: true, name: true, costPrice: canSeeFinancials, sellingPrice: true, maxStockLevel: true, createdAt: true },
           },
         },
       });
@@ -513,23 +575,33 @@ export class AssistantService {
       const rows = overstocks.map((b, idx) => {
         const capital = b.quantity * toNumber(b.stockItem.costPrice);
         totalTiedCapital += capital;
-        return `${idx + 1}. **${b.stockItem.name}** (\`${b.stockItem.sku}\`): Tồn **${b.quantity}** đơn vị (Vốn đọng: **${formatVND(capital)}**)`;
+        return canSeeFinancials
+          ? `${idx + 1}. **${b.stockItem.name}** (\`${b.stockItem.sku}\`): Tồn **${b.quantity}** đơn vị (Vốn đọng: **${formatVND(capital)}**)`
+          : `${idx + 1}. **${b.stockItem.name}** (\`${b.stockItem.sku}\`): Tồn **${b.quantity}** đơn vị`;
       });
 
-      const answer = [
-        `### ⚠️ MẶT HÀNG CÓ NGUY CƠ DƯ THỪA / ĐỌNG VỐN (${overstocks.length} MẶT HÀNG)\n`,
-        ...rows,
-        `\n- **Tổng vốn đọng trong lượng hàng này:** **${formatVND(totalTiedCapital)}**`,
-        `\n💡 **Khuyến nghị từ AI Pilot:** Áp dụng chương trình combo bán kèm hoặc giảm giá 5 - 10% để kích thích người mua giải phóng lượng vốn lưu động này.`,
-      ].join('\n');
+      const answer = canSeeFinancials
+        ? [
+            `### ⚠️ MẶT HÀNG CÓ NGUY CƠ DƯ THỪA / ĐỌNG VỐN (${overstocks.length} MẶT HÀNG)\n`,
+            ...rows,
+            `\n- **Tổng vốn đọng trong lượng hàng này:** **${formatVND(totalTiedCapital)}**`,
+            `\n💡 **Khuyến nghị từ AI Pilot:** Áp dụng chương trình combo bán kèm hoặc giảm giá 5 - 10% để kích thích người mua giải phóng lượng vốn lưu động này.`,
+          ].join('\n')
+        : [
+            `### ⚠️ MẶT HÀNG CÓ NGUY CƠ DƯ THỪA (${overstocks.length} MẶT HÀNG)\n`,
+            ...rows,
+            `\n💡 **Gợi ý:** Báo Chủ cửa hàng danh sách trên để quyết định phương án xử lý.`,
+          ].join('\n');
 
       return {
         answer,
-        actionLinks: [
-          { label: 'Xem gợi ý giảm giá', url: '/pricing' },
-          { label: 'Xem kho hàng', url: '/inventory' },
-        ],
-        dataSnapshot: { overstocks, totalTiedCapital },
+        actionLinks: canSeeFinancials
+          ? [
+              { label: 'Xem gợi ý giảm giá', url: '/pricing' },
+              { label: 'Xem kho hàng', url: '/inventory' },
+            ]
+          : [{ label: 'Xem kho hàng', url: '/inventory' }],
+        dataSnapshot: canSeeFinancials ? { overstocks, totalTiedCapital } : { overstocks },
       };
     }
 
@@ -574,14 +646,16 @@ export class AssistantService {
     }
 
     // DEFAULT FALLBACK: General store-wide overview
-    const overview = await this.explainStoreOverview(storeId);
+    const overview = await this.explainStoreOverview(storeId, viewerRole);
     return {
       answer: overview.summary,
-      actionLinks: [
-        { label: 'Xem cảnh báo rủi ro', url: '/alerts' },
-        { label: 'Xem gợi ý giá bán', url: '/pricing' },
-        { label: 'Xem báo cáo doanh thu', url: '/analytics' },
-      ],
+      actionLinks: canSeeFinancials
+        ? [
+            { label: 'Xem cảnh báo rủi ro', url: '/alerts' },
+            { label: 'Xem gợi ý giá bán', url: '/pricing' },
+            { label: 'Xem báo cáo doanh thu', url: '/analytics' },
+          ]
+        : [{ label: 'Xem cảnh báo rủi ro', url: '/alerts' }],
       dataSnapshot: overview.metrics,
     };
   }

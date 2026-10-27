@@ -3,7 +3,7 @@ import { prisma as defaultPrisma } from '../../config/db';
 import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { DemandTrend } from '../decision-engine/demand-metrics.service';
 import { DEFAULT_ENGINE_CONFIG } from '../decision-engine/engine-config.service';
-import { PricingEvaluator, PricingEvaluationResult } from '../decision-engine/pricing-evaluator';
+import { DecisionDataStatus, PricingEvaluator, PricingEvaluationResult } from '../decision-engine/pricing-evaluator';
 import { AuditLogService } from '../../common/services/audit-log.service';
 import { BusinessSyncService } from '../../common/services/business-sync.service';
 
@@ -22,6 +22,9 @@ export interface PricingEvaluationInput {
   trend: DemandTrend;
   confidenceScore: number;
   engineVersion?: string;
+  slowMovingDays?: number;
+  deadStockDays?: number;
+  dataStatus?: DecisionDataStatus;
 }
 
 export class PricingService {
@@ -36,42 +39,97 @@ export class PricingService {
 
   /**
    * Evaluates if a pricing recommendation should be generated for a SKU and syncs with DB.
+   * Opens its own transaction and serializes on the StockItem row.
    */
   async evaluatePricingRecommendation(input: PricingEvaluationInput): Promise<PricingEvaluationResult> {
+    const evaluation = this.evaluate(input);
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockStockItem(tx, input.storeId, input.stockItemId);
+      await this.syncRecommendationInTransaction(tx, input, evaluation);
+    });
+
+    return evaluation;
+  }
+
+  /**
+   * Same as evaluatePricingRecommendation but runs inside the caller's transaction. The caller must
+   * already hold the StockItem row lock (DecisionEngineService.recomputeSku does). A precomputed
+   * evaluation can be passed so the persisted recommendation matches the analysis exactly.
+   */
+  async syncRecommendationInTransaction(
+    tx: Prisma.TransactionClient,
+    input: PricingEvaluationInput,
+    precomputed?: PricingEvaluationResult
+  ): Promise<PricingEvaluationResult> {
+    const evaluation = precomputed ?? this.evaluate(input);
+
+    if (evaluation.shouldGenerateRecommendation) {
+      await this.upsertPendingRecommendation(tx, input, evaluation);
+    } else {
+      // The engine no longer recommends a change (MAINTAIN, low confidence, insufficient data):
+      // a still-PENDING recommendation is obsolete and must not be acceptable.
+      await PricingService.expirePendingRecommendations(tx, input.storeId, [input.stockItemId]);
+    }
+
+    return evaluation;
+  }
+
+  /**
+   * Marks PENDING recommendations of the given SKUs as EXPIRED. Call inside the transaction that
+   * changes their selling or cost price, so a recommendation computed on the old basis can never be
+   * accepted afterwards.
+   */
+  static async expirePendingRecommendations(
+    tx: Prisma.TransactionClient,
+    storeId: number,
+    stockItemIds: number[]
+  ): Promise<number> {
+    if (stockItemIds.length === 0) {
+      return 0;
+    }
+    const result = await tx.pricingRecommendation.updateMany({
+      where: { storeId, stockItemId: { in: stockItemIds }, status: 'PENDING' },
+      data: { status: 'EXPIRED' },
+    });
+    return result.count;
+  }
+
+  private evaluate(input: PricingEvaluationInput): PricingEvaluationResult {
+    return this.evaluator.evaluatePricing({
+      sellingPrice: input.sellingPrice,
+      costPrice: input.costPrice,
+      minimumMarginPct: input.minimumMarginPct,
+      maxMarkdownPct: input.maxMarkdownPct,
+      maxMarkupPct: input.maxMarkupPct,
+      daysSinceLastSale: input.daysSinceLastSale,
+      daysOfCover: input.daysOfCover,
+      overstockScore: input.overstockScore,
+      stockoutScore: input.stockoutScore,
+      trend: input.trend,
+      confidenceScore: input.confidenceScore,
+      slowMovingDays: input.slowMovingDays,
+      deadStockDays: input.deadStockDays,
+      dataStatus: input.dataStatus,
+    });
+  }
+
+  /** Keeps at most one PENDING recommendation per SKU: refreshes the existing one or creates it. */
+  private async upsertPendingRecommendation(
+    tx: Prisma.TransactionClient,
+    input: PricingEvaluationInput,
+    evaluation: PricingEvaluationResult
+  ) {
     const {
       storeId,
       stockItemId,
       sellingPrice,
       costPrice,
-      minimumMarginPct,
-      maxMarkdownPct,
-      maxMarkupPct,
-      daysSinceLastSale,
-      daysOfCover,
       overstockScore,
       stockoutScore,
-      trend,
       confidenceScore,
       engineVersion = 'DECISION_ENGINE_V1',
     } = input;
-
-    const evaluation = this.evaluator.evaluatePricing({
-      sellingPrice,
-      costPrice,
-      minimumMarginPct,
-      maxMarkdownPct,
-      maxMarkupPct,
-      daysSinceLastSale,
-      daysOfCover,
-      overstockScore,
-      stockoutScore,
-      trend,
-      confidenceScore,
-    });
-
-    if (!evaluation.shouldGenerateRecommendation) {
-      return evaluation;
-    }
 
     const reasonJson = {
       sellingPrice,
@@ -83,48 +141,42 @@ export class PricingService {
       factors: evaluation.factors,
     };
 
-    await this.prisma.$transaction(async (tx) => {
-      await this.lockStockItem(tx, stockItemId);
-
-      const existing = await tx.pricingRecommendation.findFirst({
-        where: {
-          storeId,
-          stockItemId,
-          status: 'PENDING',
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      const data = {
-        currentPrice: new Prisma.Decimal(sellingPrice),
-        recommendedPrice: new Prisma.Decimal(evaluation.recommendedPrice),
-        discountPct: new Prisma.Decimal(evaluation.discountPct),
-        action: evaluation.action,
-        riskScore: new Prisma.Decimal(Math.max(overstockScore, stockoutScore)),
-        confidence: new Prisma.Decimal(confidenceScore),
-        reasonJson: reasonJson as Prisma.InputJsonValue,
-        engineVersion,
-        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      };
-
-      if (existing) {
-        await tx.pricingRecommendation.update({
-          where: { id: existing.id },
-          data,
-        });
-      } else {
-        await tx.pricingRecommendation.create({
-          data: {
-            storeId,
-            stockItemId,
-            ...data,
-            status: 'PENDING',
-          },
-        });
-      }
+    const existing = await tx.pricingRecommendation.findFirst({
+      where: {
+        storeId,
+        stockItemId,
+        status: 'PENDING',
+      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    return evaluation;
+    const data = {
+      currentPrice: new Prisma.Decimal(sellingPrice),
+      recommendedPrice: new Prisma.Decimal(evaluation.recommendedPrice),
+      discountPct: new Prisma.Decimal(evaluation.discountPct),
+      action: evaluation.action,
+      riskScore: new Prisma.Decimal(Math.max(overstockScore, stockoutScore)),
+      confidence: new Prisma.Decimal(confidenceScore),
+      reasonJson: reasonJson as Prisma.InputJsonValue,
+      engineVersion,
+      expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    };
+
+    if (existing) {
+      await tx.pricingRecommendation.update({
+        where: { id: existing.id },
+        data,
+      });
+    } else {
+      await tx.pricingRecommendation.create({
+        data: {
+          storeId,
+          stockItemId,
+          ...data,
+          status: 'PENDING',
+        },
+      });
+    }
   }
 
   async listRecommendations(
@@ -214,7 +266,8 @@ export class PricingService {
   async acceptRecommendation(storeId: number, userId: number, recommendationId: number, applyToStockItem = true) {
     return this.prisma.$transaction(async (tx) => {
       const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
-      await this.assertStockPriceNotStale(tx, rec.stockItemId, rec.currentPrice);
+      const stockItem = await this.assertStockPriceNotStale(tx, storeId, rec.stockItemId, rec.currentPrice);
+      await this.assertRecommendationStillValid(tx, storeId, rec, stockItem);
 
       const oldPrice = rec.stockItem.sellingPrice;
       const newPrice = rec.recommendedPrice;
@@ -325,7 +378,7 @@ export class PricingService {
   ) {
     return this.prisma.$transaction(async (tx) => {
       const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
-      await this.assertStockPriceNotStale(tx, rec.stockItemId, rec.currentPrice);
+      await this.assertStockPriceNotStale(tx, storeId, rec.stockItemId, rec.currentPrice);
 
       const minimumMarginPct = await this.getMinimumMarginPct(tx, storeId);
       const minimumPrice = PricingEvaluator.calculateMinimumPrice(Number(rec.stockItem.costPrice), minimumMarginPct);
@@ -433,14 +486,15 @@ export class PricingService {
     storeId: number,
     recommendationId: number
   ) {
-    await tx.$queryRaw`SELECT id FROM pricing_recommendations WHERE id = ${recommendationId} FOR UPDATE`;
+    // Lock only rows owned by the caller's store so a foreign id can neither be read nor locked.
+    await tx.$queryRaw`SELECT id FROM pricing_recommendations WHERE id = ${recommendationId} AND storeId = ${storeId} FOR UPDATE`;
 
-    const rec = await tx.pricingRecommendation.findUnique({
-      where: { id: recommendationId },
+    const rec = await tx.pricingRecommendation.findFirst({
+      where: { id: recommendationId, storeId },
       include: { stockItem: true },
     });
 
-    if (!rec || rec.storeId !== storeId) {
+    if (!rec) {
       throw new NotFoundError('Pricing recommendation not found');
     }
 
@@ -457,20 +511,46 @@ export class PricingService {
 
   private async assertStockPriceNotStale(
     tx: Prisma.TransactionClient,
+    storeId: number,
     stockItemId: number,
     recommendationCurrentPrice: Prisma.Decimal
   ) {
-    const stockItem = await this.lockStockItem(tx, stockItemId);
+    const stockItem = await this.lockStockItem(tx, storeId, stockItemId);
     if (!new Prisma.Decimal(stockItem.sellingPrice).equals(new Prisma.Decimal(recommendationCurrentPrice))) {
       throw new ConflictError('STALE_PRICING_RECOMMENDATION');
     }
+    return stockItem;
   }
 
-  private async lockStockItem(tx: Prisma.TransactionClient, stockItemId: number) {
-    await tx.$queryRaw`SELECT id FROM stock_items WHERE id = ${stockItemId} FOR UPDATE`;
+  /**
+   * Revalidates a recommendation against the CURRENT cost basis before it is applied:
+   * - the cost price must equal the one the engine used (recorded in reasonJson.costPrice);
+   * - the recommended price must still respect the minimum-margin floor from the current config.
+   * Recommendations created before costPrice was recorded skip only the first check.
+   */
+  private async assertRecommendationStillValid(
+    tx: Prisma.TransactionClient,
+    storeId: number,
+    rec: { recommendedPrice: Prisma.Decimal; reasonJson: Prisma.JsonValue },
+    stockItem: { costPrice: Prisma.Decimal | number }
+  ) {
+    const recordedCost = (rec.reasonJson as { costPrice?: unknown } | null)?.costPrice;
+    if (typeof recordedCost === 'number' && !new Prisma.Decimal(stockItem.costPrice).equals(new Prisma.Decimal(recordedCost))) {
+      throw new ConflictError('STALE_PRICING_RECOMMENDATION_COST_CHANGED');
+    }
 
-    const stockItem = await tx.stockItem.findUnique({
-      where: { id: stockItemId },
+    const minimumMarginPct = await this.getMinimumMarginPct(tx, storeId);
+    const minimumPrice = PricingEvaluator.calculateMinimumPrice(Number(stockItem.costPrice), minimumMarginPct);
+    if (Number(rec.recommendedPrice) < minimumPrice) {
+      throw new ConflictError('PRICING_RECOMMENDATION_BELOW_FLOOR', { minimumPrice });
+    }
+  }
+
+  private async lockStockItem(tx: Prisma.TransactionClient, storeId: number, stockItemId: number) {
+    await tx.$queryRaw`SELECT id FROM stock_items WHERE id = ${stockItemId} AND storeId = ${storeId} FOR UPDATE`;
+
+    const stockItem = await tx.stockItem.findFirst({
+      where: { id: stockItemId, storeId },
     });
 
     if (!stockItem) {

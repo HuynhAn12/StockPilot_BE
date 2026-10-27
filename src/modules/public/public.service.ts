@@ -47,7 +47,7 @@ export class PublicService {
           'Báo cáo doanh thu & lợi nhuận cơ bản',
           'Hỗ trợ kỹ thuật giờ hành chính',
         ],
-        ctaText: 'Dùng thử 14 ngày miễn phí',
+        ctaText: 'Dùng thử ngay',
       },
       {
         id: 'professional',

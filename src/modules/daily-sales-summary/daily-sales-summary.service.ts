@@ -293,20 +293,22 @@ export class DailySalesSummaryService {
   /**
    * Retrieves an array of daily series summaries for a SKU over the past N days.
    * Every day in the window is guaranteed to be present with 0 values if no sales occurred.
+   * The window ends at `endDateKey` (inclusive), defaulting to today's business date.
    */
   async getDailySeries(
     storeId: number,
     stockItemId: number,
-    days: number
+    days: number,
+    db: Pick<Prisma.TransactionClient, 'dailySalesSummary'> = this.prisma,
+    endDateKey?: string
   ): Promise<DailySalesSummaryAggregateRow[]> {
-    const today = new Date();
-    const todayKey = toBusinessDateKey(today);
+    const todayKey = endDateKey ?? toBusinessDateKey(new Date());
 
     const fromKey = addBusinessDays(todayKey, -(days - 1));
     const fromDate = businessDateKeyToDate(fromKey);
     const todayDate = businessDateKeyToDate(todayKey);
 
-    const summaries = await this.prisma.dailySalesSummary.findMany({
+    const summaries = await db.dailySalesSummary.findMany({
       where: {
         storeId,
         stockItemId,

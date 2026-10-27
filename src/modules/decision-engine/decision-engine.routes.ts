@@ -6,6 +6,7 @@ import { validate } from '../../common/middleware/validate';
 import {
   decisionSkuParamsSchema,
   decisionOverviewQuerySchema,
+  recalculateBodySchema,
   updateEngineConfigSchema,
 } from './decision-engine.schema';
 
@@ -31,10 +32,11 @@ decisionEngineRouter.get(
   controller.getOverview
 );
 
-// Batch recalculation
+// Batch recalculation (owner-only: store-wide, expensive, and rewrites pricing recommendations)
 decisionEngineRouter.post(
   '/recalculate',
-  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  requireRole('SHOP_OWNER'),
+  validate({ body: recalculateBodySchema }),
   controller.recalculate
 );
 
