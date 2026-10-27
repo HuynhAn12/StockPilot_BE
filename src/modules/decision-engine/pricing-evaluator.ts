@@ -1,4 +1,7 @@
 import { DemandTrend } from './demand-metrics.service';
+import { DEFAULT_ENGINE_CONFIG } from './engine-defaults';
+
+export type DecisionDataStatus = 'OK' | 'INSUFFICIENT_DATA';
 
 export interface PricingEvaluationInput {
   sellingPrice: number;
@@ -12,6 +15,11 @@ export interface PricingEvaluationInput {
   stockoutScore: number;
   trend: DemandTrend;
   confidenceScore: number;
+  /** Config thresholds (defaults from DEFAULT_ENGINE_CONFIG keep older callers working). */
+  slowMovingDays?: number;
+  deadStockDays?: number;
+  /** INSUFFICIENT_DATA blocks demand-based price changes; fact-based margin corrections still apply. */
+  dataStatus?: DecisionDataStatus;
 }
 
 export interface PricingEvaluationResult {
@@ -55,6 +63,9 @@ export class PricingEvaluator {
       stockoutScore,
       trend,
       confidenceScore,
+      slowMovingDays = DEFAULT_ENGINE_CONFIG.slowMovingDays,
+      deadStockDays = DEFAULT_ENGINE_CONFIG.deadStockDays,
+      dataStatus = 'OK',
     } = input;
 
     const minimumPrice = PricingEvaluator.calculateMinimumPrice(costPrice, minimumMarginPct);
@@ -107,6 +118,28 @@ export class PricingEvaluator {
       };
     }
 
+    // Evidence gate: below this point every rule is demand-based (an estimate), so it needs enough
+    // history. The two rules above are facts (price vs cost) and always apply.
+    if (dataStatus === 'INSUFFICIENT_DATA') {
+      factors.push({
+        code: 'INSUFFICIENT_DATA',
+        label: 'Chưa đủ số ngày lịch sử bán hàng để đề xuất thay đổi giá theo nhu cầu',
+        impact: 'GIỮ_NGUYÊN_GIÁ',
+      });
+
+      return {
+        action: 'MAINTAIN',
+        currentPrice: sellingPrice,
+        recommendedPrice: sellingPrice,
+        discountPct: 0,
+        minimumPrice,
+        expectedMarginPct: Number((((sellingPrice - costPrice) / Math.max(1, sellingPrice)) * 100).toFixed(1)),
+        confidence: confidenceScore,
+        factors,
+        shouldGenerateRecommendation: false,
+      };
+    }
+
     // Fallback: Low confidence (< 40) -> MAINTAIN to avoid risky price adjustments on unreliable data
     if (confidenceScore < 40) {
       factors.push({
@@ -129,22 +162,24 @@ export class PricingEvaluator {
     }
 
     // CASE 1: DECREASE (Markdown candidate due to Dead Stock, Slow Moving, or High Overstock)
+    // Thresholds come from the store's engine config: slow-moving, dead stock, and critical dead stock
+    // at twice the dead-stock threshold (90 / 180 days by default, matching docs/next-steps.md).
     if (
-      (daysSinceLastSale !== null && daysSinceLastSale >= 30) ||
+      (daysSinceLastSale !== null && daysSinceLastSale >= slowMovingDays) ||
       overstockScore >= 50 ||
       (daysOfCover !== null && daysOfCover > 45)
     ) {
       let baseMarkdown = 0.10;
 
-      if (daysSinceLastSale !== null && daysSinceLastSale >= 180) {
+      if (daysSinceLastSale !== null && daysSinceLastSale >= deadStockDays * 2) {
         baseMarkdown = 0.25;
         factors.push({
           code: 'DEAD_STOCK_CRITICAL',
-          label: `Hàng ứ đọng trên 180 ngày (${daysSinceLastSale} ngày không bán)`,
+          label: `Hàng ứ đọng trên ${deadStockDays * 2} ngày (${daysSinceLastSale} ngày không bán)`,
           impact: 'GIẢM_25%',
           value: daysSinceLastSale,
         });
-      } else if (daysSinceLastSale !== null && daysSinceLastSale >= 90) {
+      } else if (daysSinceLastSale !== null && daysSinceLastSale >= deadStockDays) {
         baseMarkdown = 0.15;
         factors.push({
           code: 'DEAD_STOCK_WARNING',

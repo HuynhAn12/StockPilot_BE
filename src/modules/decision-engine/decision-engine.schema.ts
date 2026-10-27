@@ -10,6 +10,14 @@ export const decisionOverviewQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
+/** Optional keyset cursor for bounded recalculation; an empty body recalculates the first page. */
+export const recalculateBodySchema = z
+  .object({
+    afterId: z.coerce.number().int().positive().optional(),
+    limit: z.coerce.number().int().min(1).max(5000).optional(),
+  })
+  .default({});
+
 export const updateEngineConfigSchema = z.object({
   leadTimeDays: z.coerce.number().int().min(1).max(365).optional(),
   safetyDays: z.coerce.number().int().min(0).max(365).optional(),

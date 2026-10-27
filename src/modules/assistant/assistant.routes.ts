@@ -3,7 +3,7 @@ import { AssistantController } from './assistant.controller';
 import { authMiddleware } from '../../common/middleware/auth';
 import { requireStoreScope, requireRole } from '../../common/middleware/rbac';
 import { validate } from '../../common/middleware/validate';
-import { explainSkuQuerySchema } from './assistant.schema';
+import { assistantChatBodySchema, explainSkuQuerySchema } from './assistant.schema';
 
 export const assistantRouter = Router();
 const controller = new AssistantController();
@@ -30,6 +30,7 @@ assistantRouter.get(
 assistantRouter.post(
   '/chat',
   requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF', 'ADMIN'),
+  validate({ body: assistantChatBodySchema }),
   controller.chat
 );
 

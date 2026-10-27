@@ -1,8 +1,11 @@
 import crypto from 'crypto';
-import { PrismaClient, Prisma, AlertType, AlertSeverity, AlertStatus } from '@prisma/client';
+import { PrismaClient, Prisma, AlertType, AlertSeverity, AlertStatus, Role } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
-import { NotFoundError } from '../../common/errors/app-error';
+import { ConflictError, NotFoundError } from '../../common/errors/app-error';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { canViewFinancials } from '../../common/utils/role-access';
+import { logger } from '../../common/logger';
+import { classifyRisk } from '../decision-engine/risk-classification';
 
 export interface AlertEvaluationInput {
   storeId: number;
@@ -26,6 +29,44 @@ export interface AlertEvaluationInput {
     type: 'NONE' | 'CRITICAL_SPIKE' | 'HIGH_SPIKE' | 'DEMAND_DROP' | 'NEW_DEMAND_SPIKE';
     zScore: number;
   };
+  /** Store risk bands (engine config); defaults match DEFAULT_ENGINE_CONFIG. */
+  highRiskThreshold?: number;
+  criticalRiskThreshold?: number;
+}
+
+/**
+ * Human lifecycle metadata stored under `reasonJson.lifecycle`. The engine rewrites the rest of
+ * reasonJson on every evaluation, so this key must be carried over explicitly.
+ */
+export interface AlertLifecycleMeta {
+  acknowledgedById?: number | null;
+  acknowledgedAt?: string;
+  acknowledgementNote?: string | null;
+  resolvedBy?: 'USER' | 'ENGINE';
+  resolvedById?: number | null;
+}
+
+export interface AcknowledgeAlertOptions {
+  note?: string;
+  actorRole?: Role;
+}
+
+export function readAlertLifecycle(reasonJson: Prisma.JsonValue | null | undefined): AlertLifecycleMeta {
+  if (reasonJson && typeof reasonJson === 'object' && !Array.isArray(reasonJson)) {
+    const lifecycle = (reasonJson as Record<string, unknown>).lifecycle;
+    if (lifecycle && typeof lifecycle === 'object' && !Array.isArray(lifecycle)) {
+      return lifecycle as AlertLifecycleMeta;
+    }
+  }
+  return {};
+}
+
+function withAlertLifecycle(reasonJson: Prisma.JsonValue | null | undefined, lifecycle: AlertLifecycleMeta): Prisma.InputJsonValue {
+  const base =
+    reasonJson && typeof reasonJson === 'object' && !Array.isArray(reasonJson)
+      ? (reasonJson as Record<string, unknown>)
+      : {};
+  return { ...base, lifecycle } as unknown as Prisma.InputJsonValue;
 }
 
 export class AlertService {
@@ -38,8 +79,10 @@ export class AlertService {
 
   /**
    * Evaluates analysis result and syncs deduplicated Alert records.
+   * Pass the caller's transaction client so alerts, notifications, recommendations, and the
+   * decision snapshot of one recomputation commit atomically (see DecisionEngineService.recomputeSku).
    */
-  async syncAlertsForSku(input: AlertEvaluationInput): Promise<void> {
+  async syncAlertsForSku(input: AlertEvaluationInput, db: Prisma.TransactionClient | PrismaClient = this.prisma): Promise<void> {
     const {
       storeId,
       stockItemId,
@@ -57,7 +100,19 @@ export class AlertService {
       confidenceScore,
       engineVersion = 'DECISION_ENGINE_V1',
       unusualDemand,
+      highRiskThreshold = 50,
+      criticalRiskThreshold = 75,
     } = input;
+
+    // Same categories as the Decision Engine overview (see risk-classification.ts).
+    const classification = classifyRisk({
+      availableStock,
+      reorderPoint,
+      stockoutScore,
+      overstockScore,
+      isDeadStock,
+      highRiskThreshold,
+    });
 
     // 1. Determine active alert triggers
     // Priority: STOCKOUT supersedes LOW_STOCK (mutually exclusive)
@@ -70,7 +125,7 @@ export class AlertService {
       reasonJson: Record<string, unknown>;
     } | null = null;
 
-    if (availableStock <= 0) {
+    if (classification.outOfStock) {
       stockoutTrigger = {
         type: 'STOCKOUT',
         severity: 'CRITICAL',
@@ -79,7 +134,7 @@ export class AlertService {
         message: `Sản phẩm ${sku} hiện có sẵn 0 sản phẩm trong kho. Cần nhập hàng khẩn cấp.`,
         reasonJson: { availableStock, reorderPoint, stockoutScore: 100 },
       };
-    } else if (availableStock <= reorderPoint || stockoutScore >= 50) {
+    } else if (classification.stockoutRisk) {
       const sev: AlertSeverity =
         stockoutSeverity === 'CRITICAL' ? 'CRITICAL' : stockoutSeverity === 'HIGH' ? 'WARNING' : 'INFO';
       stockoutTrigger = {
@@ -112,10 +167,10 @@ export class AlertService {
         message: `Sản phẩm ${sku} không có giao dịch bán hàng trong ${daysSinceLastSale ?? 90} ngày qua. Cần xem xét giảm giá xả hàng.`,
         reasonJson: { daysSinceLastSale, overstockScore, deadStockSeverity },
       };
-    } else if (overstockScore >= 50) {
+    } else if (classification.overstockRisk) {
       overstockTrigger = {
         type: 'OVERSTOCK',
-        severity: overstockScore >= 75 ? 'WARNING' : 'INFO',
+        severity: overstockScore >= criticalRiskThreshold ? 'WARNING' : 'INFO',
         riskScore: overstockScore,
         title: `Cảnh báo thừa hàng: ${sku}`,
         message: `Sản phẩm ${sku} có mức tồn kho vượt ngưỡng an toàn so với tốc độ tiêu thụ hiện tại.`,
@@ -177,12 +232,12 @@ export class AlertService {
     // Upsert or reopen triggers
     for (const trigger of triggers) {
       const fingerprint = AlertService.computeFingerprint(storeId, stockItemId, trigger.type);
-      const existing = await this.prisma.alert.findUnique({
+      const existing = await db.alert.findUnique({
         where: { storeId_fingerprint: { storeId, fingerprint } },
       });
 
       if (!existing) {
-        const createdAlert = await this.prisma.alert.create({
+        const createdAlert = await db.alert.create({
           data: {
             storeId,
             stockItemId,
@@ -200,31 +255,16 @@ export class AlertService {
           },
         });
 
-        try {
-          const storeUsers = await this.prisma.user.findMany({
-            where: { OR: [{ storeId }, { role: 'ADMIN' }], isActive: true },
-            select: { id: true },
-          });
-          if (storeUsers.length > 0) {
-            await this.prisma.notification.createMany({
-              data: storeUsers.map((u) => ({
-                storeId,
-                userId: u.id,
-                type: 'alert',
-                title: trigger.title,
-                message: trigger.message,
-                entityType: 'ALERT',
-                entityId: String(createdAlert.id),
-                isRead: false,
-              })),
-            });
-          }
-        } catch (_err) {
-          // Ignore notification dispatch error so alert creation is not blocked
-        }
+        await this.notifyStoreUsers(db, storeId, createdAlert.id, trigger.title, trigger.message);
       } else {
+        // Edge-triggered: an alert the owner resolved by hand stays resolved while its condition
+        // persists; it reopens only after the engine has seen the condition clear (resolvedBy ENGINE).
+        if (existing.status === 'RESOLVED' && readAlertLifecycle(existing.reasonJson).resolvedBy === 'USER') {
+          continue;
+        }
+
         const shouldReopen = existing.status === 'RESOLVED';
-        await this.prisma.alert.update({
+        await db.alert.update({
           where: { id: existing.id },
           data: {
             severity: trigger.severity,
@@ -232,11 +272,18 @@ export class AlertService {
             confidence: new Prisma.Decimal(confidenceScore),
             title: trigger.title,
             message: trigger.message,
-            reasonJson: trigger.reasonJson as Prisma.InputJsonValue,
+            reasonJson: withAlertLifecycle(
+              trigger.reasonJson as Prisma.JsonValue,
+              shouldReopen ? {} : readAlertLifecycle(existing.reasonJson)
+            ),
             engineVersion,
             ...(shouldReopen ? { status: 'OPEN', openedAt: new Date(), resolvedAt: null } : {}),
           },
         });
+
+        if (shouldReopen) {
+          await this.notifyStoreUsers(db, storeId, existing.id, trigger.title, trigger.message);
+        }
       }
     }
 
@@ -253,17 +300,69 @@ export class AlertService {
       // If STOCKOUT is active, make sure LOW_STOCK is resolved
       if (type === 'LOW_STOCK' && activeTriggerTypes.has('STOCKOUT')) {
         const fp = AlertService.computeFingerprint(storeId, stockItemId, 'LOW_STOCK');
-        await this.prisma.alert.updateMany({
+        await db.alert.updateMany({
           where: { storeId, fingerprint: fp, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
           data: { status: 'RESOLVED', resolvedAt: new Date() },
         });
       } else if (!activeTriggerTypes.has(type)) {
         const fp = AlertService.computeFingerprint(storeId, stockItemId, type);
-        await this.prisma.alert.updateMany({
+        await db.alert.updateMany({
           where: { storeId, fingerprint: fp, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
           data: { status: 'RESOLVED', resolvedAt: new Date() },
         });
       }
+    }
+
+    // The condition of every inactive type has cleared: hand user-resolved alerts back to the engine
+    // so a future occurrence reopens them.
+    const inactiveFingerprints = allPossibleTypes
+      .filter((type) => !activeTriggerTypes.has(type))
+      .map((type) => AlertService.computeFingerprint(storeId, stockItemId, type));
+    if (inactiveFingerprints.length > 0) {
+      await db.$executeRaw`
+        UPDATE alerts
+        SET reasonJson = JSON_SET(reasonJson, '$.lifecycle.resolvedBy', 'ENGINE')
+        WHERE storeId = ${storeId}
+          AND fingerprint IN (${Prisma.join(inactiveFingerprints)})
+          AND status = 'RESOLVED'
+          AND JSON_UNQUOTE(JSON_EXTRACT(reasonJson, '$.lifecycle.resolvedBy')) = 'USER'`;
+    }
+  }
+
+  /**
+   * Notifies this store's operators about a new or reopened alert. Tenant isolation: alert content
+   * (SKU, product name) never goes to platform ADMIN accounts. A dispatch failure is logged and does
+   * not block the alert itself.
+   */
+  private async notifyStoreUsers(
+    db: Prisma.TransactionClient | PrismaClient,
+    storeId: number,
+    alertId: number,
+    title: string,
+    message: string
+  ) {
+    try {
+      const storeUsers = await db.user.findMany({
+        where: { storeId, isActive: true, role: { in: ['SHOP_OWNER', 'WAREHOUSE_STAFF'] } },
+        select: { id: true },
+      });
+      if (storeUsers.length > 0) {
+        await db.notification.createMany({
+          data: storeUsers.map((u) => ({
+            storeId,
+            userId: u.id,
+            type: 'alert',
+            title,
+            message,
+            entityType: 'ALERT',
+            entityId: String(alertId),
+            isRead: false,
+          })),
+        });
+      }
+    } catch (err) {
+      // Ignore notification dispatch error so alert creation is not blocked
+      logger.warn('alert_notification_dispatch_failed', { storeId, alertId, error: err });
     }
   }
 
@@ -276,7 +375,8 @@ export class AlertService {
       stockItemId?: number;
       page: number;
       limit: number;
-    }
+    },
+    role?: Role
   ) {
     const where: Prisma.AlertWhereInput = {
       storeId,
@@ -299,7 +399,8 @@ export class AlertService {
               id: true,
               sku: true,
               name: true,
-              costPrice: true,
+              // D9: cost is not even read for staff; the response middleware is only a second layer.
+              costPrice: canViewFinancials(role),
               sellingPrice: true,
             },
           },
@@ -346,70 +447,151 @@ export class AlertService {
     return this.getStats(storeId);
   }
 
-  async acknowledgeAlert(storeId: number, alertId: number, userId?: number) {
+  /**
+   * Store operators (owner or staff) acknowledge an alert to report "seen / escalated".
+   * When staff acknowledge, every active owner of the store is notified in the same transaction.
+   * Allowed transitions: OPEN -> ACKNOWLEDGED; repeating on ACKNOWLEDGED is a no-op.
+   */
+  async acknowledgeAlert(storeId: number, alertId: number, userId?: number, options: AcknowledgeAlertOptions = {}) {
     return this.prisma.$transaction(async (tx) => {
-    const alert = await tx.alert.findUnique({
-      where: { id: alertId },
-    });
+      const alert = await tx.alert.findFirst({
+        where: { id: alertId, storeId },
+      });
 
-    if (!alert || alert.storeId !== storeId) {
-      throw new NotFoundError('Không tìm thấy cảnh báo');
-    }
+      if (!alert) {
+        throw new NotFoundError('Không tìm thấy cảnh báo');
+      }
 
-    const updated = await tx.alert.update({
-      where: { id: alertId },
-      data: { status: 'ACKNOWLEDGED' },
-    });
+      if (alert.status === 'RESOLVED') {
+        throw new ConflictError('ALERT_ALREADY_RESOLVED');
+      }
 
-    await AuditLogService.create(tx, {
-      storeId,
-      userId: userId ?? null,
-      action: 'ALERT_ACKNOWLEDGED',
-      entityType: 'ALERT',
-      entityId: alertId,
-      beforeJson: { status: alert.status },
-      afterJson: {
-        status: updated.status,
-        type: updated.type,
-        stockItemId: updated.stockItemId,
-      },
-    });
+      if (alert.status === 'ACKNOWLEDGED' && !options.note) {
+        return alert;
+      }
 
-    return updated;
+      const note = options.note?.trim() || null;
+      const lifecycle: AlertLifecycleMeta = {
+        ...readAlertLifecycle(alert.reasonJson),
+        acknowledgedById: userId ?? null,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgementNote: note,
+      };
+
+      const updated = await tx.alert.update({
+        where: { id: alert.id },
+        data: {
+          status: 'ACKNOWLEDGED',
+          reasonJson: withAlertLifecycle(alert.reasonJson, lifecycle),
+        },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: userId ?? null,
+        action: 'ALERT_ACKNOWLEDGED',
+        entityType: 'ALERT',
+        entityId: alertId,
+        beforeJson: { status: alert.status },
+        afterJson: {
+          status: updated.status,
+          type: updated.type,
+          stockItemId: updated.stockItemId,
+          note,
+        },
+      });
+
+      if (options.actorRole === 'WAREHOUSE_STAFF') {
+        await this.notifyOwnersOfAcknowledgement(tx, storeId, updated, userId, note);
+      }
+
+      return updated;
     });
   }
 
+  /**
+   * Owner-only manual resolution. The engine will not immediately reopen a user-resolved alert
+   * while its condition persists. Resolving an already resolved alert is an idempotent no-op.
+   */
   async resolveAlert(storeId: number, alertId: number, userId?: number) {
     return this.prisma.$transaction(async (tx) => {
-    const alert = await tx.alert.findUnique({
-      where: { id: alertId },
-    });
+      const alert = await tx.alert.findFirst({
+        where: { id: alertId, storeId },
+      });
 
-    if (!alert || alert.storeId !== storeId) {
-      throw new NotFoundError('Không tìm thấy cảnh báo');
+      if (!alert) {
+        throw new NotFoundError('Không tìm thấy cảnh báo');
+      }
+
+      if (alert.status === 'RESOLVED') {
+        return alert;
+      }
+
+      const updated = await tx.alert.update({
+        where: { id: alert.id },
+        data: {
+          status: 'RESOLVED',
+          resolvedAt: new Date(),
+          reasonJson: withAlertLifecycle(alert.reasonJson, {
+            ...readAlertLifecycle(alert.reasonJson),
+            resolvedBy: 'USER',
+            resolvedById: userId ?? null,
+          }),
+        },
+      });
+
+      await AuditLogService.create(tx, {
+        storeId,
+        userId: userId ?? null,
+        action: 'ALERT_RESOLVED',
+        entityType: 'ALERT',
+        entityId: alertId,
+        beforeJson: { status: alert.status },
+        afterJson: {
+          status: updated.status,
+          type: updated.type,
+          stockItemId: updated.stockItemId,
+          resolvedAt: updated.resolvedAt,
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  private async notifyOwnersOfAcknowledgement(
+    tx: Prisma.TransactionClient,
+    storeId: number,
+    alert: { id: number; title: string },
+    userId: number | undefined,
+    note: string | null
+  ) {
+    const [owners, actor] = await Promise.all([
+      tx.user.findMany({
+        where: { storeId, role: 'SHOP_OWNER', isActive: true },
+        select: { id: true },
+      }),
+      userId
+        ? tx.user.findFirst({ where: { id: userId, storeId }, select: { fullName: true, email: true } })
+        : Promise.resolve(null),
+    ]);
+
+    if (owners.length === 0) {
+      return;
     }
 
-    const updated = await tx.alert.update({
-      where: { id: alertId },
-      data: { status: 'RESOLVED', resolvedAt: new Date() },
-    });
-
-    await AuditLogService.create(tx, {
-      storeId,
-      userId: userId ?? null,
-      action: 'ALERT_RESOLVED',
-      entityType: 'ALERT',
-      entityId: alertId,
-      beforeJson: { status: alert.status },
-      afterJson: {
-        status: updated.status,
-        type: updated.type,
-        stockItemId: updated.stockItemId,
-        resolvedAt: updated.resolvedAt,
-      },
-    });
-
-    return updated;
+    const actorName = actor?.fullName || actor?.email || 'Nhân viên kho';
+    await tx.notification.createMany({
+      data: owners.map((owner) => ({
+        storeId,
+        userId: owner.id,
+        type: 'alert_ack',
+        title: `${actorName} đã xác nhận cảnh báo`,
+        message: note ? `${alert.title}. Ghi chú: ${note}` : alert.title,
+        entityType: 'ALERT',
+        entityId: String(alert.id),
+        isRead: false,
+      })),
     });
   }
 }

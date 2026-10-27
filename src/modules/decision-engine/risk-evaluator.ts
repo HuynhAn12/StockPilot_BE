@@ -2,8 +2,39 @@ import { DailySalesSummaryAggregateRow } from '../daily-sales-summary/daily-sale
 
 export interface SafetyStockResult {
   safetyStock: number;
-  method: 'STATISTICAL' | 'FALLBACK_SAFETY_DAYS';
+  method: 'STATISTICAL' | 'FALLBACK_SAFETY_DAYS' | 'INSUFFICIENT_DATA';
   zScore: number;
+}
+
+/** Minimum expected units in the recent window before a z-test on daily counts is meaningful. */
+export const MIN_EXPECTED_UNITS_FOR_ANOMALY = 5;
+
+/**
+ * Inverse standard normal CDF (Acklam's rational approximation, |relative error| < 1.15e-9).
+ * Deterministic and monotonic, replacing the former step table that mapped 0.85 above 0.90.
+ */
+export function inverseStandardNormal(p: number): number {
+  if (p <= 0 || p >= 1) {
+    throw new RangeError('Probability must be in (0, 1)');
+  }
+
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687, 138.357751867269, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866, 66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996, 3.754408661907416];
+  const pLow = 0.02425;
+
+  if (p < pLow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p > 1 - pLow) {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  const q = p - 0.5;
+  const r = q * q;
+  return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
 
 export interface RiskEvaluationResult {
@@ -29,12 +60,10 @@ export interface RiskEvaluationResult {
 }
 
 export class RiskEvaluator {
+  /** z = Φ⁻¹(serviceLevel), rounded to 3 decimals (0.90 -> 1.282, 0.95 -> 1.645, 0.99 -> 2.326). */
   public static getZScoreForServiceLevel(serviceLevel: number): number {
-    if (serviceLevel >= 0.99) return 2.326;
-    if (serviceLevel >= 0.975) return 1.96;
-    if (serviceLevel >= 0.95) return 1.645;
-    if (serviceLevel >= 0.9) return 1.282;
-    return 1.645; // Default 95%
+    const bounded = Math.min(0.9999, Math.max(0.5, serviceLevel));
+    return Number(inverseStandardNormal(bounded).toFixed(3));
   }
 
   /**
@@ -73,6 +102,38 @@ export class RiskEvaluator {
    */
   calculateReorderPoint(avg30: number, leadTimeDays: number, safetyStock: number): number {
     return Math.ceil(avg30 * Math.max(1, leadTimeDays) + safetyStock);
+  }
+
+  /**
+   * Order-up-to replenishment quantity, only when available stock is at or below the reorder point:
+   *   Q = max(0, ceil(μ · (L + targetCoverageDays) + SS − available)), capped at maxStock − available.
+   * Without sufficient history μ is unreliable, so the fact-based fallback refills to maxStock
+   * (or minStock when no max is configured). Assumes no open purchase orders (none are modelled).
+   */
+  calculateReorderQuantity(params: {
+    availableStock: number;
+    reorderPoint: number;
+    avgDailyDemand: number;
+    leadTimeDays: number;
+    targetCoverageDays: number;
+    safetyStock: number;
+    minStockLevel: number;
+    maxStockLevel: number;
+    hasSufficientHistory: boolean;
+  }): number {
+    const { availableStock, reorderPoint, avgDailyDemand, leadTimeDays, targetCoverageDays, safetyStock, minStockLevel, maxStockLevel, hasSufficientHistory } = params;
+    if (availableStock > reorderPoint) {
+      return 0;
+    }
+
+    const cap = maxStockLevel > 0 ? Math.max(0, maxStockLevel - availableStock) : Number.POSITIVE_INFINITY;
+    if (!hasSufficientHistory) {
+      const target = maxStockLevel > 0 ? maxStockLevel : minStockLevel;
+      return Math.max(0, target - availableStock);
+    }
+
+    const targetLevel = avgDailyDemand * (Math.max(1, leadTimeDays) + targetCoverageDays) + safetyStock;
+    return Math.min(cap, Math.max(0, Math.ceil(targetLevel - availableStock)));
   }
 
   /**
@@ -185,6 +246,9 @@ export class RiskEvaluator {
 
   /**
    * Evaluates Slow Moving and Dead Stock status.
+   * `daysSinceLastSale` is the number of days without a sale: since the last sale, or since the SKU was
+   * first stocked when it never sold. Critical dead stock starts at twice the dead-stock threshold
+   * (default 90 -> 180 days, as in docs/next-steps.md).
    */
   evaluateSlowAndDeadStock(params: {
     availableStock: number;
@@ -216,7 +280,7 @@ export class RiskEvaluator {
     const isDeadStock = daysSinceLastSale >= deadStockDays;
 
     let severity: 'NONE' | 'WARNING' | 'CRITICAL' = 'NONE';
-    if (daysSinceLastSale >= 180) {
+    if (daysSinceLastSale >= deadStockDays * 2) {
       severity = 'CRITICAL';
     } else if (isDeadStock || isSlowMoving) {
       severity = 'WARNING';
@@ -235,7 +299,13 @@ export class RiskEvaluator {
   }
 
   /**
-   * Detects unusual demand spikes or drops based on recent 3 days vs 30 days history.
+   * Detects unusual demand spikes or drops of the recent window against a disjoint baseline.
+   *
+   * The statistic compares a mean of n recent days with the baseline, so its standard error is σ/√n:
+   *   z = (x̄_recent − μ_baseline) / (σ_baseline / √n).
+   * The baseline must not contain the recent days (the caller passes a disjoint window). For sparse
+   * count data (expected units in the window < MIN_EXPECTED_UNITS_FOR_ANOMALY) the normal
+   * approximation is invalid, so only a "new demand" pattern is reported.
    */
   detectUnusualDemand(
     recent3Series: DailySalesSummaryAggregateRow[],
@@ -246,17 +316,22 @@ export class RiskEvaluator {
     type: 'NONE' | 'CRITICAL_SPIKE' | 'HIGH_SPIKE' | 'DEMAND_DROP' | 'NEW_DEMAND_SPIKE';
     zScore: number;
   } {
+    const n = recent3Series.length;
     const recentQty = recent3Series.reduce((acc, r) => acc + r.netSoldQty, 0);
-    const recentAvg = recent3Series.length > 0 ? recentQty / recent3Series.length : 0;
+    const recentAvg = n > 0 ? recentQty / n : 0;
 
-    if (stdDev30 <= 0.05) {
-      if (mean30 <= 0.05 && recentAvg > 0) {
+    if (n === 0) {
+      return { isAnomaly: false, type: 'NONE', zScore: 0 };
+    }
+
+    if (mean30 * n < MIN_EXPECTED_UNITS_FOR_ANOMALY || stdDev30 <= 0.05) {
+      if (mean30 <= 0.05 && recentQty >= 3) {
         return { isAnomaly: true, type: 'NEW_DEMAND_SPIKE', zScore: 3.5 };
       }
       return { isAnomaly: false, type: 'NONE', zScore: 0 };
     }
 
-    const zScore = Number(((recentAvg - mean30) / stdDev30).toFixed(2));
+    const zScore = Number(((recentAvg - mean30) / (stdDev30 / Math.sqrt(n))).toFixed(2));
 
     if (zScore >= 3.0) {
       return { isAnomaly: true, type: 'CRITICAL_SPIKE', zScore };

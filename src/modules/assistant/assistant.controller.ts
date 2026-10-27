@@ -35,8 +35,9 @@ export class AssistantController {
         question: req.query.question,
       });
 
-      const result = await this.service.explainSku(storeId, query.stockItemId, query.question);
+      const result = await this.service.explainSku(storeId, query.stockItemId, query.question, req.user!.role);
 
+      // Defense in depth: the service already builds staff text without financial content.
       if (req.user?.role === 'WAREHOUSE_STAFF') {
         result.explanation = result.explanation
           .replace(/ \| \*\*Giá vốn:\*\* [^|]+ \| \*\*Biên lợi nhuận:\*\* \*\*[^*]+\*\*/g, '')
@@ -76,15 +77,14 @@ export class AssistantController {
       const storeId = req.user!.storeId!;
       await assertAiQuota(storeId);
 
-      const result = await this.service.explainStoreOverview(storeId);
+      const result = await this.service.explainStoreOverview(storeId, req.user!.role);
 
+      // Defense in depth: the service already omits capital values and pending pricing counts
+      // (metrics are projected by toOverviewSummaryView) for staff.
       if (req.user?.role === 'WAREHOUSE_STAFF') {
         result.summary = result.summary
           .replace(/\(Vốn đọng: \*\*[^*]+\*\*\)/g, '')
           .replace(/tab "Gợi ý giá bán" để duyệt các mức giá mới tối ưu lợi nhuận/g, 'tab "Cảnh báo rủi ro" để kiểm đếm');
-        if (result.metrics) {
-          result.metrics.totalDeadStockCostValue = 0;
-        }
         result.pendingRecommendationsCount = 0;
       }
 
@@ -138,7 +138,12 @@ export class AssistantController {
       }
 
       await assertAiQuota(storeId);
-      const result = await this.service.answerQuestion(storeId, q, stockItemId ? Number(stockItemId) : undefined);
+      const result = await this.service.answerQuestion(
+        storeId,
+        q,
+        stockItemId ? Number(stockItemId) : undefined,
+        req.user!.role
+      );
 
       const interaction = await prisma.aiInteraction.create({
         data: {

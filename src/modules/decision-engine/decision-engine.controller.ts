@@ -1,16 +1,20 @@
 import { Request, Response, NextFunction } from 'express';
 import { DecisionEngineService } from './decision-engine.service';
 import { EngineConfigService } from './engine-config.service';
+import { DecisionJobsService } from './decision-jobs.service';
 import {
   decisionSkuParamsSchema,
   decisionOverviewQuerySchema,
+  recalculateBodySchema,
   updateEngineConfigSchema,
 } from './decision-engine.schema';
+import { toEngineConfigView, toOverviewSummaryView, toSkuDecisionView } from './decision-view';
 
 export class DecisionEngineController {
   constructor(
     private readonly service: DecisionEngineService = new DecisionEngineService(),
-    private readonly configService: EngineConfigService = new EngineConfigService()
+    private readonly configService: EngineConfigService = new EngineConfigService(),
+    private readonly jobsService: DecisionJobsService = new DecisionJobsService()
   ) {}
 
   analyzeSku = async (req: Request, res: Response, next: NextFunction) => {
@@ -18,10 +22,11 @@ export class DecisionEngineController {
       const storeId = req.user!.storeId!;
       const { stockItemId } = decisionSkuParamsSchema.parse(req.params);
 
-      const result = await this.service.analyzeSku(storeId, stockItemId, { persist: false });
+      // Read-only: latest snapshot (+ freshness), never recomputes or writes.
+      const { analysis, freshness } = await this.service.getSkuDecision(storeId, stockItemId);
       return res.status(200).json({
         success: true,
-        data: result,
+        data: { ...toSkuDecisionView(analysis, req.user!.role), ...freshness },
       });
     } catch (error) {
       next(error);
@@ -34,10 +39,11 @@ export class DecisionEngineController {
       const query = decisionOverviewQuerySchema.parse(req.query);
 
       const result = await this.service.getOverview(storeId, query);
+      const role = req.user!.role;
       return res.status(200).json({
         success: true,
-        data: result.items,
-        summary: result.summary,
+        data: result.items.map(({ analysis, freshness }) => ({ ...toSkuDecisionView(analysis, role), ...freshness })),
+        summary: toOverviewSummaryView(result.summary, role),
         pagination: result.pagination,
       });
     } catch (error) {
@@ -48,8 +54,10 @@ export class DecisionEngineController {
   recalculate = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
+      const options = recalculateBodySchema.parse(req.body);
 
-      const result = await this.service.recalculateStore(storeId);
+      // Bounded and exclusive per store (409 while another recalculation runs); see DecisionJobsService.
+      const result = await this.jobsService.recalculateStore(storeId, options);
       return res.status(200).json({
         success: true,
         data: result,
@@ -66,7 +74,7 @@ export class DecisionEngineController {
       const config = await this.configService.getConfig(storeId);
       return res.status(200).json({
         success: true,
-        data: config,
+        data: toEngineConfigView(config, req.user!.role),
       });
     } catch (error) {
       next(error);
