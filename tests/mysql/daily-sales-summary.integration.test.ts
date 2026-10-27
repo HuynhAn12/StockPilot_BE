@@ -5,6 +5,7 @@ import { ReturnService } from '../../src/modules/returns/return.service';
 import { HistoricalSalesService } from '../../src/modules/historical-sales/historical-sales.service';
 import { runRebuildDailySalesSummaryV10 } from '../../scripts/rebuild-daily-sales-summary-v10';
 import { DecisionEngineService } from '../../src/modules/decision-engine/decision-engine.service';
+import { BusinessSyncService } from '../../src/common/services/business-sync.service';
 
 /**
  * Real MySQL 8.4 DailySalesSummary Integration Test Suite
@@ -442,6 +443,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     });
     await orderService.confirmOrder(storeId, userId, draftOrder.id);
     const fulfilledOrder = await orderService.fulfillOrder(storeId, draftOrder.id);
+    await BusinessSyncService.getInstance(prisma).flush();
 
     await prisma.order.update({
       where: { id: fulfilledOrder.id },
@@ -507,6 +509,7 @@ const isLiveDb = Boolean(rawDbUrl && isSafeTestDatabase(rawDbUrl));
     });
     await orderService.confirmOrder(storeId, userId, draftOrder.id);
     const fulfilledOrder = await orderService.fulfillOrder(storeId, draftOrder.id);
+    await BusinessSyncService.getInstance(prisma).flush();
 
     await prisma.order.update({
       where: { id: fulfilledOrder.id },

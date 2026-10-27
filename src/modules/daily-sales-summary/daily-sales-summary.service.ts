@@ -22,12 +22,31 @@ export interface DailySalesSummaryAggregateRow {
   orderCount: number;
 }
 
+export function isTransientConflictError(error: unknown): boolean {
+  if (!error) return false;
+  const err = error as any;
+  if (err.code === 'P2034') return true;
+  if (typeof err.message === 'string') {
+    const msg = err.message.toLowerCase();
+    if (
+      msg.includes('write conflict') ||
+      msg.includes('deadlock') ||
+      msg.includes('lock wait timeout') ||
+      msg.includes('restart transaction')
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export class DailySalesSummaryService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
 
   /**
-   * Rebuilds DailySalesSummary records for a store in a given date range.
+   * Rebuilds DailySalesSummary facts for a store across a date range.
    * Materializes facts from FULFILLED Orders, HistoricalSales, and COMPLETED Returns.
+   * Includes exponential backoff retry for transient MySQL deadlocks/write conflicts.
    */
   async rebuildDailySalesSummary(
     storeId: number,
@@ -39,21 +58,25 @@ export class DailySalesSummaryService {
     const summaryStart = businessDateKeyToDate(fromKey);
     const summaryEnd = businessDateKeyToDate(toKey);
 
-    return this.prisma.$transaction(async (tx) => {
-      const scopedSummaryWhere = {
-        storeId,
-        summaryDate: {
-          gte: summaryStart,
-          lte: summaryEnd,
-        },
-        ...(stockItemIds && stockItemIds.length > 0 ? { stockItemId: { in: stockItemIds } } : {}),
-      };
+    const scopedSummaryWhere = {
+      storeId,
+      summaryDate: {
+        gte: summaryStart,
+        lte: summaryEnd,
+      },
+      ...(stockItemIds && stockItemIds.length > 0 ? { stockItemId: { in: stockItemIds } } : {}),
+    };
 
-      await tx.dailySalesSummary.deleteMany({
-        where: scopedSummaryWhere,
-      });
+    const MAX_RETRIES = 5;
 
-      // 1. Fetch relevant StockItems
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          await tx.dailySalesSummary.deleteMany({
+            where: scopedSummaryWhere,
+          });
+
+          // 1. Fetch relevant StockItems
       const stockItems = await tx.stockItem.findMany({
         where: {
           storeId,
@@ -239,6 +262,14 @@ export class DailySalesSummaryService {
       let processedCount = 0;
       const entries = Array.from(map.values());
 
+      // Deterministic lock ordering: sort by stockItemId asc, then summaryDate asc
+      entries.sort((a, b) => {
+        if (a.stockItemId !== b.stockItemId) {
+          return a.stockItemId - b.stockItemId;
+        }
+        return a.summaryDate.getTime() - b.summaryDate.getTime();
+      });
+
       for (const entry of entries) {
         const netSoldQty = entry.grossSoldQty - entry.returnQty;
         const netRevenue = entry.grossRevenue.minus(entry.refundAmount);
@@ -288,6 +319,17 @@ export class DailySalesSummaryService {
         updatedDays: entries.length,
       };
     });
+      } catch (error) {
+        if (isTransientConflictError(error) && attempt < MAX_RETRIES) {
+          const jitter = Math.floor(Math.random() * 40);
+          const delayMs = 50 * Math.pow(2, attempt - 1) + jitter;
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('rebuildDailySalesSummary failed after retries');
   }
 
   /**
