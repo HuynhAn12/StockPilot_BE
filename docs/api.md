@@ -112,18 +112,19 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | POST | `/import/historical-sales/preview` | Bearer | Compatibility alias | Yes | same as `/historical-sales/preview` | same response | No |
 | POST | `/import/historical-sales/commit` | Bearer | Compatibility alias | Yes | same as `/historical-sales/commit` | same response | Yes |
 | GET | `/import/historical-sales` | Bearer | Compatibility alias | Yes | same as `/historical-sales` | same response | No |
-| GET | `/decision-engine/sku/:stockItemId` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `stockItemId` | deterministic SKU analysis | No |
-| GET | `/decision-engine/overview` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ riskFilter?, page?, limit? }` | paged overview | No |
-| POST | `/decision-engine/recalculate` | Bearer | `SHOP_OWNER` | Yes | optional body per implementation | persisted alerts/snapshots/recommendations | No |
-| GET | `/decision-engine/config` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | none | engine config | No |
-| PUT | `/decision-engine/config` | Bearer | `SHOP_OWNER` | Yes | partial engine config fields | updated config | No |
+| GET | `/decision-engine/sku/:stockItemId` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `stockItemId` | latest persisted SKU analysis + `stale`, `snapshotAt`, `source`; role-projected (see Decision Engine Read Model) | No |
+| GET | `/decision-engine/overview` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ riskFilter?, page?, limit? }` | paged overview from latest snapshots; items carry `stale`, `snapshotAt`, `source`; staff summary omits `totalDeadStockCostValue` | No |
+| POST | `/decision-engine/recalculate` | Bearer | `SHOP_OWNER` | Yes | optional `{ afterId?, limit? }` (empty body = first page) | `{ storeId, summariesUpdatedDays, totalSkus, successCount, failureCount, processed, failedStockItemIds, remaining, nextCursor, completedAt }`; `409 DECISION_RECALCULATION_IN_PROGRESS` while one runs for the store | No |
+| GET | `/decision-engine/config` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | none | engine config; staff view omits `minimumMarginPct`, `maxMarkdownPct`, `maxMarkupPct` | No |
+| PUT | `/decision-engine/config` | Bearer | `SHOP_OWNER` | Yes | partial engine config fields | updated config; `400` unless `lowRiskThreshold < highRiskThreshold < criticalRiskThreshold` and `slowMovingDays < deadStockDays` after merging | No |
 | GET | `/decision-engine/policy/:stockItemId?` | Bearer | Compatibility alias | Yes | optional path `stockItemId` | same config/policy behavior | No |
 | PUT | `/decision-engine/policy/:stockItemId?` | Bearer | Compatibility alias | Yes | same as config update | same response | No |
 | GET | `/alerts` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ status?, type?, severity?, stockItemId?, page?, limit? }` | alert page | No |
-| POST | `/alerts/:id/acknowledge` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | acknowledged alert | No |
-| POST | `/alerts/:id/resolve` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id` | resolved alert | No |
-| GET | `/pricing` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ status?, stockItemId?, page?, limit? }` | recommendation page | No |
-| POST | `/pricing/:id/accept` | Bearer | `SHOP_OWNER` | Yes | `{ applyToStockItem? }` | accepted recommendation | No |
+| POST | `/alerts/:id/acknowledge` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | path `id`, optional `{ note? }` (max 500) | acknowledged alert; staff acknowledgement notifies store owners; `409 ALERT_ALREADY_RESOLVED` | No |
+| POST | `/alerts/:id/resolve` | Bearer | `SHOP_OWNER` | Yes | path `id` | resolved alert (idempotent) | No |
+| GET | `/pricing` | Bearer | `SHOP_OWNER` | Yes | `{ status?, stockItemId?, page?, limit? }` | recommendation page | No |
+| GET | `/pricing/history` | Bearer | `SHOP_OWNER` | Yes | none | last 50 price changes | No |
+| POST | `/pricing/:id/accept` | Bearer | `SHOP_OWNER` | Yes | `{ applyToStockItem? }` | accepted recommendation; `409` `STALE_PRICING_RECOMMENDATION`, `STALE_PRICING_RECOMMENDATION_COST_CHANGED`, `PRICING_RECOMMENDATION_BELOW_FLOOR`, `PRICING_RECOMMENDATION_EXPIRED` | No |
 | POST | `/pricing/:id/reject` | Bearer | `SHOP_OWNER` | Yes | path `id` | rejected recommendation | No |
 | POST | `/pricing/:id/modify` | Bearer | `SHOP_OWNER` | Yes | `{ customPrice, applyToStockItem? }` | modified recommendation | No |
 | GET | `/recommendations` | Bearer | Compatibility alias | Yes | same as `/pricing` | same response | No |
@@ -132,6 +133,28 @@ Supported mutation endpoints accept `Idempotency-Key`.
 | POST | `/recommendations/:id/modify` | Bearer | Compatibility alias | Yes | same as `/pricing/:id/modify` | same response | No |
 | GET | `/assistant/sku/:stockItemId` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ question? }` | explanation of authorized SKU analysis | No |
 | GET | `/assistant/overview` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ timeframeDays? }` | store summary explanation | No |
+| POST | `/assistant/chat` | Bearer | `SHOP_OWNER`, `WAREHOUSE_STAFF` | Yes | `{ question? (max 1000), stockItemId? }` | template answer; staff never receive cost, margin, revenue, capital, or pricing recommendations | No |
+
+## Decision Engine Read Model
+
+`GET /decision-engine/sku/:stockItemId` and `GET /decision-engine/overview` are read-only. They return the latest `DecisionSnapshot`; when a SKU has no usable snapshot the analysis is computed in memory without writing (`source: "LIVE"`).
+
+Additive response fields (existing fields are unchanged):
+
+| Field | Meaning |
+|---|---|
+| `stale` | `true` when the snapshot predates the SKU's latest stock movement, price/cost/threshold update, or engine config update, is older than 26 hours, was produced by another engine version, or does not exist |
+| `snapshotAt` | when the persisted analysis was calculated (`null` for `LIVE`) |
+| `source` | `SNAPSHOT` or `LIVE` |
+| `dataStatus` | `OK`, or `INSUFFICIENT_DATA` when the SKU has fewer than `minimumHistoryDays` of exposure: statistical ROP/SS, days of cover, anomaly detection, and demand-based price changes are suppressed |
+| `historyDays` | exposure-based history depth used by the estimates (capped at 90) |
+| `coverage.reorderQuantity` | suggested order quantity when available stock is at or below the reorder point, else `0` |
+| `risk.daysWithoutSale` | days since the last sale, or since first stock-in when the SKU never sold |
+| `engineVersion` | `DECISION_ENGINE_V2` |
+
+Role projection (D9): `WAREHOUSE_STAFF` receive an allowlisted view: no `costPrice`, `minimumPrice`, `expectedMarginPct`, `deadStockCostValue`, `pricingEvaluation`, or margin/markdown config; `pricing` contains only `sellingPrice` and `factors` is `[]`.
+
+Recalculation happens on write paths only: after order confirm/fulfil/cancel, POS sales, inventory movements, returns, stock-take completion, product price/cost/active changes, product import, historical sales import, pricing decisions (post-commit, coalesced), in the nightly job, and through `POST /decision-engine/recalculate`.
 
 ## Contract Rules
 

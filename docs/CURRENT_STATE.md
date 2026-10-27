@@ -69,10 +69,10 @@ The executable schema includes the v1.2 foundation models:
 - Daily sales summary services
 - StockTake workflow
 - Minimal per-user Notification Center
-- Decision Engine
-- Alerts
-- Pricing recommendations
-- Assistant explanations
+- Decision Engine V2: snapshot-based read model with freshness flags, transactional idempotent recomputation, post-commit coalescing triggers, nightly reconciliation job, bounded owner recalculation, `INSUFFICIENT_DATA` gating, and reorder quantity
+- Alerts with staff acknowledgement (owner notification) and owner-only resolution, edge-triggered reopening
+- Pricing recommendations with expiry and accept-time revalidation (owner only)
+- Assistant explanations (template mode, role-aware; external LLM integration deferred)
 - Phase 3A tenant hostname resolution for `{storeCode}.stockpilot.vn`
 - Phase 3B owner-only PayOS credential configuration foundation
 - High-value audit logging for auth, users, products, categories, inventory, orders, returns, stock takes, pricing decisions, alerts, imports, and payment configuration changes. Category and StockTake cancel audit writes are transaction-bound with their business mutations.
@@ -101,6 +101,7 @@ Latest verified evidence:
 - `npm run build`: passed
 - Focused Sprint 1 closeout tests: `npm test -- tests/auth.test.ts tests/api-integration.test.ts tests/order-flow.test.ts` passed, 3 suites / 37 tests.
 - `npm test`: 31 suites / 219 tests passed, including unit, API integration, real MySQL integration, and concurrency tests.
+- Decision Engine audit and V2 (branch `Sang`, uncommitted working tree at the time of writing): `npm test` 40 suites / 373 tests passed against a local MySQL 8.0.46 test schema (`TEST_DATABASE_URL`), including new suites `tests/decision-rbac.test.ts`, `tests/unit/decision-engine-v2.unit.test.ts`, `tests/unit/decision-triggers.unit.test.ts`, `tests/mysql/decision-engine.integration.test.ts`, and `tests/mysql/decision-jobs.integration.test.ts`. CI (MySQL 8.4) has not run on these changes yet.
 - `npm run test:coverage`: latest evidence is 25 suites / 177 tests from the Sprint 1 closeout; not rerun in the latest audit coverage pass.
 - `npm run handoff:check`: passed with `HANDOFF_CHECK_OK` and the expected local `.env` warning.
 - `npm audit`: passed with 0 vulnerabilities.

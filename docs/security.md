@@ -42,6 +42,9 @@ Store-scoped routes use explicit role checks where business authority differs fr
 - Inventory: `SHOP_OWNER` and `WAREHOUSE_STAFF` may read balances/movements and perform inflow, outflow, and audit adjustment.
 - POS: `SHOP_OWNER` and `WAREHOUSE_STAFF` may create cash POS sales through the dedicated POS endpoint.
 - Returns: `WAREHOUSE_STAFF` may read returns; only `SHOP_OWNER` may create returns.
+- Decision Engine: both roles may read SKU analysis, overview, and config; only `SHOP_OWNER` may change config or trigger `POST /decision-engine/recalculate`.
+- Alerts: both roles may read and acknowledge; only `SHOP_OWNER` may resolve.
+- Pricing: recommendations (list, accept, reject, modify) and price history are `SHOP_OWNER` only (D9).
 - Exports: operational product, inventory, and alert exports are available to store operators; owner-sensitive order, sales, returns, decision report, and pricing recommendation exports are `SHOP_OWNER` only.
 - Payment provider credentials: only `SHOP_OWNER` may configure PayOS credentials. `WAREHOUSE_STAFF` may eventually create POS payments, but must not read or configure PayOS credentials.
 
@@ -90,6 +93,15 @@ Request IDs are assigned for traceability.
 ## Sensitive Fields
 
 The sensitive fields middleware masks cost and margin fields for `WAREHOUSE_STAFF` responses where applicable.
+
+Decision Engine and Assistant responses do not rely on that masking alone (D9 / OWASP API3):
+
+- `decision-view.ts` builds the staff view of SKU analysis, overview summary, and engine config from an allowlist; TypeScript fails the build if a new field is not explicitly projected.
+- Fields that allow back-solving cost (price floor, minimum margin, markdown policy, capital values, pricing factors) are excluded, not only `costPrice`.
+- The alert list does not even select `costPrice` for staff.
+- The template assistant receives the viewer role and builds staff answers without cost, margin, revenue, capital, or pricing content; the previous regex redaction remains only as a second layer.
+- Pricing recommendation notifications are generated for owners only, and pricing rows created earlier for non-owners are hidden.
+- The middleware key list also includes `minimumPrice`, `minimumMarginPct`, `maxMarkdownPct`, `maxMarkupPct`, `expectedMarginPct`, `deadStockCostValue`, `totalDeadStockCostValue`, `costValue`, `lossPerUnit`, `curMargin`, `totalEstimateCost`, `totalTiedCapital`, `pricingEvaluation`, and `pricingRecommendation`.
 
 CSV exports do not pass through JSON response masking. Export routes therefore enforce role-specific access, and product/inventory CSV generation omits cost price for `WAREHOUSE_STAFF`.
 

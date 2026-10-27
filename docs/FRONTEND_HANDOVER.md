@@ -271,12 +271,15 @@ graph LR
 | Method | Endpoint | Quyền | Mô tả |
 |---|---|---|---|
 | `GET` | `/analytics/dashboard` | `SHOP_OWNER` | Dữ liệu tổng quan: Doanh thu, số đơn, giá trị tồn kho, cảnh báo hết hàng (`?timeframe=today/week/month`). |
-| `GET` | `/decision-engine/overview` | Tất cả | Tổng quan đánh giá rủi ro hàng tồn, nguy cơ tồn kho ứ đọng, hàng bán chạy. |
-| `GET` | `/decision-engine/sku/:stockItemId` | Tất cả | Phân tích chi tiết chu kỳ bán, vận tốc bán, ngày tồn kho còn lại của 1 SKU. |
+| `GET` | `/decision-engine/overview` | Tất cả | Tổng quan đánh giá rủi ro hàng tồn, nguy cơ tồn kho ứ đọng, hàng bán chạy. Mỗi item có thêm `stale`, `snapshotAt`, `source`, `dataStatus`, `coverage.reorderQuantity`. Nhân viên không nhận `totalDeadStockCostValue`. |
+| `GET` | `/decision-engine/sku/:stockItemId` | Tất cả | Phân tích chi tiết chu kỳ bán, vận tốc bán, ngày tồn kho còn lại của 1 SKU. Nhân viên chỉ nhận `pricing.sellingPrice`, `factors: []`, không có `pricingEvaluation`: FE cần hiển thị "—" thay vì lỗi. Hiện nhãn "Dữ liệu đang cập nhật" khi `stale: true` và "Chưa đủ dữ liệu" khi `dataStatus = INSUFFICIENT_DATA`. |
+| `POST` | `/decision-engine/recalculate` | `SHOP_OWNER` | Tính lại theo trang (`{ afterId?, limit? }`); gọi tiếp với `afterId = nextCursor` khi `remaining > 0`. `409` nếu đang có lượt tính lại khác. Ẩn nút với nhân viên. |
 | `GET` | `/alerts` | Tất cả | Danh sách cảnh báo thông minh (Hàng sắp hết, Hàng cận date, Tồn kho quá ngưỡng). |
-| `POST` | `/alerts/:id/resolve` | Tất cả | Đánh dấu đã xử lý cảnh báo. |
-| `GET` | `/pricing` | Tất cả | Gợi ý điều chỉnh giá bán tối ưu để kích cầu hoặc tối ưu biên lợi nhuận. |
-| `POST` | `/pricing/:id/accept` | `SHOP_OWNER` | Chấp nhận giá đề xuất và tự động cập nhật giá sản phẩm (`{ applyToStockItem: true }`). |
+| `POST` | `/alerts/:id/acknowledge` | Tất cả | "Đã xem / đã báo sếp". Body tùy chọn `{ note }` (≤ 500 ký tự). Nhân viên xác nhận thì Chủ cửa hàng nhận thông báo kèm ghi chú. |
+| `POST` | `/alerts/:id/resolve` | `SHOP_OWNER` | Đánh dấu đã xử lý cảnh báo (nhân viên nhận `403`: ẩn nút với nhân viên). Cảnh báo tự đóng khi tình trạng hết. |
+| `GET` | `/pricing` | `SHOP_OWNER` | Gợi ý điều chỉnh giá bán tối ưu để kích cầu hoặc tối ưu biên lợi nhuận. |
+| `GET` | `/pricing/history` | `SHOP_OWNER` | Lịch sử đổi giá bán. |
+| `POST` | `/pricing/:id/accept` | `SHOP_OWNER` | Chấp nhận giá đề xuất và tự động cập nhật giá sản phẩm (`{ applyToStockItem: true }`). `409` khi giá bán/giá vốn đã đổi, giá đề xuất dưới giá sàn hiện hành hoặc đề xuất đã hết hạn: FE nên tải lại danh sách. |
 | `GET` | `/assistant/sku/:stockItemId` | Tất cả | AI Assistant giải thích tình trạng SKU và đưa ra lời khuyên bằng ngôn ngữ tự nhiên. |
 | `GET` | `/assistant/overview` | Tất cả | AI Assistant tóm tắt toàn bộ sức khỏe kinh doanh của cửa hàng. |
 
