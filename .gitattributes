@@ -1,0 +1,12 @@
+# Normalize line endings: repo always stores LF, regardless of each machine's core.autocrlf.
+* text=auto
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.xlsx binary
+*.pdf binary
