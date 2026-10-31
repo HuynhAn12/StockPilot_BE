@@ -60,6 +60,15 @@ describe('OpenAiClient', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retry when the account has no credits left', async () => {
+    const fetchImpl: FetchMock = jest
+      .fn()
+      .mockResolvedValue(jsonResponse(429, { error: { code: 'credit_balance_exhausted', type: 'insufficient_quota', message: 'no credits' } }));
+
+    await expect(client(fetchImpl).complete({ instructions: 'x', input: 'y' })).rejects.toMatchObject({ reason: 'QUOTA', httpStatus: 429 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('gives up after the retry when the server keeps failing', async () => {
     const fetchImpl: FetchMock = jest.fn().mockResolvedValue(jsonResponse(503, {}));
     await expect(client(fetchImpl).complete({ instructions: 'x', input: 'y' })).rejects.toMatchObject({ reason: 'HTTP', httpStatus: 503 });

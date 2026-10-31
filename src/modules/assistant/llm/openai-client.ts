@@ -1,7 +1,7 @@
 import { env } from '../../../config/env';
 import { AppError } from '../../../common/errors/app-error';
 
-export type LlmFailureReason = 'DISABLED' | 'TIMEOUT' | 'HTTP' | 'INVALID_RESPONSE';
+export type LlmFailureReason = 'DISABLED' | 'TIMEOUT' | 'HTTP' | 'QUOTA' | 'INVALID_RESPONSE';
 
 /**
  * The model could not produce a usable answer. Callers catch it and fall back to the rule-based
@@ -124,6 +124,11 @@ export class OpenAiClient {
 
       if (!response.ok) {
         lastStatus = response.status;
+        // A 429 is either a short rate limit (worth one retry) or an exhausted balance (never worth retrying).
+        const providerError = await readProviderError(response);
+        if (response.status === 429 && isQuotaError(providerError)) {
+          throw new LlmUnavailableError('QUOTA', `AI provider quota exhausted (${providerError.code || providerError.type})`, 429);
+        }
         if (RETRYABLE.has(response.status) && attempt === 0) {
           continue;
         }
@@ -157,6 +162,21 @@ export class OpenAiClient {
 
     throw new LlmUnavailableError('HTTP', `AI provider returned HTTP ${lastStatus}`, lastStatus);
   }
+}
+
+interface ProviderError {
+  code?: string;
+  type?: string;
+}
+
+/** Reads only the error code and type; provider messages can echo request details, so they are dropped. */
+async function readProviderError(response: Response): Promise<ProviderError> {
+  const body = (await response.json().catch(() => null)) as { error?: ProviderError } | null;
+  return { code: body?.error?.code ?? undefined, type: body?.error?.type ?? undefined };
+}
+
+function isQuotaError(error: ProviderError): boolean {
+  return error.type === 'insufficient_quota' || error.code === 'insufficient_quota' || error.code === 'credit_balance_exhausted';
 }
 
 interface OpenAiResponse {
