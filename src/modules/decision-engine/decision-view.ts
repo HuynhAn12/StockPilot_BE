@@ -92,6 +92,8 @@ export function toSkuDecisionView(result: SkuDecisionAnalysisResult, role?: Role
       stockoutSeverity: result.risk.stockoutSeverity,
       overstock: result.risk.overstock,
       overstockSeverity: result.risk.overstockSeverity,
+      // Units and days only (no prices), so it is safe for every role.
+      overstockDetail: result.risk.overstockDetail,
       slowMoving: result.risk.slowMoving,
       deadStock: result.risk.deadStock,
       deadStockSeverity: result.risk.deadStockSeverity,
