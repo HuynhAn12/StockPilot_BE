@@ -19,7 +19,7 @@ jest.mock('../src/config/db', () => ({
     inventoryBalance: { findMany: jest.fn() },
     notification: { createMany: jest.fn() },
     auditLog: { create: jest.fn() },
-    aiInteraction: { create: jest.fn(), count: jest.fn() },
+    aiInteraction: { create: jest.fn(), count: jest.fn(), findMany: jest.fn() },
     systemSetting: { findUnique: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn((callback) => callback(prisma)),
@@ -349,6 +349,28 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
     it('validates the chat body', async () => {
       const res = await request(app).post('/api/v1/assistant/chat').set(auth(ownerToken)).send({ question: 123456 });
       expect(res.status).toBe(400);
+    });
+
+    it('returns only the caller’s own history, so staff cannot read owner answers', async () => {
+      (prisma.aiInteraction.findMany as jest.Mock).mockResolvedValue([
+        { id: BigInt(9), model: 'StockPilot-Rules-v2', questionText: 'Còn hàng?', responseText: 'Còn 3', status: 'SUCCESS', createdAt: new Date() },
+      ]);
+
+      const res = await request(app).get('/api/v1/assistant/history').set(auth(staffToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].id).toBe('9');
+      expect((prisma.aiInteraction.findMany as jest.Mock).mock.calls[0][0].where).toEqual({ storeId: 1, userId: 2 });
+    });
+
+    it('suggests actions for staff from alerts only, never reading pricing recommendations', async () => {
+      (prisma.alert.findMany as jest.Mock).mockResolvedValue([]);
+
+      const res = await request(app).get('/api/v1/assistant/suggestions').set(auth(staffToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ suggestions: [], source: 'RULES' });
+      expect(prisma.pricingRecommendation.findMany).not.toHaveBeenCalled();
     });
   });
 });
