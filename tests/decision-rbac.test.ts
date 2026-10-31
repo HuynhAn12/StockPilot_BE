@@ -351,6 +351,16 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
       expect(res.status).toBe(400);
     });
 
+    it('treats a null stockItemId as "no product selected"', async () => {
+      const res = await request(app)
+        .post('/api/v1/assistant/chat')
+        .set(auth(staffToken))
+        .send({ question: 'sản phẩm nào sắp hết hàng', stockItemId: null });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.answer).toContain('CẦN NHẬP KHO GẤP');
+    });
+
     it('returns only the caller’s own chat turns, so staff cannot read owner answers', async () => {
       (prisma.aiInteraction.findMany as jest.Mock).mockResolvedValue([
         { id: BigInt(9), model: 'StockPilot-Rules-v2', questionText: 'Còn hàng?', responseText: 'Còn 3', status: 'SUCCESS', contextSummaryJson: { feature: 'CHAT', source: 'RULES' }, createdAt: new Date() },

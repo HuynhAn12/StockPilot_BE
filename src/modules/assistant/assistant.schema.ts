@@ -15,5 +15,6 @@ export const storeSummaryQuerySchema = z.object({
 
 export const assistantChatBodySchema = z.object({
   question: z.string().trim().max(1000, 'Câu hỏi tối đa 1000 ký tự').optional().default(''),
-  stockItemId: z.coerce.number().int().positive().optional(),
+  // Clients send null or '' when no product is selected; treat both as absent instead of coercing to 0.
+  stockItemId: z.preprocess((value) => (value === null || value === '' ? undefined : value), z.coerce.number().int().positive().optional()),
 });
