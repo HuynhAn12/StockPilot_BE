@@ -13,7 +13,7 @@ const okBody = (text: string) => ({
 });
 
 const client = (fetchImpl: FetchMock, overrides: Record<string, unknown> = {}) =>
-  new OpenAiClient({ apiKey: 'sk-test', model: 'gpt-4.1-mini', timeoutMs: 1000, retryDelayMs: 0, fetchImpl, enabled: true, ...overrides });
+  new OpenAiClient({ apiStyle: 'responses', apiKey: 'sk-test', model: 'gpt-4.1-mini', baseUrl: 'https://api.openai.com/v1', timeoutMs: 1000, retryDelayMs: 0, fetchImpl, enabled: true, ...overrides });
 
 describe('OpenAiClient', () => {
   it('posts to the Responses API and returns text with token usage', async () => {

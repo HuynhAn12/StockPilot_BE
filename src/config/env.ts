@@ -110,7 +110,7 @@ const envSchema = z
     GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
     GEMINI_BASE_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta/openai'),
     NVIDIA_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
-    NVIDIA_MODEL: z.string().default('meta/llama-3.3-70b-instruct'),
+    NVIDIA_MODEL: z.string().default('mistralai/mistral-large-4-1t-a52b'),
     NVIDIA_BASE_URL: z.string().url().default('https://integrate.api.nvidia.com/v1'),
     AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
     AI_ENABLED: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['true', 'false']).optional()),
