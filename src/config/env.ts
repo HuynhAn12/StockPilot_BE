@@ -105,6 +105,10 @@ const envSchema = z
     OPENAI_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
     OPENAI_MODEL: z.string().default('gpt-4.1-mini'),
     OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+    AI_PROVIDER: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['openai', 'gemini']).default('openai')),
+    GEMINI_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
+    GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
+    GEMINI_BASE_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta/openai'),
     AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
     AI_ENABLED: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['true', 'false']).optional()),
   })

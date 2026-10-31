@@ -90,6 +90,54 @@ describe('OpenAiClient', () => {
     ).rejects.toMatchObject({ reason: 'INVALID_RESPONSE' });
   });
 
+  describe('chat completions style (Gemini OpenAI-compatible endpoint)', () => {
+    const geminiBase = 'https://generativelanguage.googleapis.com/v1beta/openai';
+    const chatBody = (content: string) => ({
+      model: 'gemini-2.5-flash',
+      choices: [{ message: { role: 'assistant', content } }],
+      usage: { prompt_tokens: 90, completion_tokens: 30 },
+    });
+    const gemini = (fetchImpl: FetchMock) => client(fetchImpl, { apiStyle: 'chat', model: 'gemini-2.5-flash', baseUrl: geminiBase });
+
+    it('posts messages to /chat/completions and reads choices and usage', async () => {
+      const fetchImpl: FetchMock = jest.fn().mockResolvedValue(jsonResponse(200, chatBody('Xin chào')));
+
+      const result = await gemini(fetchImpl).complete({ instructions: 'Be brief', input: 'hi', maxOutputTokens: 50 });
+
+      expect(result).toMatchObject({ text: 'Xin chào', model: 'gemini-2.5-flash', inputTokens: 90, outputTokens: 30 });
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe(`${geminiBase}/chat/completions`);
+      const body = JSON.parse(init!.body as string);
+      expect(body.messages).toEqual([
+        { role: 'system', content: 'Be brief' },
+        { role: 'user', content: 'hi' },
+      ]);
+      expect(body.max_tokens).toBeGreaterThan(50);
+      expect(body.input).toBeUndefined();
+    });
+
+    it('requests JSON schema output through response_format', async () => {
+      const fetchImpl: FetchMock = jest.fn().mockResolvedValue(jsonResponse(200, chatBody('{"items":[]}')));
+      const schema = { type: 'object' };
+
+      const result = await gemini(fetchImpl).complete({ instructions: 'x', input: 'y', jsonSchema: { name: 'suggestions', schema } });
+
+      expect(result.json).toEqual({ items: [] });
+      const body = JSON.parse(fetchImpl.mock.calls[0][1]!.body as string);
+      expect(body.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'suggestions', schema, strict: true } });
+    });
+
+    it('handles an array-wrapped rate-limit error by retrying once', async () => {
+      const fetchImpl: FetchMock = jest
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(429, [{ error: { code: 429, status: 'RESOURCE_EXHAUSTED' } }]))
+        .mockResolvedValueOnce(jsonResponse(200, chatBody('ok')));
+
+      await expect(gemini(fetchImpl).complete({ instructions: 'x', input: 'y' })).resolves.toMatchObject({ text: 'ok' });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('is unavailable without a key or when disabled, and never calls fetch', async () => {
     const fetchImpl: FetchMock = jest.fn();
     await expect(client(fetchImpl, { apiKey: '' }).complete({ instructions: 'x', input: 'y' })).rejects.toMatchObject({ reason: 'DISABLED' });
