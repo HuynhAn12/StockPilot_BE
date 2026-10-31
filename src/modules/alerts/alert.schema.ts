@@ -33,3 +33,10 @@ export const alertListQuerySchema = z.object({
 export const alertActionParamsSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
+
+/** Optional hand-off note a store operator leaves when acknowledging (e.g. "Đã gọi NCC, thứ 5 có hàng"). */
+export const acknowledgeAlertBodySchema = z
+  .object({
+    note: z.string().trim().max(500, 'Ghi chú tối đa 500 ký tự').optional(),
+  })
+  .default({});

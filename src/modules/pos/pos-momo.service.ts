@@ -411,7 +411,7 @@ export class PosMomoService {
           {
             storeId,
             warehouseId: warehouse.id,
-            userId: order.createdById || 1,
+            userId: order.createdById ?? null,
             referenceType: 'POS_SALE',
             referenceId: order.orderNumber,
             note: `Thanh toán thành công qua Ví MoMo #${momoOrderId}`,

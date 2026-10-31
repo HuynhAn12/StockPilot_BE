@@ -50,3 +50,13 @@ prisma/*.sql
 !prisma/StockPilot_MySQL8_Target_v1.2_Complete_Design.sql
 
 node_modules
+docs/PAYOS_MULTI_TENANT_INTEGRATION_GUIDE.md
+
+# Local Multi-Agent
+.claude/
+CLAUDE.md
+
+# Excel & Data files (DO NOT COMMIT)
+*.xlsx
+*.xls
+

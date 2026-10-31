@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AlertService } from './alert.service';
-import { alertListQuerySchema, alertActionParamsSchema } from './alert.schema';
+import { alertListQuerySchema, alertActionParamsSchema, acknowledgeAlertBodySchema } from './alert.schema';
 
 export class AlertController {
   constructor(private readonly service: AlertService = new AlertService()) {}
@@ -10,7 +10,7 @@ export class AlertController {
       const storeId = req.user!.storeId!;
       const query = alertListQuerySchema.parse(req.query);
 
-      const result = await this.service.listAlerts(storeId, query);
+      const result = await this.service.listAlerts(storeId, query, req.user!.role);
       return res.status(200).json({
         success: true,
         data: result.items,
@@ -39,8 +39,12 @@ export class AlertController {
       const storeId = req.user!.storeId!;
       const userId = req.user!.userId;
       const { id } = alertActionParamsSchema.parse(req.params);
+      const { note } = acknowledgeAlertBodySchema.parse(req.body);
 
-      const result = await this.service.acknowledgeAlert(storeId, id, userId);
+      const result = await this.service.acknowledgeAlert(storeId, id, userId, {
+        note,
+        actorRole: req.user!.role,
+      });
       return res.status(200).json({
         success: true,
         data: result,

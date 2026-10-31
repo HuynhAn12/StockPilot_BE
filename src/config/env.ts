@@ -80,6 +80,7 @@ const envSchema = z
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
     TENANT_ROOT_DOMAIN: z.string().default('stockpilot.vn'),
+    PUBLIC_API_URL: z.string().optional(),
     PAYMENT_CONFIG_ENCRYPTION_KEY: z.string().optional(),
     APP_TIMEZONE: z.string().default('Asia/Ho_Chi_Minh').refine(isValidTimeZone, {
       message: 'APP_TIMEZONE must be a valid IANA timezone name',
@@ -95,6 +96,11 @@ const envSchema = z
     KEEP_ALIVE_TIMEOUT_MS: z.coerce.number().int().positive().default(65_000),
     HEADERS_TIMEOUT_MS: z.coerce.number().int().positive().default(66_000),
     SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+    // Decision Engine triggers. Scheduler defaults to enabled in production only (see decision-scheduler.ts).
+    DECISION_SCHEDULER_ENABLED: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['true', 'false']).optional()),
+    DECISION_NIGHTLY_HOUR: z.coerce.number().int().min(0).max(23).default(1),
+    DECISION_RECOMPUTE_DEBOUNCE_MS: z.coerce.number().int().min(0).max(60_000).default(500),
+    DECISION_RECALCULATE_MAX_SKUS: z.coerce.number().int().min(1).max(5000).default(500),
   })
   .refine(
     (data) => {

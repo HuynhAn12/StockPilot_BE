@@ -1,47 +1,42 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
+import { ValidationError } from '../../common/errors/app-error';
+import { DECISION_ENGINE_VERSION, DEFAULT_ENGINE_CONFIG, ResolvedEngineConfig } from './engine-defaults';
 
-export interface ResolvedEngineConfig {
-  leadTimeDays: number;
-  safetyDays: number;
-  serviceLevel: number;
-  targetCoverageDays: number;
-  slowMovingDays: number;
-  deadStockDays: number;
-  minimumHistoryDays: number;
-  minimumMarginPct: number;
-  maxMarkdownPct: number;
-  maxMarkupPct: number;
-  lowRiskThreshold: number;
-  highRiskThreshold: number;
-  criticalRiskThreshold: number;
-  engineVersion: string;
-  source: 'DEFAULT' | 'CUSTOM';
-}
-
-export const DEFAULT_ENGINE_CONFIG: ResolvedEngineConfig = {
-  leadTimeDays: 7,
-  safetyDays: 3,
-  serviceLevel: 0.95,
-  targetCoverageDays: 30,
-  slowMovingDays: 60,
-  deadStockDays: 90,
-  minimumHistoryDays: 14,
-  minimumMarginPct: 0.20,
-  maxMarkdownPct: 0.30,
-  maxMarkupPct: 0.20,
-  lowRiskThreshold: 25,
-  highRiskThreshold: 50,
-  criticalRiskThreshold: 75,
-  engineVersion: 'DECISION_ENGINE_V1',
-  source: 'DEFAULT',
-};
+export { DEFAULT_ENGINE_CONFIG, DECISION_ENGINE_VERSION } from './engine-defaults';
+export type { ResolvedEngineConfig } from './engine-defaults';
 
 export class EngineConfigService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
 
-  async getConfig(storeId: number): Promise<ResolvedEngineConfig> {
-    const config = await this.prisma.engineConfig.findUnique({
+  /**
+   * Ordering invariants the formulas rely on: risk bands must be increasing, and an item must become
+   * slow-moving before it becomes dead stock.
+   */
+  static assertConsistent(config: Pick<
+    ResolvedEngineConfig,
+    'lowRiskThreshold' | 'highRiskThreshold' | 'criticalRiskThreshold' | 'slowMovingDays' | 'deadStockDays'
+  >): void {
+    const details: Array<{ field: string; message: string }> = [];
+    if (!(config.lowRiskThreshold < config.highRiskThreshold && config.highRiskThreshold < config.criticalRiskThreshold)) {
+      details.push({
+        field: 'highRiskThreshold',
+        message: 'Ngưỡng rủi ro phải tăng dần: lowRiskThreshold < highRiskThreshold < criticalRiskThreshold',
+      });
+    }
+    if (!(config.slowMovingDays < config.deadStockDays)) {
+      details.push({ field: 'deadStockDays', message: 'slowMovingDays phải nhỏ hơn deadStockDays' });
+    }
+    if (details.length > 0) {
+      throw new ValidationError('Cấu hình Decision Engine không hợp lệ', details);
+    }
+  }
+
+  async getConfig(
+    storeId: number,
+    db: Pick<Prisma.TransactionClient, 'engineConfig'> = this.prisma
+  ): Promise<ResolvedEngineConfig> {
+    const config = await db.engineConfig.findUnique({
       where: { storeId },
     });
 
@@ -63,7 +58,8 @@ export class EngineConfigService {
       lowRiskThreshold: config.lowRiskThreshold,
       highRiskThreshold: config.highRiskThreshold,
       criticalRiskThreshold: config.criticalRiskThreshold,
-      engineVersion: config.engineVersion,
+      // The formula version is a property of the running code; the stored column is legacy.
+      engineVersion: DECISION_ENGINE_VERSION,
       source: 'CUSTOM',
     };
   }
@@ -86,6 +82,10 @@ export class EngineConfigService {
       criticalRiskThreshold?: number;
     }
   ): Promise<ResolvedEngineConfig> {
+    // Cross-field invariants are checked on the merged result because updates are partial.
+    const merged = { ...(await this.getConfig(storeId)), ...data };
+    EngineConfigService.assertConsistent(merged);
+
     const updated = await this.prisma.engineConfig.upsert({
       where: { storeId },
       update: {
@@ -136,7 +136,7 @@ export class EngineConfigService {
       lowRiskThreshold: updated.lowRiskThreshold,
       highRiskThreshold: updated.highRiskThreshold,
       criticalRiskThreshold: updated.criticalRiskThreshold,
-      engineVersion: updated.engineVersion,
+      engineVersion: DECISION_ENGINE_VERSION,
       source: 'CUSTOM',
     };
   }

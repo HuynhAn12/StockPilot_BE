@@ -35,6 +35,10 @@ import { auditLogRouter } from './modules/audit-logs/audit-log.routes';
 import { uploadRouter } from './modules/upload/upload.routes';
 import { scannerRouter } from './modules/scanner/scanner.routes';
 import { publicRouter } from './modules/public/public.routes';
+import { adminRouter } from './modules/admin/admin.routes';
+import { adminOpsRouter } from './modules/admin-ops/admin-ops.routes';
+import { storeDataRouter } from './modules/store-data/store-data.routes';
+import { adminSupportRouter, supportRouter } from './modules/support/support.routes';
 
 export function createApp(): Express {
   const app = express();
@@ -151,6 +155,27 @@ export function createApp(): Express {
   app.use(tenantResolverMiddleware);
 
   // Module routes
+  // Anti-spam for the public consultation form (all environments except automated tests).
+  if (env.NODE_ENV !== 'test') {
+    app.use(
+      '/api/v1/public/leads',
+      rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 5,
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: (req, res) =>
+          res.status(429).json({
+            success: false,
+            error: {
+              code: 'RATE_LIMITED',
+              message: 'Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau 15 phút hoặc gọi hotline.',
+              requestId: (req as any).requestId,
+            },
+          }),
+      })
+    );
+  }
   app.use('/api/v1/public', publicRouter);
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/users', userRouter);
@@ -174,6 +199,11 @@ export function createApp(): Express {
   app.use('/api/v1/store/payment-config', storePaymentConfigRouter);
   app.use('/api/v1/store-payment-config', storePaymentConfigRouter);
   app.use('/api/v1/pos', posRouter);
+  app.use('/api/v1/admin/support', adminSupportRouter);
+  app.use('/api/v1/admin/ops', adminOpsRouter);
+  app.use('/api/v1/store-data', storeDataRouter);
+  app.use('/api/v1/admin', adminRouter);
+  app.use('/api/v1/support', supportRouter);
   app.use('/api/v1/audit-logs', auditLogRouter);
   app.use('/api/v1/upload', uploadRouter);
   app.use('/api/v1/scanner', scannerRouter);

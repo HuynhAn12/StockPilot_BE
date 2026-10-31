@@ -38,6 +38,8 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   email: z.string().email('Email không đúng định dạng'),
   password: z.string().min(1, 'Mật khẩu không được để trống'),
+  /** Mã 2FA (6 số) hoặc mã khôi phục — chỉ cần với admin đã bật xác thực 2 lớp. */
+  otpCode: z.string().trim().max(20).optional(),
 });
 
 export const refreshSchema = z.object({

@@ -6,6 +6,7 @@ import { createReturnSchema } from './return.schema';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
 import { PaginationQuery, buildPaginationResult } from '../../common/utils/pagination';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 
 export class ReturnService {
   private prisma: PrismaClient;
@@ -262,6 +263,12 @@ export class ReturnService {
         },
       });
 
+      return returnOrder;
+    }).then((returnOrder) => {
+      // Post-commit: returns change net demand (today's summary) and, when restocked, inventory.
+      BusinessSyncService.fireAndForget(this.prisma, (sync) =>
+        sync.syncAfterCancelOrReturn(storeId, returnOrder.items.map((item) => item.stockItemId))
+      );
       return returnOrder;
     });
   }

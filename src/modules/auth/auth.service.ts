@@ -9,11 +9,14 @@ import {
   hashToken,
   getRefreshTokenExpiry,
 } from '../../common/utils/jwt';
-import { ConflictError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
+import { ConflictError, ForbiddenError, UnauthenticatedError, ValidationError } from '../../common/errors/app-error';
+import { SystemSettingsService } from '../../common/services/system-settings.service';
 import { env } from '../../config/env';
 import { z } from 'zod';
 import { registerSchema, sendRegisterOtpSchema, loginSchema, updateProfileSchema, forgotPasswordSchema, verifyOtpSchema, resetPasswordSchema } from './auth.schema';
 import { AuditLogService } from '../../common/services/audit-log.service';
+import { LoginGuardService } from '../../common/services/login-guard.service';
+import { TwoFactorService } from '../../common/services/two-factor.service';
 import { isValidTenantCode, normalizeTenantCode } from '../../common/utils/tenant-slug';
 import { sendPasswordResetOtpEmail, sendRegisterOtpEmail } from '../../common/services/email.service';
 import { sendPasswordResetOtpSms } from '../../common/services/sms.service';
@@ -29,6 +32,7 @@ export class AuthService {
   }
 
   async sendRegisterOtp(input: z.infer<typeof sendRegisterOtpSchema>) {
+    await this.assertSignupEnabled();
     const email = input.email.toLowerCase().trim();
 
     // 1. Kiểm tra email đã tồn tại hay chưa
@@ -82,6 +86,7 @@ export class AuthService {
   }
 
   async registerOwner(input: z.infer<typeof registerSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
+    await this.assertSignupEnabled();
     const email = input.email.toLowerCase().trim();
 
     // 1. Xác thực mã OTP đăng ký (bắt buộc trong production)
@@ -230,6 +235,12 @@ export class AuthService {
     });
   }
 
+  private async assertSignupEnabled() {
+    if (!(await SystemSettingsService.get('signup.enabled', this.prisma))) {
+      throw new ForbiddenError('StockPilot đang tạm ngừng nhận đăng ký cửa hàng mới. Vui lòng để lại thông tin liên hệ để được hỗ trợ.');
+    }
+  }
+
   async login(input: z.infer<typeof loginSchema>, meta?: { userAgent?: string; ipAddress?: string }) {
     const user = await this.prisma.user.findUnique({
       where: { email: input.email.toLowerCase().trim() },
@@ -238,13 +249,25 @@ export class AuthService {
       },
     });
 
+    // Chống dò mật khẩu: ghi LOGIN_FAILED và tạm khóa theo email (xem LoginGuardService)
+    const loginGuard = new LoginGuardService(this.prisma);
+    const attempt = { userId: user?.id ?? null, storeId: user?.storeId ?? null, ipAddress: meta?.ipAddress, userAgent: meta?.userAgent };
+    await loginGuard.assertNotLocked(input.email, attempt);
+
     if (!user || !user.isActive || (user.storeId && !user.store?.isActive)) {
+      await loginGuard.recordFailure(input.email, user ? 'INACTIVE_ACCOUNT' : 'UNKNOWN_ACCOUNT', attempt);
       throw new UnauthenticatedError('Tài khoản hoặc mật khẩu không chính xác');
     }
 
     const isMatch = await comparePassword(input.password, user.passwordHash);
     if (!isMatch) {
+      await loginGuard.recordFailure(input.email, 'WRONG_PASSWORD', attempt);
       throw new UnauthenticatedError('Tài khoản hoặc mật khẩu không chính xác');
+    }
+
+    // Xác thực 2 lớp: chỉ áp dụng cho ADMIN đã tự bật (mặc định tắt)
+    if (user.role === 'ADMIN') {
+      await new TwoFactorService(this.prisma).verifyLoginSecondFactor(user, input.otpCode, input.email, attempt);
     }
 
     const tokenPayload = {

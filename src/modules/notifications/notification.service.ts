@@ -3,10 +3,16 @@ import { prisma as defaultPrisma } from '../../config/db';
 import { NotFoundError } from '../../common/errors/app-error';
 import { NotificationListQuery } from './notification.schema';
 
+export interface NotificationViewerOptions {
+  /** D9: pricing recommendation notifications are owner-only. Defaults to true for backward compatibility. */
+  includePricing?: boolean;
+}
+
 export class NotificationService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
 
-  async syncRealNotifications(storeId: number, userId: number) {
+  async syncRealNotifications(storeId: number, userId: number, options: NotificationViewerOptions = {}) {
+    const includePricing = options.includePricing !== false;
     if (process.env.NODE_ENV === 'test') {
       return;
     }
@@ -41,13 +47,15 @@ export class NotificationService {
         }
       }
 
-      // 2. Đồng bộ đề xuất giá AI thực tế (Pricing Recommendations)
-      const pendingPricing = await this.prisma.pricingRecommendation.findMany({
-        where: { storeId, status: 'PENDING' },
-        orderBy: { id: 'asc' },
-        take: 4,
-        include: { stockItem: { include: { product: true } } },
-      });
+      // 2. Đồng bộ đề xuất giá AI thực tế (Pricing Recommendations) - chỉ dành cho Chủ cửa hàng (D9)
+      const pendingPricing = includePricing
+        ? await this.prisma.pricingRecommendation.findMany({
+            where: { storeId, status: 'PENDING' },
+            orderBy: { id: 'asc' },
+            take: 4,
+            include: { stockItem: { include: { product: true } } },
+          })
+        : [];
 
       for (const rec of pendingPricing) {
         const existing = await this.prisma.notification.findFirst({
@@ -130,10 +138,12 @@ export class NotificationService {
     }
   }
 
-  async list(storeId: number, userId: number, query: NotificationListQuery) {
+  async list(storeId: number, userId: number, query: NotificationListQuery, options: NotificationViewerOptions = {}) {
+    const includePricing = options.includePricing !== false;
+
     // Tự động đồng bộ các sự kiện thực tế trong kho và cửa hàng (bỏ qua khi chạy test)
     if (process.env.NODE_ENV !== 'test') {
-      await this.syncRealNotifications(storeId, userId);
+      await this.syncRealNotifications(storeId, userId, { includePricing });
     }
 
     const page = query.page || 1;
@@ -142,6 +152,8 @@ export class NotificationService {
       storeId,
       userId,
       ...(query.isRead !== undefined ? { isRead: query.isRead } : {}),
+      // Hide pricing rows created for non-owners before the D9 fix; NULL entityType rows stay visible.
+      ...(includePricing ? {} : { OR: [{ entityType: null }, { entityType: { not: 'PRICING' } }] }),
     };
 
     const [items, total] = await Promise.all([

@@ -7,5 +7,14 @@
     "createdAt": "2026-10-15T12:39:54.976Z",
     "expiresAt": "2026-11-14T12:39:54.976Z",
     "scanCount": 0
+  },
+  {
+    "code": "FH96D5",
+    "storeId": 2,
+    "userId": 2,
+    "label": "POS Web",
+    "createdAt": "2026-10-22T04:11:41.216Z",
+    "expiresAt": "2026-11-21T04:11:41.216Z",
+    "scanCount": 0
   }
 ]

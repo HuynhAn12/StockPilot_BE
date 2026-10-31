@@ -1,24 +1,12 @@
 import { prisma } from '../../config/db';
 import { CreateLeadInput } from './public.schema';
+import { LeadService } from '../leads/lead.service';
 
 export class PublicService {
-  async createLead(input: CreateLeadInput) {
-    const lead = await prisma.contactLead.create({
-      data: {
-        fullName: input.fullName,
-        phone: input.phone,
-        email: input.email ? input.email : null,
-        storeName: input.storeName ? input.storeName : null,
-        industry: input.industry ? input.industry : null,
-        note: input.note ? input.note : null,
-      },
-    });
+  private readonly leadService = new LeadService();
 
-    return {
-      id: lead.id,
-      fullName: lead.fullName,
-      createdAt: lead.createdAt,
-    };
+  async createLead(input: CreateLeadInput) {
+    return this.leadService.submit(input);
   }
 
   async getPlatformStats() {
@@ -59,7 +47,7 @@ export class PublicService {
           'Báo cáo doanh thu & lợi nhuận cơ bản',
           'Hỗ trợ kỹ thuật giờ hành chính',
         ],
-        ctaText: 'Dùng thử 14 ngày miễn phí',
+        ctaText: 'Dùng thử ngay',
       },
       {
         id: 'professional',

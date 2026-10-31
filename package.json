@@ -8,9 +8,10 @@
     "build": "tsc",
     "lint": "eslint src/ tests/",
     "start": "node dist/server.js",
-    "security:audit": "npm audit --omit=dev",
+    "security:audit": "npm audit --omit=dev --audit-level=critical",
     "db:backup": "node scripts/backup-db.js",
     "db:restore": "node scripts/restore-db.js",
+    "db:seed": "tsx scripts/seed.ts",
     "maintenance:rebuild-summary-v10": "tsx scripts/rebuild-daily-sales-summary-v10.ts",
     "typecheck": "tsc --noEmit",
     "verify": "npm run prisma:generate && npm run typecheck && npm run lint && npm run build && npm test",
@@ -22,6 +23,7 @@
     "test:coverage": "jest --coverage --coverageReporters=text --runInBand --detectOpenHandles --forceExit"
   },
   "dependencies": {
+    "@payos/node": "^2.0.5",
     "@prisma/client": "^5.22.0",
     "@types/multer": "^2.3.0",
     "bcryptjs": "^2.4.3",

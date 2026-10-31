@@ -3,7 +3,7 @@ import { StorePaymentConfigController } from './store-payment-config.controller'
 import { authMiddleware } from '../../common/middleware/auth';
 import { requireRole, requireStoreScope } from '../../common/middleware/rbac';
 import { validate } from '../../common/middleware/validate';
-import { upsertPayosConfigSchema } from './store-payment-config.schema';
+import { testPayosConfigSchema, upsertPayosConfigSchema } from './store-payment-config.schema';
 
 export const storePaymentConfigRouter = Router();
 const controller = new StorePaymentConfigController();
@@ -16,10 +16,12 @@ storePaymentConfigRouter.get('/payos', (req, res, next) => controller.getPayosSt
 storePaymentConfigRouter.put('/payos', validate({ body: upsertPayosConfigSchema }), (req, res, next) =>
   controller.upsertPayosConfig(req, res, next)
 );
+storePaymentConfigRouter.post('/payos/test', validate({ body: testPayosConfigSchema }), (req, res, next) =>
+  controller.testPayosConnection(req, res, next)
+);
 storePaymentConfigRouter.post('/payos/deactivate', (req, res, next) =>
   controller.deactivatePayosConfig(req, res, next)
 );
 storePaymentConfigRouter.post('/payos/toggle', (req, res, next) =>
   controller.togglePayosConfig(req, res, next)
 );
-

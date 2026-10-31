@@ -36,6 +36,10 @@ export const createLeadSchema = z.object({
     .max(1000, 'Ghi chú không vượt quá 1000 ký tự')
     .optional()
     .or(z.literal('')),
+  website: z.string().max(200).optional(),
 });
+
+/** Hidden "website" input: humans never see it, bots fill it in. */
+export const LEAD_HONEYPOT_FIELD = 'website';
 
 export type CreateLeadInput = z.infer<typeof createLeadSchema>;

@@ -59,6 +59,19 @@ export class PosController {
     }
   }
 
+  async handlePayosWebhook(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await payosService.handleWebhook(req.body);
+      return res.status(200).json({
+        error: 0,
+        message: 'Webhook processed successfully',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async createMomoPayment(req: Request, res: Response, next: NextFunction) {
     try {
       const result = await momoService.createPayment(

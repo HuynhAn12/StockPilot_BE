@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { NotificationService } from './notification.service';
 import { prisma } from '../../config/db';
+import { canViewFinancials } from '../../common/utils/role-access';
 
 const notificationService = new NotificationService();
 
@@ -11,7 +12,8 @@ export class NotificationController {
       const result = await notificationService.list(
         storeId,
         req.user!.userId,
-        (req as any).validatedQuery || req.query
+        (req as any).validatedQuery || req.query,
+        { includePricing: canViewFinancials(req.user!.role) }
       );
       return res.status(200).json({
         success: true,

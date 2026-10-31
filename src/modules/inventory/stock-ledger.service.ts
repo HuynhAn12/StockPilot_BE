@@ -14,7 +14,8 @@ export interface StockChangeItem {
 export interface StockChangeContext {
   storeId: number;
   warehouseId: number;
-  userId: number;
+  /** Null for system-driven movements (e.g. a payment webhook for an order without a creator). */
+  userId: number | null;
   referenceType: string;
   referenceId: string;
   idempotencyKey?: string;
