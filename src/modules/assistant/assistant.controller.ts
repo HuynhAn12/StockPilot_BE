@@ -138,7 +138,10 @@ export class AssistantController {
     }
   };
 
-  /** A user's own assistant history only: owner answers can contain cost and profit figures. */
+  /**
+   * A user's own chat history only: owner answers can contain cost and profit figures.
+   * SKU explanations, overviews and suggestion runs are logged too but are not chat turns.
+   */
   getHistory = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
@@ -147,14 +150,23 @@ export class AssistantController {
       const interactions = await prisma.aiInteraction.findMany({
         where: { storeId, userId: req.user!.userId },
         orderBy: { createdAt: 'desc' },
-        take: limit,
-        select: { id: true, model: true, questionText: true, responseText: true, status: true, createdAt: true },
+        take: limit * 4,
+        select: { id: true, model: true, questionText: true, responseText: true, status: true, contextSummaryJson: true, createdAt: true },
       });
 
-      return res.status(200).json({
-        success: true,
-        data: interactions.map((item) => ({ ...item, id: item.id.toString() })),
-      });
+      const chatTurns = interactions
+        .filter((item) => {
+          const feature = (item.contextSummaryJson as { feature?: string } | null)?.feature;
+          return !feature || feature === 'CHAT';
+        })
+        .slice(0, limit)
+        .map(({ contextSummaryJson, ...item }) => ({
+          ...item,
+          id: item.id.toString(),
+          source: (contextSummaryJson as { source?: string } | null)?.source === 'AI' ? 'AI' : 'RULES',
+        }));
+
+      return res.status(200).json({ success: true, data: chatTurns });
     } catch (error) {
       next(error);
     }

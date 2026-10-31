@@ -351,15 +351,18 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns only the caller’s own history, so staff cannot read owner answers', async () => {
+    it('returns only the caller’s own chat turns, so staff cannot read owner answers', async () => {
       (prisma.aiInteraction.findMany as jest.Mock).mockResolvedValue([
-        { id: BigInt(9), model: 'StockPilot-Rules-v2', questionText: 'Còn hàng?', responseText: 'Còn 3', status: 'SUCCESS', createdAt: new Date() },
+        { id: BigInt(9), model: 'StockPilot-Rules-v2', questionText: 'Còn hàng?', responseText: 'Còn 3', status: 'SUCCESS', contextSummaryJson: { feature: 'CHAT', source: 'RULES' }, createdAt: new Date() },
+        { id: BigInt(8), model: 'gpt-test', questionText: 'Gợi ý hành động', responseText: '3 gợi ý', status: 'SUCCESS', contextSummaryJson: { feature: 'SUGGESTIONS', source: 'AI' }, createdAt: new Date() },
+        { id: BigInt(7), model: 'gpt-test', questionText: 'Nên nhập gì?', responseText: 'Nhập sữa', status: 'SUCCESS', contextSummaryJson: { feature: 'CHAT', source: 'AI' }, createdAt: new Date() },
       ]);
 
       const res = await request(app).get('/api/v1/assistant/history').set(auth(staffToken));
 
       expect(res.status).toBe(200);
-      expect(res.body.data[0].id).toBe('9');
+      expect(res.body.data.map((item: { id: string; source: string }) => `${item.id}:${item.source}`)).toEqual(['9:RULES', '7:AI']);
+      expect(res.body.data[0]).not.toHaveProperty('contextSummaryJson');
       expect((prisma.aiInteraction.findMany as jest.Mock).mock.calls[0][0].where).toEqual({ storeId: 1, userId: 2 });
     });
 
