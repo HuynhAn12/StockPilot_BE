@@ -101,6 +101,12 @@ const envSchema = z
     DECISION_NIGHTLY_HOUR: z.coerce.number().int().min(0).max(23).default(1),
     DECISION_RECOMPUTE_DEBOUNCE_MS: z.coerce.number().int().min(0).max(60_000).default(500),
     DECISION_RECALCULATE_MAX_SKUS: z.coerce.number().int().min(1).max(5000).default(500),
+    // AI Decision Assistant (OpenAI Responses API). Without a key the rule-based assistant answers instead.
+    OPENAI_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
+    OPENAI_MODEL: z.string().default('gpt-4.1-mini'),
+    OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+    AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
+    AI_ENABLED: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['true', 'false']).optional()),
   })
   .refine(
     (data) => {
