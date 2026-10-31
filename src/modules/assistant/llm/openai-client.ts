@@ -37,8 +37,8 @@ export interface LlmResult {
 }
 
 /**
- * `responses`: OpenAI Responses API. `chat`: Chat Completions, which Google's Gemini
- * OpenAI-compatible endpoint implements (it has no Responses API).
+ * `responses`: OpenAI Responses API. `chat`: Chat Completions, which the OpenAI-compatible
+ * endpoints of Gemini and NVIDIA implement (neither has the Responses API).
  */
 export type LlmApiStyle = 'responses' | 'chat';
 
@@ -60,6 +60,9 @@ const RETRYABLE = new Set([429, 500, 502, 503, 504]);
 function providerDefaults(): { apiStyle: LlmApiStyle; apiKey?: string; model: string; baseUrl: string } {
   if (env.AI_PROVIDER === 'gemini') {
     return { apiStyle: 'chat', apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL, baseUrl: env.GEMINI_BASE_URL };
+  }
+  if (env.AI_PROVIDER === 'nvidia') {
+    return { apiStyle: 'chat', apiKey: env.NVIDIA_API_KEY, model: env.NVIDIA_MODEL, baseUrl: env.NVIDIA_BASE_URL };
   }
   return { apiStyle: 'responses', apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL, baseUrl: env.OPENAI_BASE_URL };
 }
@@ -231,9 +234,10 @@ interface ChatCompletionResponse {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
+/** Some open reasoning models put their chain of thought inline in <think> tags; only the answer is kept. */
 function extractChatText(data: ChatCompletionResponse): string {
   const content = data.choices?.[0]?.message?.content;
-  return typeof content === 'string' ? content.trim() : '';
+  return typeof content === 'string' ? content.replace(/<think>[\s\S]*?<\/think>/g, '').trim() : '';
 }
 
 function isQuotaError(error: ProviderError): boolean {

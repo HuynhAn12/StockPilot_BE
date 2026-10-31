@@ -127,6 +127,15 @@ describe('OpenAiClient', () => {
       expect(body.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'suggestions', schema, strict: true } });
     });
 
+    it('drops inline <think> reasoning from open models', async () => {
+      const fetchImpl: FetchMock = jest.fn().mockResolvedValue(jsonResponse(200, chatBody('<think>tính toán...</think>\n{"items":[]}')));
+
+      const result = await gemini(fetchImpl).complete({ instructions: 'x', input: 'y', jsonSchema: { name: 's', schema: { type: 'object' } } });
+
+      expect(result.text).toBe('{"items":[]}');
+      expect(result.json).toEqual({ items: [] });
+    });
+
     it('handles an array-wrapped rate-limit error by retrying once', async () => {
       const fetchImpl: FetchMock = jest
         .fn()
