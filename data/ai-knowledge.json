@@ -88,5 +88,75 @@
     "hitCount": 0,
     "createdAt": "2026-11-01T14:22:47.823Z",
     "updatedAt": "2026-11-01T14:22:47.823Z"
+  },
+  {
+    "id": "learned-1793543691774-ig5r9",
+    "question": "Tôi muốn biết số lượng sản phẩm bón thống.",
+    "normalizedQuestion": "muốn biết số lượng sản phẩm bón thống",
+    "answer": "Dạ, em hiểu anh/chị đang muốn hỏi về sản phẩm **\"Bột ngọt\"** (có thể do nhập văn bản bị nhầm thành \"bón thống\"). \n\nEm xin gửi anh/chị số lượng tồn kho chính xác của sản phẩm Bột ngọt trong cửa hàng:\n\n- **Bột ngọt Ajinomoto gói 454g (SKU: SP78):** Còn lại **110** đơn vị trong kho (Giá bán: 34.000 đ, trạng thái: Ổn định).\n\nAnh/chị cần em hỗ trợ kiểm tra thêm đơn hàng, xem tồn kho các mặt hàng khác hay việc gì nữa không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:34:51.774Z",
+    "updatedAt": "2026-11-01T14:34:51.774Z"
+  },
+  {
+    "id": "learned-1793543920117-4v7k6",
+    "question": "Tôi muốn biết nhân viên hình on ở...",
+    "normalizedQuestion": "muốn biết nhân viên hình on",
+    "answer": "Dạ, câu hỏi của anh/chị bị ngắt quãng mất phần cuối (\"Tôi muốn biết nhân viên hình on ở...\"). \n\nAnh/chị có thể nói rõ hơn giúp em là anh/chị đang muốn tìm kiếm thông tin gì về nhân viên hay cửa hàng không ạ? Em có thể giúp anh/chị ngay đây ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:38:40.117Z",
+    "updatedAt": "2026-11-01T14:38:40.117Z"
+  },
+  {
+    "id": "learned-1793543949000-39iwj",
+    "question": "Tôi muốn biết nhân viên Trần Minh Hiếu là...",
+    "normalizedQuestion": "muốn biết nhân viên trần hiếu",
+    "answer": "Dạ, nhân viên **Trần Minh Hiếu** hiện đang giữ vai trò là **Chủ cửa hàng** (Shop Owner) của cửa hàng \"minh hiếu\" tại địa chỉ 43 Trần Cao Vân, Thành phố Đà Nẵng, đồng thời là người quản lý tài khoản chính trên hệ thống ạ.\n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:39:09.000Z",
+    "updatedAt": "2026-11-01T14:39:09.000Z"
+  },
+  {
+    "id": "learned-1793544042524-rpymc",
+    "question": "Tôi muốn biết biến động của Ukraine và Nga.",
+    "normalizedQuestion": "muốn biết biến động ukraine nga",
+    "answer": "Dạ, câu hỏi về tình hình biến động giữa Ukraine và Nga hiện đang nằm ngoài phạm vi dữ liệu vận hành và quản lý cửa hàng của StockPilot tụi mình rồi ạ. \n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:40:42.524Z",
+    "updatedAt": "2026-11-01T14:40:42.524Z"
+  },
+  {
+    "id": "learned-1793544080372-51sai",
+    "question": "Tôi muốn biết tình hình kinh tế hiện nay",
+    "normalizedQuestion": "muốn biết tình hình kinh tế hiện nay",
+    "answer": "Dạ em chào anh Hiếu ạ! Về tình hình kinh tế chung thì em không có dữ liệu vĩ mô bên ngoài, nhưng nếu anh đang muốn hỏi về **tình hình kinh doanh thực tế của cửa hàng \"minh hiếu\" mình** thì em nắm rất rõ trong hệ thống ạ!\n\nDạ cửa hàng mình hiện đang quản lý 216 sản phẩm, với tổng giá trị vốn tồn kho là **504.492.200 đ** và giá trị bán lẻ là **646.269.500 đ**. Tuy nhiên, hiện tại kho đang có 1 sản phẩm hết hàng (Xúc xích CP) và 1 sản phẩm sắp hết cần anh chú ý nhập thêm đấy ạ.\n\nAnh/chị cần em hỗ trợ kiểm tra chi tiết doanh thu, xem tồn kho mặt hàng nào hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:41:20.372Z",
+    "updatedAt": "2026-11-01T14:41:20.372Z"
+  },
+  {
+    "id": "learned-1793544864944-jcv7i",
+    "question": "Vậy những mẹ con nâu cần được chỉnh gió ngay lập tức.",
+    "normalizedQuestion": "những mẹ con nâu chỉnh gió ngay lập tức",
+    "answer": "Dạ em hiểu anh/chị đang nhắc đến các sản phẩm có bao bì hoặc nhãn màu nâu (hoặc có thể do giọng nói nhận diện nhầm thành \"mẹ con nâu\"). Anh/chị muốn em giúp điều chỉnh giá bán, kiểm tra lại lượng tồn kho hay xem xét chương trình khuyến mãi cho các sản phẩm này không ạ?\n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác nữa không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 1,
+    "createdAt": "2026-11-01T14:54:24.944Z",
+    "updatedAt": "2026-11-01T14:54:43.780Z"
+  },
+  {
+    "id": "learned-1793544914981-v106n",
+    "question": "tôi muốn biết những mặt hàng nào cần điều chỉnh giá ngay lập tức",
+    "normalizedQuestion": "muốn biết những mặt hàng điều chỉnh giá ngay lập tức",
+    "answer": "Chào anh/chị, hiện tại hệ thống StockPilot đang ghi nhận **56 sản phẩm** cần được điều chỉnh tăng giá ngay lập tức do biên lợi nhuận gộp hiện tại đang thấp hơn mức mục tiêu tối thiểu (20%). \n\nDưới đây là một số mặt hàng tiêu biểu có đề xuất điều chỉnh giá bán:\n\n| Mã SKU | Tên sản phẩm | Giá hiện tại | Giá đề xuất mới | Lợi nhuận hiện tại |\n| :--- | :--- | :---: | :---: | :---: |\n| **SP7** | Mì Omachi sườn hầm ngũ quả 80g | 9.500 đ | **10.000 đ** | 21.1% |\n| **SP16** | Bánh Cosy Marie gói 320g | 39.000 đ | **40.000 đ** | 17.9% |\n| **SP38** | Nước ngọt Pepsi lon 320ml | 10.500 đ | **11.000 đ** | 21.9% |\n| **SP63** | Bia Tiger lon cao 330ml | 20.000 đ | **21.000 đ** | 17.5% |\n| **SP90** | Gạo thơm ST25 Ông Cua túi 5kg | 195.000 đ | **207.000 đ** | 15.4% |\n| **SP103** | Bột giặt OMO đỏ chuyên dụng 3kg | 115.000 đ | **119.000 đ** | 17.4% |\n\nAnh/chị có thể truy cập ngay vào phân hệ **Gợi ý giá bán** trên phần mềm để xem chi tiết toàn bộ 56 sản phẩm này và bấm *\"Chấp nhận\"* để hệ thống tự động cập nhật giá mới nhé!\n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:55:14.981Z",
+    "updatedAt": "2026-11-01T14:55:14.981Z"
   }
 ]
