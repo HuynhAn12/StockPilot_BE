@@ -114,6 +114,8 @@ const envSchema = z
     NVIDIA_BASE_URL: z.string().url().default('https://integrate.api.nvidia.com/v1'),
     AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(30_000),
     AI_ENABLED: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['true', 'false']).optional()),
+    GROQ_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
+    GROQ_WHISPER_MODEL: z.string().default('whisper-large-v3'),
   })
   .refine(
     (data) => {
