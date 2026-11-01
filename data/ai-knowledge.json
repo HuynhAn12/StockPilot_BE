@@ -1,0 +1,82 @@
+[
+  {
+    "id": "faq-barcode-scanner",
+    "question": "Làm thế nào để kết nối và sử dụng máy quét mã vạch?",
+    "normalizedQuestion": "kết nối máy quét mã vạch",
+    "answer": "Để kết nối và sử dụng máy quét mã vạch với StockPilot:\n\n1. **Máy quét USB / Bluetooth:** Cắm đầu thu USB hoặc kết nối Bluetooth với máy tính/máy POS. Máy quét hoạt động theo cơ chế bàn phím (HID). Bạn chỉ cần mở màn hình Bán hàng (POS) hoặc Nhập kho, đặt con trỏ vào ô tìm kiếm hoặc quét trực tiếp, mã vạch sẽ tự động được nhận diện và thêm món vào đơn.\n2. **Quét bằng Camera:** Trên điện thoại hoặc máy tính bảng, bấm vào biểu tượng chiếc máy ảnh/mã vạch tại thanh tìm kiếm để kích hoạt camera quét mã tự động.\n3. **Cấu hình máy quét:** Đảm bảo máy quét được bật chế độ tự động gõ Enter (Suffix Enter/Carriage Return) sau mỗi lần quét để hệ thống tự động chốt sản phẩm ngay lập tức mà không cần bấm thêm phím nào.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-stock-import",
+    "question": "Cách tạo phiếu nhập kho và tăng số lượng tồn hàng hóa?",
+    "normalizedQuestion": "tạo phiếu nhập kho tăng số lượng tồn hàng hóa",
+    "answer": "Quy trình tạo phiếu nhập hàng và cộng tồn kho trong StockPilot:\n\n1. Vào mục **Quản lý kho** (Inventory) -> chọn **Nhập kho** hoặc **Tạo phiếu nhập**.\n2. Chọn Nhà cung cấp tương ứng hoặc chọn nhà cung cấp mặc định.\n3. Quét mã vạch hoặc tìm kiếm sản phẩm cần nhập, điền **Số lượng nhập** và **Giá vốn nhập** (Cost Price).\n4. Kiểm tra lại tổng tiền phiếu nhập và bấm **Xác nhận nhập kho**.\n5. Hệ thống sẽ ngay lập tức cộng số lượng vào tồn kho thực tế (On-hand Balance), ghi nhận nhật ký thẻ kho và cập nhật giá vốn bình quân cho sản phẩm.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-payos-qr",
+    "question": "Hướng dẫn tích hợp và kích hoạt thanh toán mã QR PayOS?",
+    "normalizedQuestion": "tích hợp kích hoạt thanh toán mã qr payos",
+    "answer": "Để kích hoạt thanh toán VietQR động qua PayOS:\n\n1. Truy cập mục **Cài đặt cửa hàng** -> Chọn tab **Cấu hình thanh toán** (Payment Settings).\n2. Điền các thông tin từ tài khoản PayOS của bạn gồm: **Client ID**, **API Key**, và **Checksum Key**.\n3. Đăng ký Webhook URL của StockPilot (`https://api.domain-cua-ban/api/v1/payments/payos/webhook`) trên cổng PayOS Dashboard.\n4. Bật trạng thái **Hoạt động** và lưu cấu hình.\n5. Khi thu ngân bán hàng tại POS và chọn phương thức 'Chuyển khoản PayOS QR', hệ thống sẽ tạo mã QR động đúng số tiền của đơn. Khi khách chuyển khoản thành công, PayOS bắn tín hiệu qua Webhook và đơn hàng sẽ tự động chuyển sang trạng thái Đã thanh toán trong vòng 1-2 giây.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-export-reports",
+    "question": "Làm sao để xuất báo cáo ra file Excel?",
+    "normalizedQuestion": "xuất báo cáo file excel",
+    "answer": "Để xuất dữ liệu báo cáo ra file Excel (.xlsx hoặc .csv):\n\n1. **Báo cáo doanh số/đơn hàng:** Vào mục **Đơn hàng** hoặc **Báo cáo**, chọn khoảng thời gian cần lọc (hôm nay, tháng này, hoặc khoảng ngày tùy chọn), sau đó bấm nút **Xuất Excel** ở góc trên bên phải bảng dữ liệu.\n2. **Báo cáo tồn kho:** Vào mục **Quản lý kho**, áp dụng bộ lọc (nhóm ngành hàng, trạng thái sắp hết, hoặc tồn cao), rồi chọn nút **Xuất file kiểm kho/Excel**.\n3. File tải về sẽ chứa đầy đủ thông tin chi tiết: Mã SKU, tên sản phẩm, số lượng bán/tồn, doanh số, giá vốn và tỷ lệ lợi nhuận gộp.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-min-stock-alert",
+    "question": "Cách cài đặt ngưỡng cảnh báo tồn kho tối thiểu cho sản phẩm?",
+    "normalizedQuestion": "cài đặt ngưỡng cảnh báo tồn kho tối thiểu minstocklevel sản phẩm",
+    "answer": "Để cài đặt mức tồn kho tối thiểu (Min Stock Level):\n\n1. Vào mục **Sản phẩm** hoặc **Kho hàng** -> Bấm vào sản phẩm cần cấu hình.\n2. Tìm trường **Tồn kho tối thiểu (Min Stock)** và nhập số lượng an toàn bạn muốn duy trì (ví dụ: 10 sản phẩm).\n3. Bạn cũng có thể thiết lập thêm trường **Tồn kho tối đa (Max Stock)** để tránh nhập hàng vượt quá dung lượng kho.\n4. Bấm **Lưu thay đổi**.\n5. Khi số lượng tồn thực tế nhỏ hơn hoặc bằng ngưỡng Min, Decision Engine của StockPilot sẽ tự động tạo cảnh báo màu vàng/đỏ (Low Stock / Stockout) tại tab **Cảnh báo rủi ro** để nhắc bạn nhập hàng kịp thời.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-user-roles",
+    "question": "Phân biệt quyền hạn giữa tài khoản Chủ cửa hàng và Nhân viên kho?",
+    "normalizedQuestion": "phân biệt quyền hạn tài khoản chủ cửa hàng owner nhân viên kho staff",
+    "answer": "StockPilot áp dụng cơ chế phân quyền bảo mật nhiều lớp (RBAC):\n\n- **Chủ cửa hàng (Store Owner):** Xem được toàn bộ báo cáo doanh thu, lãi lỗ, giá vốn (COGS), biên lợi nhuận, duyệt các đề xuất tối ưu giá bán thông minh, quản lý nhân sự và toàn quyền sử dụng AI Pilot phân tích chiến lược tài chính.\n- **Nhân viên kho (Warehouse Staff):** Chỉ xem được số lượng tồn thực tế, vị trí kệ hàng, tạo phiếu kiểm đếm và chuẩn bị đơn xuất kho. Toàn bộ các trường dữ liệu nhạy cảm về tài chính (giá vốn, tỷ lệ lãi, tổng tiền doanh thu) đều được hệ thống tự động ẩn và lọc bỏ triệt để (kể cả khi hỏi trợ lý AI).",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-order-refund",
+    "question": "Quy trình hủy đơn hàng hoặc xử lý hoàn trả hàng cho khách?",
+    "normalizedQuestion": "quy trình hủy đơn hàng xử lý hoàn trả hàng khách",
+    "answer": "Quy trình hoàn trả hàng hoặc hủy đơn trên StockPilot:\n\n1. Truy cập vào mục **Đơn hàng** -> Tìm và bấm vào đơn hàng cần xử lý.\n2. Chọn nút thao tác **Hủy đơn** hoặc **Đổi trả hàng**.\n3. Nhập lý do (ví dụ: khách đổi ý, sản phẩm lỗi) và chọn hình thức xử lý hoàn tiền.\n4. Xác nhận hủy: Hệ thống sẽ tự động hoàn lại đúng số lượng các mặt hàng trong đơn vào tồn kho khả dụng (Available Balance) và ghi nhận giao dịch vào lịch sử luân chuyển kho.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "faq-pricing-deadstock",
+    "question": "Tính năng gợi ý giá bán thông minh và xử lý hàng tồn ứ đọng hoạt động như thế nào?",
+    "normalizedQuestion": "tính năng gợi ý giá bán thông minh xử lý hàng tồn ứ đọng dead stock hoạt động",
+    "answer": "Tính năng Tối ưu giá và Xả hàng tồn ứ đọng (Dead Stock) của Decision Engine:\n\n1. **Phát hiện ứ đọng:** Hệ thống liên tục tính toán số ngày bao phủ kho (Days of Cover - DOC) và tốc độ bán (Velocity). Các mặt hàng không phát sinh đơn hàng quá 30-45 ngày sẽ được xếp vào nhóm cảnh báo Dead Stock gây đọng vốn.\n2. **Gợi ý giá thông minh:** AI tính toán mức giảm giá tối ưu dựa trên giá vốn để vừa kích cầu xả kho nhanh, vừa đảm bảo cửa hàng không bị bán lỗ.\n3. **Thao tác duyệt 1 chạm:** Chủ cửa hàng vào tab **Gợi ý giá bán**, kiểm tra mức giá đề xuất và bấm **Áp dụng** để giá mới có hiệu lực ngay lập tức tại màn hình bán hàng.",
+    "category": "static_faq",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T20:00:00.000Z",
+    "updatedAt": "2026-11-01T20:00:00.000Z"
+  }
+]

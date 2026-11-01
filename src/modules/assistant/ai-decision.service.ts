@@ -4,6 +4,7 @@ import { logger } from '../../common/logger';
 import { canViewFinancials } from '../../common/utils/role-access';
 import { DecisionEngineService } from '../decision-engine/decision-engine.service';
 import { AssistantService, FINANCIAL_DATA_RESTRICTED_MESSAGE, normalizeVietnameseVoiceQuery } from './assistant.service';
+import { aiMemoryService } from './ai-memory.service';
 import { LlmFailureReason, LlmResult, LlmUnavailableError, OpenAiClient } from './llm/openai-client';
 import { rankSuggestions, ReorderCandidate } from './suggestion-ranking';
 
@@ -324,6 +325,35 @@ export class AiDecisionService {
     const ask = normalizedQ.trim() || 'Phân tích tổng quan';
     const canSeeFinancials = canViewFinancials(role);
 
+    // 1. Kiểm tra Semantic Cache (Bộ nhớ AI nội bộ) trước khi gọi Gemini API
+    const memoryHit = await aiMemoryService.findSimilarAnswer(ask, 0.75);
+    if (memoryHit) {
+      const matchPct = Math.round(memoryHit.score * 100);
+      console.log(`[AI Memory HIT] Độ khớp: ${matchPct}% - Tiết kiệm 1 lượt gọi Gemini API`);
+      const interactionId = await this.record(storeId, userId, {
+        model: 'StockPilot-Semantic-Cache',
+        question: ask,
+        answer: memoryHit.item.answer,
+        status: 'SUCCESS',
+        latencyMs: 1,
+        summary: {
+          feature: 'CHAT',
+          source: 'AI',
+          cacheHit: true,
+          similarityScore: memoryHit.score,
+          knowledgeId: memoryHit.item.id,
+        },
+      });
+
+      return {
+        ...base,
+        answer: memoryHit.item.answer,
+        source: 'AI' as AnswerSource,
+        model: 'StockPilot-Semantic-Cache',
+        interactionId,
+      };
+    }
+
     // Fetch rich store data for grounding
     const storeContext = await this.getStoreContext(storeId, role, stockItemId);
 
@@ -353,6 +383,14 @@ export class AiDecisionService {
       ].join('\n'),
       maxOutputTokens: 2500,
     }, base.answer);
+
+    // 2. Tự động học (lưu lại) cặp Câu hỏi - Câu trả lời nếu Gemini trả lời thành công
+    if (ai.meta.source === 'AI' && ai.text && ai.text !== base.answer) {
+      aiMemoryService.learn(ask, ai.text).catch((err) => {
+        logger.warn('ai_memory_learn_failed', { err });
+      });
+    }
+
     return { ...base, answer: ai.text, ...ai.meta };
   }
 
@@ -442,6 +480,35 @@ export class AiDecisionService {
     rulesAnswer: string
   ): Promise<{ text: string; json?: unknown; meta: AiAnswerMeta }> {
     if (!this.llm.available) {
+      const fallbackHit = await aiMemoryService.findFallbackAnswer(question, 0.55);
+      if (fallbackHit) {
+        const matchPct = Math.round(fallbackHit.score * 100);
+        console.log(`[AI Memory Fallback HIT] Độ khớp: ${matchPct}% - Cứu cánh khi Gemini API chưa cấu hình/tắt`);
+        const interactionId = await this.record(storeId, userId, {
+          model: 'StockPilot-Semantic-Cache-Fallback',
+          question,
+          answer: fallbackHit.item.answer,
+          status: 'SUCCESS',
+          latencyMs: 1,
+          summary: {
+            feature,
+            source: 'AI',
+            cacheFallbackHit: true,
+            fallbackReason: 'DISABLED',
+            similarityScore: fallbackHit.score,
+            knowledgeId: fallbackHit.item.id,
+          },
+        });
+        return {
+          text: fallbackHit.item.answer,
+          meta: {
+            source: 'AI',
+            model: 'StockPilot-Semantic-Cache-Fallback',
+            fallbackReason: 'DISABLED',
+            interactionId,
+          },
+        };
+      }
       return { text: rulesAnswer, meta: await this.recordRules(storeId, userId, feature, question, rulesAnswer, 'DISABLED') };
     }
     const started = Date.now();
@@ -455,6 +522,38 @@ export class AiDecisionService {
     } catch (error) {
       const reason: LlmFailureReason = error instanceof LlmUnavailableError ? error.reason : 'INVALID_RESPONSE';
       logger.warn('ai_assistant_fallback', { storeId, feature, reason, message: (error as Error).message });
+
+      // Cứu cánh bằng AI Memory Fallback với ngưỡng hạ xuống 55% nếu Gemini API bị lỗi/timeout/quota
+      const fallbackHit = await aiMemoryService.findFallbackAnswer(question, 0.55);
+      if (fallbackHit) {
+        const matchPct = Math.round(fallbackHit.score * 100);
+        console.log(`[AI Memory Fallback HIT] Độ khớp: ${matchPct}% - Cứu cánh khi Gemini API gặp lỗi (${reason})`);
+        const interactionId = await this.record(storeId, userId, {
+          model: 'StockPilot-Semantic-Cache-Fallback',
+          question,
+          answer: fallbackHit.item.answer,
+          status: 'SUCCESS',
+          latencyMs: Date.now() - started,
+          summary: {
+            feature,
+            source: 'AI',
+            cacheFallbackHit: true,
+            fallbackReason: reason,
+            similarityScore: fallbackHit.score,
+            knowledgeId: fallbackHit.item.id,
+          },
+        });
+        return {
+          text: fallbackHit.item.answer,
+          meta: {
+            source: 'AI',
+            model: 'StockPilot-Semantic-Cache-Fallback',
+            fallbackReason: reason,
+            interactionId,
+          },
+        };
+      }
+
       const interactionId = await this.record(storeId, userId, {
         model: this.llm.model, question, answer: rulesAnswer, status: reason === 'TIMEOUT' ? 'TIMEOUT' : 'FAILED',
         latencyMs: Date.now() - started, summary: { feature, source: 'RULES', fallbackReason: reason },
