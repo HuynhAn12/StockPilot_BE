@@ -335,7 +335,7 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
       expectNoFinancialData(res.body);
     });
 
-    it.each(['hàng nào đang bán lỗ', 'có đề xuất giá nào không', 'doanh số tuần này'])(
+    it.each(['hàng nào đang bán lỗ', 'có đề xuất giá nào không', 'doanh số tuần này', 'giá vốn hiện tại là bao nhiêu'])(
       'refuses financial staff question "%s"',
       async (question) => {
         const res = await request(app).post('/api/v1/assistant/chat').set(auth(staffToken)).send({ question });
