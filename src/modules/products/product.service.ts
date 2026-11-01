@@ -21,7 +21,13 @@ export class ProductService {
       where.categoryId = Number(query.categoryId);
     }
 
-    where.isActive = typeof query?.isActive === 'boolean' ? query.isActive : true;
+    if (typeof query?.isActive === 'boolean') {
+      where.isActive = query.isActive;
+    } else if (query?.all === true) {
+      // Include both active and inactive products
+    } else {
+      where.isActive = true;
+    }
 
     const rawKeyword = query?.q || query?.search;
     if (rawKeyword && typeof rawKeyword === 'string' && rawKeyword.trim().length > 0) {
@@ -337,6 +343,13 @@ export class ProductService {
           stockItems: true,
         },
       });
+
+      if (input.isActive !== undefined) {
+        await tx.stockItem.updateMany({
+          where: { productId: id, storeId },
+          data: { isActive: input.isActive },
+        });
+      }
 
       const action =
         input.isActive === false && existingProduct.isActive
