@@ -942,7 +942,7 @@ describe('Admin API', () => {
       const res = await request(app).get('/api/v1/admin/system/settings').set(auth(adminToken));
 
       expect(res.status).toBe(200);
-      expect(res.body.data.map((item: any) => item.key)).toEqual(['signup.enabled', 'maintenance.banner', 'ai.dailyQuotaPerStore']);
+      expect(res.body.data.map((item: any) => item.key)).toEqual(['signup.enabled', 'maintenance.banner', 'ai.dailyQuotaPerStore', 'tax.eInvoiceRevenueThreshold']);
       expect(res.body.data[0].value).toBe(true);
     });
 
