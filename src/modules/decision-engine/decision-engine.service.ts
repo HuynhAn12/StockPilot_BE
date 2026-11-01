@@ -4,7 +4,7 @@ import { NotFoundError } from '../../common/errors/app-error';
 import { DailySalesSummaryService } from '../daily-sales-summary/daily-sales-summary.service';
 import { EngineConfigService, ResolvedEngineConfig } from './engine-config.service';
 import { DemandMetricsService, DemandMetricsResult } from './demand-metrics.service';
-import { RiskEvaluator, SafetyStockResult } from './risk-evaluator';
+import { OverstockDetail, RiskEvaluator, SafetyStockResult } from './risk-evaluator';
 import { DecisionDataStatus, PricingEvaluator, PricingEvaluationResult } from './pricing-evaluator';
 import { DECISION_ENGINE_VERSION } from './engine-defaults';
 import { classifyRisk } from './risk-classification';
@@ -50,6 +50,8 @@ export interface SkuDecisionAnalysisResult {
     stockoutSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
     overstock: number;
     overstockSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    /** Components behind the overstock score (absent on snapshots from engine versions before V2.1). */
+    overstockDetail?: OverstockDetail;
     slowMoving: boolean;
     deadStock: boolean;
     deadStockSeverity: 'NONE' | 'WARNING' | 'CRITICAL';
@@ -186,6 +188,7 @@ export class DecisionEngineService {
             stockoutSeverity: result.risk.stockoutSeverity,
             overstockScore: result.risk.overstock,
             overstockSeverity: result.risk.overstockSeverity,
+            overstockDetail: result.risk.overstockDetail,
             isSlowMoving: result.risk.slowMoving,
             isDeadStock: result.risk.deadStock,
             deadStockSeverity: result.risk.deadStockSeverity,
@@ -416,6 +419,7 @@ export class DecisionEngineService {
       lowThreshold: config.lowRiskThreshold,
       highThreshold: config.highRiskThreshold,
       criticalThreshold: config.criticalRiskThreshold,
+      replenishmentLevel: Math.max(reorderPoint, stockItem.minStockLevel || 0),
     });
 
     const deadStockResult = this.riskEvaluator.evaluateSlowAndDeadStock({
@@ -486,6 +490,7 @@ export class DecisionEngineService {
         stockoutSeverity: stockoutRisk.severity,
         overstock: overstockRisk.score,
         overstockSeverity: overstockRisk.severity,
+        overstockDetail: overstockRisk.detail,
         slowMoving: deadStockResult.isSlowMoving,
         deadStock: deadStockResult.isDeadStock,
         deadStockSeverity: deadStockResult.severity,

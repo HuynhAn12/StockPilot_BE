@@ -7,6 +7,7 @@ import { requireRole } from '../../common/middleware/rbac';
 import { validate } from '../../common/middleware/validate';
 import { idParamSchema } from '../../common/utils/pagination';
 import {
+  adminActivityTrendQuerySchema,
   adminAiUsageQuerySchema,
   adminAuditLogExportQuerySchema,
   adminAuditLogQuerySchema,
@@ -28,6 +29,9 @@ adminRouter.use(authMiddleware);
 adminRouter.use(requireRole('ADMIN'));
 
 adminRouter.get('/dashboard', (req, res, next) => controller.getDashboard(req, res, next));
+adminRouter.get('/activity-trend', validate({ query: adminActivityTrendQuerySchema }), (req, res, next) =>
+  controller.getActivityTrend(req, res, next)
+);
 
 adminRouter.get('/users', validate({ query: adminUserListQuerySchema }), (req, res, next) => controller.listUsers(req, res, next));
 adminRouter.post('/users', validate({ body: createAdminUserSchema }), (req, res, next) => controller.createAdminUser(req, res, next));

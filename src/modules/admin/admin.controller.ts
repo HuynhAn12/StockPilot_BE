@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AdminService, RequestMeta } from './admin.service';
+import { AdminActivityTrendQuery } from './admin.schema';
 
 const adminService = new AdminService();
 
@@ -19,6 +20,15 @@ export class AdminController {
       next(error);
     }
   }
+  async getActivityTrend(req: Request, res: Response, next: NextFunction) {
+    try {
+      const data = await adminService.getActivityTrend(req.query as unknown as AdminActivityTrendQuery);
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+
 
   async listUsers(req: Request, res: Response, next: NextFunction) {
     try {

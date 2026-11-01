@@ -60,3 +60,7 @@ CLAUDE.md
 *.xlsx
 *.xls
 
+
+# Agent skills (cai local, khong day len git)
+.agents/
+skills-lock.json

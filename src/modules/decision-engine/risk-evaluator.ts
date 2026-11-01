@@ -37,6 +37,34 @@ export function inverseStandardNormal(p: number): number {
   return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
 
+/** Overstock score half-point: stock 50% above the max level maps to 0.5 before the business floor. */
+export const OVERSTOCK_QTY_HALF_SCORE_RATIO = 0.5;
+/** Coverage half-point: cover 3x the target (excess 2x) maps to 0.5, the default high-risk threshold. */
+export const OVERSTOCK_COVERAGE_HALF_SCORE_EXCESS = 2;
+/** A fully stalled trend raises an existing excess by at most 25%. */
+export const OVERSTOCK_TREND_AMPLIFIER = 0.25;
+
+export type OverstockDriver = 'ABOVE_MAX_LEVEL' | 'EXCESS_COVERAGE' | 'FALLING_DEMAND';
+
+/** Why a SKU is (or is not) overstocked; stored with alerts so the score can be explained. */
+export interface OverstockDetail {
+  drivers: OverstockDriver[];
+  maxStockLevel: number;
+  unitsAboveMax: number;
+  daysOfCover: number | null;
+  targetCoverageDays: number;
+  /** daysOfCover / targetCoverageDays, when demand is known. */
+  coverageMultiple: number | null;
+  /** Units beyond what the target coverage period needs, when excess coverage counts. */
+  unitsBeyondTargetCover: number;
+  trendRatio: number;
+}
+
+/** Maps an excess x >= 0 to [0, 1): x / (x + halfPoint), equal to 0.5 at the half point. */
+function saturate(x: number, halfPoint: number): number {
+  return x > 0 ? x / (x + halfPoint) : 0;
+}
+
 export interface RiskEvaluationResult {
   stockoutScore: number;
   stockoutSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
@@ -208,7 +236,19 @@ export class RiskEvaluator {
   }
 
   /**
-   * Calculates Overstock Risk (0 - 100).
+   * Calculates Overstock Risk (0 - 100) from two independent kinds of excess:
+   *
+   * - Above the owner's cap: units over maxStockLevel. A stock fact, available without sales history.
+   * - Excess coverage: days of cover beyond the target. An estimate, so it needs sufficient history
+   *   (daysOfCover is null otherwise) and positive demand; a SKU that stopped selling is reported by
+   *   the slow-moving / dead-stock rules instead.
+   *
+   * Each excess maps through x / (x + k): monotonic and unbounded below 1, so 90 and 900 days of cover
+   * score differently (the former formula clamped both terms at 1 and gave every slow seller the same
+   * score). The two parts combine as 1 - (1 - a)(1 - b): either alone can raise the risk, neither can
+   * exceed 100. A falling sales trend only amplifies an existing excess, and only when the recent window
+   * expects enough units for "no recent sales" to be a signal rather than ordinary low-volume noise.
+   * Stock at or below the replenishment level (reorder point / min stock) is never excess coverage.
    */
   calculateOverstockRisk(params: {
     availableStock: number;
@@ -219,21 +259,33 @@ export class RiskEvaluator {
     lowThreshold: number;
     highThreshold: number;
     criticalThreshold: number;
-  }): { score: number; severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' } {
+    /** Replenishment floor: max(reorder point, min stock). Stock up to this level is never excess. */
+    replenishmentLevel?: number;
+  }): { score: number; severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; detail: OverstockDetail } {
     const { availableStock, maxStockLevel, daysOfCover, targetCoverageDays, trendRatio, lowThreshold, highThreshold, criticalThreshold } = params;
+    const replenishmentLevel = Math.max(0, params.replenishmentLevel ?? 0);
+    const target = Math.max(targetCoverageDays, 1);
 
-    const qtyExcessRatio = Math.max(0, availableStock - maxStockLevel) / Math.max(maxStockLevel, 1);
-    const coverageExcess =
-      daysOfCover !== null
-        ? Math.max(0, daysOfCover - targetCoverageDays) / Math.max(targetCoverageDays, 1)
-        : (qtyExcessRatio > 0 ? 0.5 : 0);
-    const declineRisk = Math.min(Math.max(1.0 - trendRatio, 0), 1);
+    const unitsAboveMax = maxStockLevel > 0 ? Math.max(0, availableStock - maxStockLevel) : 0;
+    const qtyExcessRatio = maxStockLevel > 0 ? unitsAboveMax / maxStockLevel : 0;
+    const qtyRisk = saturate(qtyExcessRatio, OVERSTOCK_QTY_HALF_SCORE_RATIO);
 
-    const weighted = 0.45 * Math.min(1, qtyExcessRatio) + 0.4 * Math.min(1, coverageExcess) + 0.15 * declineRisk;
-    let score = Math.min(100, Math.max(0, Math.round(100 * weighted)));
-    if (availableStock > maxStockLevel && maxStockLevel > 0) {
-      const minOverstockScore = qtyExcessRatio >= 0.5 ? highThreshold : lowThreshold;
-      score = Math.max(score, minOverstockScore);
+    const avgDailyDemand = daysOfCover !== null && daysOfCover > 0 ? availableStock / daysOfCover : 0;
+    const coverageMultiple = daysOfCover !== null && avgDailyDemand > 0 ? daysOfCover / target : null;
+    const unitsBeyondTargetCover =
+      coverageMultiple !== null ? Math.max(0, Math.floor(availableStock - avgDailyDemand * target)) : 0;
+    const coverageCounts = coverageMultiple !== null && coverageMultiple > 1 && availableStock > replenishmentLevel && unitsBeyondTargetCover >= 1;
+    const coverageRisk = coverageCounts ? saturate(coverageMultiple! - 1, OVERSTOCK_COVERAGE_HALF_SCORE_EXCESS) : 0;
+
+    const excess = 1 - (1 - qtyRisk) * (1 - coverageRisk);
+    const recentExpectedUnits = avgDailyDemand * 7;
+    const declineRisk =
+      excess > 0 && recentExpectedUnits >= MIN_EXPECTED_UNITS_FOR_ANOMALY ? Math.min(Math.max(1 - trendRatio, 0), 1) : 0;
+
+    let score = Math.min(100, Math.round(100 * excess * (1 + OVERSTOCK_TREND_AMPLIFIER * declineRisk)));
+    // Business floor: stock above the owner's cap is always at least a low risk, and half again over it is high.
+    if (unitsAboveMax > 0) {
+      score = Math.max(score, qtyExcessRatio >= 0.5 ? highThreshold : lowThreshold);
     }
 
     let severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
@@ -241,7 +293,25 @@ export class RiskEvaluator {
     else if (score >= highThreshold) severity = 'HIGH';
     else if (score >= lowThreshold) severity = 'MEDIUM';
 
-    return { score, severity };
+    const drivers: OverstockDriver[] = [];
+    if (unitsAboveMax > 0) drivers.push('ABOVE_MAX_LEVEL');
+    if (coverageRisk > 0) drivers.push('EXCESS_COVERAGE');
+    if (declineRisk > 0) drivers.push('FALLING_DEMAND');
+
+    return {
+      score,
+      severity,
+      detail: {
+        drivers,
+        maxStockLevel,
+        unitsAboveMax,
+        daysOfCover,
+        targetCoverageDays: target,
+        coverageMultiple: coverageMultiple === null ? null : Number(coverageMultiple.toFixed(1)),
+        unitsBeyondTargetCover: coverageCounts ? unitsBeyondTargetCover : 0,
+        trendRatio,
+      },
+    };
   }
 
   /**
