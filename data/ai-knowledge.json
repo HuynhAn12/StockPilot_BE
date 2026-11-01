@@ -78,5 +78,15 @@
     "hitCount": 0,
     "createdAt": "2026-11-01T20:00:00.000Z",
     "updatedAt": "2026-11-01T20:00:00.000Z"
+  },
+  {
+    "id": "learned-1793542967823-mu9qg",
+    "question": "Ờ, hộp...",
+    "normalizedQuestion": "ờ hộp",
+    "answer": "Dạ em chào anh/chị, hình như câu hỏi của anh/chị đang bị dở dang (\"Ờ, hộp...\") ạ. \n\nAnh/chị đang cần tìm thông tin về hộp sản phẩm nào (ví dụ: hộp bánh, hộp cà phê, hay hộp trà...) để em kiểm tra tồn kho và giá bán giúp mình ngay nhé? \n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T14:22:47.823Z",
+    "updatedAt": "2026-11-01T14:22:47.823Z"
   }
 ]

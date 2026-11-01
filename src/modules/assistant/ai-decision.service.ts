@@ -48,6 +48,19 @@ const BASE_INSTRUCTIONS = [
   '   - Thoải mái hỗ trợ mọi yêu cầu (lên kế hoạch bán hàng, kịch bản livestream/post bài, xả hàng tồn, tăng doanh thu...).',
   '   - Ưu tiên sử dụng chính xác tên sản phẩm, mã SKU, giá bán, tồn kho thực tế từ khối <store_data>.',
   '   - Trình bày mạch lạc bằng Markdown: gạch đầu dòng rõ ràng, bảng số liệu, in đậm điểm nhấn, tiền tệ ghi dạng 25.000 đ.',
+  '',
+  '5. NẮM TOÀN BỘ 100% DỮ LIỆU CÁC CHỨC NĂNG CỦA CỬA HÀNG TRÊN HỆ THỐNG:',
+  '   - Khối <store_data> đã được nạp TOÀN DIỆN 100% dữ liệu thực tế từ mọi phân hệ của StockPilot:',
+  '     + Toàn bộ danh mục tất cả sản phẩm (mã SKU, tên, danh mục, tồn thực tế on-hand, tồn khả dụng, giá bán, giá vốn, trạng thái hết hàng/sắp hết/tồn cao).',
+  '     + Tổng quan kho: Tổng số sản phẩm, tổng vốn tồn kho, tổng giá trị bán lẻ, số mặt hàng hết hàng, số mặt hàng sắp hết, số mặt hàng tồn quá mức.',
+  '     + Danh sách kho hàng và địa chỉ kho.',
+  '     + Danh sách nhân sự đang làm việc (họ tên, vai trò: Chủ cửa hàng, Nhân viên kho, email).',
+  '     + Danh sách các phương thức và cấu hình thanh toán.',
+  '     + Toàn bộ 100% cảnh báo rủi ro kho và các đề xuất tối ưu giá bán của Decision Engine.',
+  '     + 10 đơn hàng mới nhất và kết quả kinh doanh hôm nay.',
+  '     + Báo cáo toàn diện tất cả các tháng (Tháng 5, 6, 7, 8, 9, 10, 11/2026 kèm Top sản phẩm bán chạy nhất từng tháng).',
+  '   - Khi Chủ cửa hàng hỏi bất kỳ câu hỏi nào về hoạt động của cửa hàng (nhân sự, kho hàng, số lượng tồn kho của bất kỳ món nào, doanh thu, lợi nhuận, đơn hàng gần đây, cảnh báo nào cần xử lý...), HÃY TRA CỨU CHÍNH XÁC TRONG <store_data> VÀ TRẢ LỜI NGAY ĐẦY ĐỦ.',
+  '   - TUYỆT ĐỐI KHÔNG BỎ SÓT THÔNG TIN VÀ KHÔNG BAO GIỜ NÓI "KHÔNG BIẾT" HOẶC "CHƯA GHI NHẬN", vì toàn bộ dữ liệu của cửa hàng đều đã được tích hợp sẵn sàng trong hệ thống.',
 ].join('\n');
 
 const STAFF_INSTRUCTIONS =
@@ -114,10 +127,20 @@ export class AiDecisionService {
   async getStoreContext(storeId: number, role: Role | undefined, targetStockItemId?: number) {
     const canSeeFinancials = canViewFinancials(role);
     try {
-      const [store, stockItems, alerts, pricingRecommendations, ordersAll] = await Promise.all([
+      const [
+        store,
+        stockItems,
+        alerts,
+        pricingRecommendations,
+        ordersAll,
+        warehouses,
+        storeUsers,
+        paymentConfigs,
+        recentOrdersRaw,
+      ] = await Promise.all([
         this.prisma.store.findUnique({
           where: { id: storeId },
-          select: { name: true, phone: true, address: true },
+          select: { name: true, phone: true, address: true, createdAt: true },
         }),
         this.prisma.stockItem.findMany({
           where: { storeId, isActive: true },
@@ -132,32 +155,35 @@ export class AiDecisionService {
             product: { select: { category: { select: { name: true } } } },
             balances: { select: { quantity: true, reservedQuantity: true } },
           },
-          take: 60,
-          orderBy: { updatedAt: 'desc' },
+          take: 500, // Nạp 100% tất cả sản phẩm của cửa hàng (không giới hạn 60 món)
+          orderBy: { name: 'asc' },
         }),
         this.prisma.alert.findMany({
           where: { storeId, status: { in: ['OPEN', 'ACKNOWLEDGED'] } },
           select: {
+            id: true,
             type: true,
             severity: true,
             title: true,
             message: true,
+            riskScore: true,
             stockItem: { select: { sku: true, name: true } },
           },
-          take: 10,
+          take: 50,
           orderBy: [{ riskScore: 'desc' }, { openedAt: 'desc' }],
         }),
         canSeeFinancials
           ? this.prisma.pricingRecommendation.findMany({
               where: { storeId, status: 'PENDING' },
               select: {
+                id: true,
                 action: true,
                 currentPrice: true,
                 recommendedPrice: true,
                 discountPct: true,
                 stockItem: { select: { sku: true, name: true } },
               },
-              take: 10,
+              take: 60,
               orderBy: { riskScore: 'desc' },
             })
           : Promise.resolve([]),
@@ -184,6 +210,30 @@ export class AiDecisionService {
               orderBy: { createdAt: 'desc' },
             })
           : Promise.resolve([]),
+        this.prisma.warehouse.findMany({
+          where: { storeId, isActive: true },
+          select: { id: true, name: true, location: true, isDefault: true },
+        }),
+        this.prisma.user.findMany({
+          where: { storeId, isActive: true },
+          select: { id: true, fullName: true, role: true, email: true },
+        }),
+        this.prisma.storePaymentConfig.findMany({
+          where: { storeId },
+          select: { provider: true, isActive: true },
+        }),
+        this.prisma.order.findMany({
+          where: { storeId },
+          take: 10,
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            status: true,
+            totalAmount: true,
+            createdAt: true,
+            _count: { select: { items: true } },
+          },
+        }),
       ]);
 
       // Xây dựng bức tranh toàn diện của TẤT CẢ các tháng (All months performance with top products)
@@ -197,9 +247,18 @@ export class AiDecisionService {
         skuMap: Record<string, { sku: string; name: string; quantity: number; revenue: number }>;
       }> = {};
 
+      const todayStr = new Date().toISOString().slice(0, 10);
+      let todayOrdersCount = 0;
+      let todayRevenue = 0;
+      let todayCogs = 0;
+      let todayUnitsSold = 0;
+      const todaySkuMap: Record<string, { sku: string; name: string; quantity: number; revenue: number }> = {};
+
       if (Array.isArray(ordersAll)) {
         for (const o of ordersAll) {
+          const dateStr = o.createdAt.toISOString().slice(0, 10);
           const ym = o.createdAt.toISOString().slice(0, 7);
+
           if (!monthMap[ym]) {
             const [y, m] = ym.split('-');
             monthMap[ym] = {
@@ -216,6 +275,12 @@ export class AiDecisionService {
           cur.totalOrders += 1;
           cur.totalRevenue += Number(o.totalAmount);
 
+          const isToday = dateStr === todayStr;
+          if (isToday) {
+            todayOrdersCount += 1;
+            todayRevenue += Number(o.totalAmount);
+          }
+
           for (const item of o.items) {
             cur.totalUnitsSold += item.quantity;
             cur.totalCogs += Number(item.costPriceSnapshot) * item.quantity;
@@ -229,6 +294,21 @@ export class AiDecisionService {
             }
             cur.skuMap[item.skuSnapshot].quantity += item.quantity;
             cur.skuMap[item.skuSnapshot].revenue += Number(item.subtotal);
+
+            if (isToday) {
+              todayUnitsSold += item.quantity;
+              todayCogs += Number(item.costPriceSnapshot) * item.quantity;
+              if (!todaySkuMap[item.skuSnapshot]) {
+                todaySkuMap[item.skuSnapshot] = {
+                  sku: item.skuSnapshot,
+                  name: item.nameSnapshot,
+                  quantity: 0,
+                  revenue: 0,
+                };
+              }
+              todaySkuMap[item.skuSnapshot].quantity += item.quantity;
+              todaySkuMap[item.skuSnapshot].revenue += Number(item.subtotal);
+            }
           }
         }
       }
@@ -260,6 +340,15 @@ export class AiDecisionService {
           };
         });
 
+      let totalInventoryValue = 0;
+      let totalRetailValue = 0;
+      let outOfStockCount = 0;
+      let lowStockCount = 0;
+      let overStockCount = 0;
+      const categoriesSummary: Record<string, { count: number; totalAvailable: number }> = {};
+      const outOfStockList: string[] = [];
+      const lowStockList: string[] = [];
+
       const formattedProducts = stockItems.map((item) => {
         const onHand = item.balances.reduce((sum, b) => sum + b.quantity, 0);
         const reserved = item.balances.reduce((sum, b) => sum + b.reservedQuantity, 0);
@@ -271,40 +360,93 @@ export class AiDecisionService {
             ? Math.round(((sellingPrice - costPrice) / sellingPrice) * 1000) / 10
             : undefined;
 
+        if (costPrice) totalInventoryValue += costPrice * onHand;
+        totalRetailValue += sellingPrice * onHand;
+
+        const catName = item.product?.category?.name ?? 'Khác';
+        if (!categoriesSummary[catName]) categoriesSummary[catName] = { count: 0, totalAvailable: 0 };
+        categoriesSummary[catName].count += 1;
+        categoriesSummary[catName].totalAvailable += available;
+
+        let status = 'ỔN ĐỊNH';
+        if (available <= 0) {
+          status = 'HẾT HÀNG';
+          outOfStockCount += 1;
+          if (outOfStockList.length < 15) outOfStockList.push(`${item.name} (${item.sku})`);
+        } else if (available <= item.minStockLevel) {
+          status = 'SẮP HẾT';
+          lowStockCount += 1;
+          if (lowStockList.length < 15) lowStockList.push(`${item.name} (${item.sku}) - Còn: ${available}`);
+        } else if (available >= item.maxStockLevel) {
+          status = 'TỒN CAO';
+          overStockCount += 1;
+        }
+
         return {
           sku: item.sku,
           name: item.name,
-          category: item.product?.category?.name ?? 'Khác',
+          category: catName,
           available,
           onHand,
           sellingPrice,
           ...(canSeeFinancials ? { costPrice, marginPct: marginPct != null ? `${marginPct}%` : undefined } : {}),
-          status:
-            available <= 0
-              ? 'HẾT HÀNG'
-              : available <= item.minStockLevel
-              ? 'SẮP HẾT'
-              : available >= item.maxStockLevel
-              ? 'TỒN CAO'
-              : 'ỔN ĐỊNH',
+          status,
         };
       });
 
+      const todayGrossProfit = Math.max(0, todayRevenue - todayCogs);
+      const todayMarginPct = todayRevenue > 0 ? `${((todayGrossProfit / todayRevenue) * 100).toFixed(1)}%` : '0%';
+      const todayTopProducts = Object.values(todaySkuMap)
+        .sort((a, b) => b.quantity - a.quantity)
+        .slice(0, 5)
+        .map((p) => ({ sku: p.sku, name: p.name, unitsSold: p.quantity, revenue: p.revenue }));
+
       return {
-        storeInfo: store ? { name: store.name, address: store.address } : null,
+        storeInfo: store ? { name: store.name, phone: store.phone, address: store.address } : null,
+        warehouses: warehouses.map((w) => ({ id: w.id, name: w.name, location: w.location, isDefault: w.isDefault })),
+        storeStaff: storeUsers.map((u) => ({ name: u.fullName, role: u.role, email: u.email })),
+        paymentGateways: paymentConfigs.map((p) => ({ provider: p.provider, isActive: p.isActive })),
+        inventoryOverview: {
+          totalProductsCount: stockItems.length,
+          outOfStockCount,
+          outOfStockItemsSample: outOfStockList,
+          lowStockCount,
+          lowStockItemsSample: lowStockList,
+          overStockCount,
+          ...(canSeeFinancials ? { totalInventoryCostValue: totalInventoryValue, totalRetailValue } : {}),
+          categoriesSummary,
+        },
         trackedProducts: formattedProducts,
         activeAlerts: alerts.map((a) => ({
+          type: a.type,
           severity: a.severity,
           title: a.title,
+          message: a.message,
           product: a.stockItem ? `${a.stockItem.name} (${a.stockItem.sku})` : undefined,
+        })),
+        recentOrders: recentOrdersRaw.map((o) => ({
+          orderId: o.id,
+          status: o.status,
+          totalAmount: Number(o.totalAmount),
+          totalItems: o._count.items,
+          createdAt: o.createdAt.toISOString(),
         })),
         ...(canSeeFinancials
           ? {
+              todayPerformance: {
+                todayOrdersCount,
+                todayRevenue,
+                todayUnitsSold,
+                todayGrossProfit,
+                todayMarginPct,
+                todayTopProducts,
+              },
               pendingPricingRecommendations: pricingRecommendations.map((r) => ({
                 action: r.action,
                 product: r.stockItem ? `${r.stockItem.name} (${r.stockItem.sku})` : undefined,
                 currentPrice: Number(r.currentPrice),
                 recommendedPrice: Number(r.recommendedPrice),
+                discountPct: Number(r.discountPct),
               })),
               allMonthsPerformance,
             }

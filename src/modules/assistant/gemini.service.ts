@@ -8,3 +8,4 @@ import { aiMemoryService, AiMemoryService } from './ai-memory.service';
 
 export { AiDecisionService, AiDecisionService as GeminiService, OpenAiClient, aiMemoryService, AiMemoryService };
 export default AiDecisionService;
+
