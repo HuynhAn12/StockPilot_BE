@@ -27,7 +27,7 @@ pricingRouter.get(
 // Get price change history (owner-only: rows reference accepted/modified pricing recommendations)
 pricingRouter.get(
   '/history',
-  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  requireRole('SHOP_OWNER'),
   controller.getHistory
 );
 
