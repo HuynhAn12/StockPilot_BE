@@ -1,3 +1,4 @@
+// StockPilot Backend Server (v2.1)
 import { createApp } from './app';
 import { env } from './config/env';
 import { prisma } from './config/db';

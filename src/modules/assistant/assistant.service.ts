@@ -645,18 +645,33 @@ export class AssistantService {
       };
     }
 
-    // DEFAULT FALLBACK: General store-wide overview
-    const overview = await this.explainStoreOverview(storeId, viewerRole);
+    // INTENT 9: Hỏi tổng quan tình hình cửa hàng / hôm nay
+    if (q.includes('tổng quan') || q.includes('tình hình') || q.includes('cửa hàng hôm nay') || q.includes('báo cáo hôm nay') || !q) {
+      const overview = await this.explainStoreOverview(storeId, viewerRole);
+      return {
+        answer: overview.summary,
+        actionLinks: canSeeFinancials
+          ? [
+              { label: 'Xem cảnh báo rủi ro', url: '/alerts' },
+              { label: 'Xem gợi ý giá bán', url: '/pricing' },
+              { label: 'Xem báo cáo doanh thu', url: '/analytics' },
+            ]
+          : [{ label: 'Xem cảnh báo rủi ro', url: '/alerts' }],
+        dataSnapshot: overview.metrics,
+      };
+    }
+
+    // DEFAULT FALLBACK: Khi câu hỏi tự do ngoài phạm vi rule hoặc AI tạm thời gián đoạn
     return {
-      answer: overview.summary,
+      answer: canSeeFinancials
+        ? `Dạ em đã nhận được câu hỏi của anh/chị: "${question}".\n\nHiện tại câu hỏi này đang nằm ngoài danh mục số liệu nội bộ của cửa hàng. Anh/chị có muốn em hỗ trợ kiểm tra tồn kho các mặt hàng, xem sản phẩm bán chạy, hay kiểm tra các gợi ý tối ưu giá bán cho cửa hàng không ạ?`
+        : `Dạ em đã ghi nhận câu hỏi: "${question}". Em có thể hỗ trợ anh/chị tra cứu số lượng tồn kho, kiểm tra mặt hàng sắp hết hoặc quy trình kiểm kê kho ạ!`,
       actionLinks: canSeeFinancials
         ? [
+            { label: 'Xem tồn kho', url: '/inventory' },
             { label: 'Xem cảnh báo rủi ro', url: '/alerts' },
-            { label: 'Xem gợi ý giá bán', url: '/pricing' },
-            { label: 'Xem báo cáo doanh thu', url: '/analytics' },
           ]
-        : [{ label: 'Xem cảnh báo rủi ro', url: '/alerts' }],
-      dataSnapshot: overview.metrics,
+        : [{ label: 'Xem tồn kho', url: '/inventory' }],
     };
   }
 }
