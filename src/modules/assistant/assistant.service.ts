@@ -18,6 +18,33 @@ export const FINANCIAL_DATA_RESTRICTED_MESSAGE =
  * financial content in the first place (fail-closed: an unknown role gets the staff view), instead
  * of generating owner text and redacting it afterwards.
  */
+
+export function normalizeVietnameseVoiceQuery(text: string): string {
+  if (!text) return '';
+  let s = text.trim();
+  s = s.replace(/\bbón chạy\b/gi, 'bán chạy')
+       .replace(/\bbán chay\b/gi, 'bán chạy')
+       .replace(/\bchạy nhứt\b/gi, 'chạy nhất')
+       .replace(/\bthống tóm\b/gi, 'tháng tám')
+       .replace(/\btháng tóm\b/gi, 'tháng tám')
+       .replace(/\bthống 8\b/gi, 'tháng 8')
+       .replace(/\bthống mười\b/gi, 'tháng mười')
+       .replace(/\bthống 10\b/gi, 'tháng 10')
+       .replace(/\bthống chín\b/gi, 'tháng chín')
+       .replace(/\bthống 9\b/gi, 'tháng 9')
+       .replace(/\bthống bảy\b/gi, 'tháng bảy')
+       .replace(/\bthống 7\b/gi, 'tháng 7')
+       .replace(/\bthống sáu\b/gi, 'tháng sáu')
+       .replace(/\bthống 6\b/gi, 'tháng 6')
+       .replace(/\bthống năm\b/gi, 'tháng năm')
+       .replace(/\bthống 5\b/gi, 'tháng 5')
+       .replace(/\bthống trước\b/gi, 'tháng trước')
+       .replace(/\btháng trc\b/gi, 'tháng trước')
+       .replace(/\bdoanh thô\b/gi, 'doanh thu')
+       .replace(/\blợi nhộn\b/gi, 'lợi nhuận');
+  return s;
+}
+
 export class AssistantService {
   constructor(
     private readonly prisma: PrismaClient = defaultPrisma,
@@ -371,7 +398,8 @@ export class AssistantService {
     actionLinks?: Array<{ label: string; url: string; variant?: string }>;
     dataSnapshot?: any;
   }> {
-    const q = (question || '').toLowerCase().trim();
+    const normalizedQuestion = normalizeVietnameseVoiceQuery(question);
+    const q = normalizedQuestion.toLowerCase().trim();
     const canSeeFinancials = canViewFinancials(viewerRole);
     const restricted = () => ({
       answer: FINANCIAL_DATA_RESTRICTED_MESSAGE,

@@ -3,7 +3,7 @@ import { prisma as defaultPrisma } from '../../config/db';
 import { logger } from '../../common/logger';
 import { canViewFinancials } from '../../common/utils/role-access';
 import { DecisionEngineService } from '../decision-engine/decision-engine.service';
-import { AssistantService, FINANCIAL_DATA_RESTRICTED_MESSAGE } from './assistant.service';
+import { AssistantService, FINANCIAL_DATA_RESTRICTED_MESSAGE, normalizeVietnameseVoiceQuery } from './assistant.service';
 import { LlmFailureReason, LlmResult, LlmUnavailableError, OpenAiClient } from './llm/openai-client';
 import { rankSuggestions, ReorderCandidate } from './suggestion-ranking';
 
@@ -37,16 +37,13 @@ const BASE_INSTRUCTIONS = [
   '   - Ở cuối câu trả lời, hãy luôn chủ động hỏi gợi mở 1 câu ngắn gọn, ấm áp sẵn sàng giúp đỡ ngay:',
   '     (Ví dụ: "Anh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!", hoặc "Anh/chị có cần em hỗ trợ thêm gì cho cửa hàng nữa không ạ?").',
   '',
-  '3. KHI HỎI VỀ SỐ LIỆU THÁNG TRƯỚC, THÁNG BẤT KỲ HOẶC YÊU CẦU KẾT LUẬN & GIẢI PHÁP CHO CHỦ SHOP:',
-  '   - LẤY TOÀN BỘ SỐ LIỆU CHÍNH XÁC từ khối <store_data> (trong liveStoreSnapshot.multiMonthHistory hoặc ruleBasedAnalysis.dataSnapshot): Doanh thu thực tế, số đơn hàng, tổng sản phẩm bán ra, lợi nhuận gộp và biên lợi nhuận.',
-  '   - So sánh với các tháng lân cận để chỉ ra xu hướng tăng hay giảm (về doanh thu, số đơn, biên lợi nhuận).',
-  '   - Nêu bật các mặt hàng chủ lực bán chạy nhất trong tháng đó.',
-  '   - BẮT BUỘC ĐƯA RA CÁC KẾT LUẬN VÀ GIẢI PHÁP HÀNH ĐỘNG CHI TIẾT CHO CHỦ CỬA HÀNG:',
-  '     + Giải pháp nhập hàng & duy trì tồn kho an toàn cho các mặt hàng chủ lực.',
-  '     + Giải pháp định giá & kích cầu (combo, chiết khấu số lượng, tối ưu biên lợi nhuận).',
-  '     + Giải pháp xử lý hàng tồn kho chậm để quay vòng vốn nhanh.',
-  '',
-  '4. KHI ĐƯỢC YÊU CẦU LẬP KẾ HOẠCH HOẶC TƯ VẤN KINH DOANH:',
+  '3. KHI HỎI VỀ SỐ LIỆU THÁNG TRƯỚC, BẤT KỲ THÁNG NÀO HOẶC SẢN PHẨM BÁN CHẠY THEO THÁNG:',
+  '   - Khối <store_data> đã được nạp ĐẦY ĐỦ 100% SỐ LIỆU THẬT CỦA TẤT CẢ CÁC THÁNG (allMonthsPerformance: Tháng 5, 6, 7, 8, 9, 10, 11/2026 kèm Top sản phẩm bán chạy nhất từng tháng).',
+  '   - Nếu người dùng hỏi bằng giọng nói bị méo âm (như "thống tóm" -> Tháng 8, "bón chạy" -> Bán chạy), hãy tự động hiểu đúng ý định của chủ cửa hàng.',
+  '   - LẤY TOÀN BỘ SỐ LIỆU CHÍNH XÁC từ allMonthsPerformance: Doanh thu thực tế, số đơn hàng, tổng sản phẩm bán ra, lợi nhuận gộp, biên lợi nhuận, và Top 5 sản phẩm bán chạy nhất.',
+  '   - TUYỆT ĐỐI KHÔNG BỊA ĐẶT SỐ LIỆU và KHÔNG BAO GIỜ NÓI LÀ "CHƯA GHI NHẬN" hoặc "KHÔNG BIẾT", vì dữ liệu thật của mọi tháng đều đã có sẵn.',
+  '   - Luôn đưa ra các nhận xét xu hướng và 2-3 giải pháp chiến lược thực tế cho Chủ cửa hàng (nhập hàng, tối ưu giá, kích cầu).',
+    '4. KHI ĐƯỢC YÊU CẦU LẬP KẾ HOẠCH HOẶC TƯ VẤN KINH DOANH:',
   '   - Thoải mái hỗ trợ mọi yêu cầu (lên kế hoạch bán hàng, kịch bản livestream/post bài, xả hàng tồn, tăng doanh thu...).',
   '   - Ưu tiên sử dụng chính xác tên sản phẩm, mã SKU, giá bán, tồn kho thực tế từ khối <store_data>.',
   '   - Trình bày mạch lạc bằng Markdown: gạch đầu dòng rõ ràng, bảng số liệu, in đậm điểm nhấn, tiền tệ ghi dạng 25.000 đ.',
@@ -116,7 +113,7 @@ export class AiDecisionService {
   async getStoreContext(storeId: number, role: Role | undefined, targetStockItemId?: number) {
     const canSeeFinancials = canViewFinancials(role);
     try {
-      const [store, stockItems, alerts, pricingRecommendations, orders30d, dailySummaries] = await Promise.all([
+      const [store, stockItems, alerts, pricingRecommendations, ordersAll] = await Promise.all([
         this.prisma.store.findUnique({
           where: { id: storeId },
           select: { name: true, phone: true, address: true },
@@ -134,7 +131,7 @@ export class AiDecisionService {
             product: { select: { category: { select: { name: true } } } },
             balances: { select: { quantity: true, reservedQuantity: true } },
           },
-          take: 50,
+          take: 60,
           orderBy: { updatedAt: 'desc' },
         }),
         this.prisma.alert.findMany({
@@ -168,42 +165,99 @@ export class AiDecisionService {
               where: {
                 storeId,
                 status: { in: ['FULFILLED', 'CONFIRMED'] },
-                createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
               },
-              select: { totalAmount: true },
-            })
-          : Promise.resolve([]),
-        canSeeFinancials
-          ? this.prisma.dailySalesSummary.findMany({
-              where: { storeId },
-              select: { summaryDate: true, netRevenue: true, grossProfit: true, netSoldQty: true, cogs: true, orderCount: true },
-              orderBy: { summaryDate: 'desc' },
+              select: {
+                id: true,
+                createdAt: true,
+                totalAmount: true,
+                items: {
+                  select: {
+                    skuSnapshot: true,
+                    nameSnapshot: true,
+                    quantity: true,
+                    subtotal: true,
+                    costPriceSnapshot: true,
+                  },
+                },
+              },
+              orderBy: { createdAt: 'desc' },
             })
           : Promise.resolve([]),
       ]);
 
-      // Tổng hợp lịch sử kinh doanh theo từng tháng (Multi-month performance history)
-      const monthMap: Record<string, { month: string; revenue: number; grossProfit: number; cogs: number; unitsSold: number; orderCount: number }> = {};
-      if (Array.isArray(dailySummaries)) {
-        for (const s of dailySummaries) {
-          const ym = s.summaryDate.toISOString().slice(0, 7);
+      // Xây dựng bức tranh toàn diện của TẤT CẢ các tháng (All months performance with top products)
+      const monthMap: Record<string, {
+        monthKey: string;
+        label: string;
+        totalOrders: number;
+        totalRevenue: number;
+        totalCogs: number;
+        totalUnitsSold: number;
+        skuMap: Record<string, { sku: string; name: string; quantity: number; revenue: number }>;
+      }> = {};
+
+      if (Array.isArray(ordersAll)) {
+        for (const o of ordersAll) {
+          const ym = o.createdAt.toISOString().slice(0, 7);
           if (!monthMap[ym]) {
-            monthMap[ym] = { month: ym, revenue: 0, grossProfit: 0, cogs: 0, unitsSold: 0, orderCount: 0 };
+            const [y, m] = ym.split('-');
+            monthMap[ym] = {
+              monthKey: ym,
+              label: `Tháng ${parseInt(m, 10)}/${y}`,
+              totalOrders: 0,
+              totalRevenue: 0,
+              totalCogs: 0,
+              totalUnitsSold: 0,
+              skuMap: {},
+            };
           }
-          monthMap[ym].revenue += Number(s.netRevenue);
-          monthMap[ym].grossProfit += Number(s.grossProfit);
-          monthMap[ym].cogs += Number(s.cogs);
-          monthMap[ym].unitsSold += s.netSoldQty;
-          monthMap[ym].orderCount += s.orderCount;
+          const cur = monthMap[ym];
+          cur.totalOrders += 1;
+          cur.totalRevenue += Number(o.totalAmount);
+
+          for (const item of o.items) {
+            cur.totalUnitsSold += item.quantity;
+            cur.totalCogs += Number(item.costPriceSnapshot) * item.quantity;
+            if (!cur.skuMap[item.skuSnapshot]) {
+              cur.skuMap[item.skuSnapshot] = {
+                sku: item.skuSnapshot,
+                name: item.nameSnapshot,
+                quantity: 0,
+                revenue: 0,
+              };
+            }
+            cur.skuMap[item.skuSnapshot].quantity += item.quantity;
+            cur.skuMap[item.skuSnapshot].revenue += Number(item.subtotal);
+          }
         }
       }
-      const multiMonthHistory = Object.values(monthMap)
-        .sort((a, b) => b.month.localeCompare(a.month))
-        .slice(0, 8)
-        .map((m) => ({
-          ...m,
-          marginPct: m.revenue > 0 ? `${((m.grossProfit / m.revenue) * 100).toFixed(1)}%` : '0%',
-        }));
+
+      const allMonthsPerformance = Object.values(monthMap)
+        .sort((a, b) => b.monthKey.localeCompare(a.monthKey))
+        .map((m) => {
+          const grossProfit = Math.max(0, m.totalRevenue - m.totalCogs);
+          const marginPct = m.totalRevenue > 0 ? `${((grossProfit / m.totalRevenue) * 100).toFixed(1)}%` : '0%';
+          const topProducts = Object.values(m.skuMap)
+            .sort((a, b) => b.quantity - a.quantity)
+            .slice(0, 5)
+            .map((p) => ({
+              sku: p.sku,
+              name: p.name,
+              unitsSold: p.quantity,
+              revenue: p.revenue,
+            }));
+
+          return {
+            month: m.label,
+            totalOrders: m.totalOrders,
+            totalUnitsSold: m.totalUnitsSold,
+            totalRevenue: m.totalRevenue,
+            cogs: m.totalCogs,
+            grossProfit,
+            marginPct,
+            topSellingProducts: topProducts,
+          };
+        });
 
       const formattedProducts = stockItems.map((item) => {
         const onHand = item.balances.reduce((sum, b) => sum + b.quantity, 0);
@@ -235,8 +289,6 @@ export class AiDecisionService {
         };
       });
 
-      const revenue30d = orders30d.reduce((sum, o) => sum + Number(o.totalAmount), 0);
-
       return {
         storeInfo: store ? { name: store.name, address: store.address } : null,
         trackedProducts: formattedProducts,
@@ -253,11 +305,7 @@ export class AiDecisionService {
                 currentPrice: Number(r.currentPrice),
                 recommendedPrice: Number(r.recommendedPrice),
               })),
-              monthlyPerformance: {
-                completedOrdersLast30d: orders30d.length,
-                totalRevenueLast30d: revenue30d,
-              },
-              multiMonthHistory,
+              allMonthsPerformance,
             }
           : {}),
       };
@@ -272,7 +320,8 @@ export class AiDecisionService {
     if (base.answer === FINANCIAL_DATA_RESTRICTED_MESSAGE) {
       return { ...base, ...(await this.recordRules(storeId, userId, 'CHAT', question, base.answer)) };
     }
-    const ask = question.trim() || 'Phân tích tổng quan';
+    const normalizedQ = normalizeVietnameseVoiceQuery(question);
+    const ask = normalizedQ.trim() || 'Phân tích tổng quan';
     const canSeeFinancials = canViewFinancials(role);
 
     // Fetch rich store data for grounding
