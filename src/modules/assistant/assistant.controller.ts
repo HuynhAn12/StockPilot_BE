@@ -129,9 +129,8 @@ export class AssistantController {
 
   suggestions = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const storeId = req.user!.storeId!;
-      await assertAiQuota(storeId);
-      const result = await this.service.suggestActions(storeId, req.user!.role, req.user?.userId);
+      // Không gọi AI và không ghi ai_interactions nên không tính vào hạn mức AI hằng ngày.
+      const result = await this.service.suggestActions(req.user!.storeId!, req.user!.role);
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);

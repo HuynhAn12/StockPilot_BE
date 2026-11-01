@@ -5,6 +5,9 @@ import { canViewFinancials } from '../../common/utils/role-access';
 import { DecisionEngineService } from '../decision-engine/decision-engine.service';
 import { AssistantService, FINANCIAL_DATA_RESTRICTED_MESSAGE } from './assistant.service';
 import { LlmFailureReason, LlmResult, LlmUnavailableError, OpenAiClient } from './llm/openai-client';
+import { rankSuggestions, ReorderCandidate } from './suggestion-ranking';
+
+export type { ActionSuggestion, SuggestionKind } from './suggestion-ranking';
 
 /** Where an answer came from: the language model, or the rule-based assistant as a fallback. */
 export type AnswerSource = 'AI' | 'RULES';
@@ -18,19 +21,7 @@ export interface AiAnswerMeta {
   interactionId?: string;
 }
 
-export type SuggestionKind = 'APPROVE_PRICE' | 'REJECT_PRICE' | 'ACK_ALERT' | 'REORDER';
-
-export interface ActionSuggestion {
-  kind: SuggestionKind;
-  /** pricing recommendation id (APPROVE/REJECT_PRICE), alert id (ACK_ALERT) or stock item id (REORDER). */
-  targetId: number;
-  title: string;
-  reason: string;
-  priority: 'HIGH' | 'MEDIUM' | 'LOW';
-}
-
 const RULES_MODEL = 'StockPilot-Rules-v2';
-const MAX_SUGGESTIONS = 6;
 
 const BASE_INSTRUCTIONS = [
   'Bạn là Trợ lý Quyết định của StockPilot, hỗ trợ cửa hàng bán lẻ tại Việt Nam quản lý tồn kho và giá bán.',
@@ -44,29 +35,6 @@ const BASE_INSTRUCTIONS = [
 
 const STAFF_INSTRUCTIONS =
   '- Người hỏi là NHÂN VIÊN KHO: tuyệt đối không bàn về giá vốn, lợi nhuận, biên lợi nhuận, doanh thu hay giá bán đề xuất. Chỉ nói về số lượng, tồn kho và việc vận hành.';
-
-const SUGGESTION_SCHEMA = {
-  type: 'object',
-  properties: {
-    suggestions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          kind: { type: 'string', enum: ['APPROVE_PRICE', 'REJECT_PRICE', 'ACK_ALERT', 'REORDER'] },
-          targetId: { type: 'integer' },
-          title: { type: 'string' },
-          reason: { type: 'string' },
-          priority: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'] },
-        },
-        required: ['kind', 'targetId', 'title', 'reason', 'priority'],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ['suggestions'],
-  additionalProperties: false,
-} as const;
 
 function instructionsFor(role: Role | undefined, task: string): string {
   return [BASE_INSTRUCTIONS, canViewFinancials(role) ? '' : STAFF_INSTRUCTIONS, '', `Nhiệm vụ: ${task}`]
@@ -141,92 +109,78 @@ export class AiDecisionService {
   }
 
   /**
-   * Prioritized next actions. Candidates are read from this store only; the model can only choose
-   * among them, and anything it returns outside the candidate set is discarded. Executing a suggestion
-   * goes through the existing pricing/alert endpoints, never through the assistant.
+   * Prioritized next actions, ranked deterministically (see suggestion-ranking.ts). Read-only and fast:
+   * no language model, no ai_interactions row, no AI quota — it runs every time the panel opens.
+   * Candidates are read from this store only; executing a suggestion goes through the existing
+   * pricing/alert endpoints, never through the assistant.
    */
-  async suggestActions(storeId: number, role: Role | undefined, userId?: number) {
+  async suggestActions(storeId: number, role: Role | undefined, now: Date = new Date()) {
     const financial = canViewFinancials(role);
     const [recommendations, alerts] = await Promise.all([
       financial
         ? this.prisma.pricingRecommendation.findMany({
-            where: { storeId, status: 'PENDING' },
+            // MAINTAIN changes nothing; expired recommendations can no longer be approved.
+            where: { storeId, status: 'PENDING', action: { not: 'MAINTAIN' }, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
             orderBy: [{ riskScore: 'desc' }, { createdAt: 'desc' }],
-            take: 8,
+            take: 20,
             select: {
-              id: true, action: true, currentPrice: true, recommendedPrice: true, discountPct: true, riskScore: true,
-              confidence: true, stockItem: { select: { sku: true, name: true } },
+              id: true, stockItemId: true, action: true, currentPrice: true, recommendedPrice: true, riskScore: true,
+              confidence: true, createdAt: true, stockItem: { select: { sku: true, name: true } },
             },
           })
         : Promise.resolve([]),
       this.prisma.alert.findMany({
         where: { storeId, status: 'OPEN' },
         orderBy: [{ riskScore: 'desc' }, { openedAt: 'desc' }],
-        take: 8,
-        select: { id: true, type: true, severity: true, title: true, stockItemId: true, stockItem: { select: { sku: true, name: true } } },
+        take: 30,
+        select: {
+          id: true, stockItemId: true, type: true, severity: true, title: true, riskScore: true, confidence: true, openedAt: true,
+          stockItem: { select: { sku: true, name: true } },
+        },
       }),
     ]);
 
-    const reorderIds = [...new Set(alerts.filter((a) => a.type === 'STOCKOUT' || a.type === 'LOW_STOCK').map((a) => a.stockItemId))].slice(0, 5);
-    const reorder = [];
-    for (const id of reorderIds) {
-      try {
-        const { analysis } = await this.decisionEngine.getSkuDecision(storeId, id);
-        if (analysis.coverage.reorderQuantity > 0) {
-          reorder.push({
-            stockItemId: id, sku: analysis.sku, name: analysis.productName, available: analysis.inventory.available,
-            reorderPoint: analysis.coverage.reorderPoint, reorderQuantity: analysis.coverage.reorderQuantity,
-            daysOfCover: analysis.coverage.daysOfCover, leadTimeDays: analysis.engineConfig.leadTimeDays,
-          });
-        }
-      } catch (error) {
-        logger.warn('ai_suggestion_reorder_lookup_failed', { storeId, stockItemId: id, error });
+    const num = (v: unknown) => (v == null ? null : Number(v));
+
+    // Reorder quantities come from the Decision Engine; look up the riskiest stock-out/low-stock SKUs in parallel.
+    const stockAlertBySku = new Map<number, (typeof alerts)[number]>();
+    for (const a of alerts) {
+      if ((a.type === 'STOCKOUT' || a.type === 'LOW_STOCK') && !stockAlertBySku.has(a.stockItemId)) stockAlertBySku.set(a.stockItemId, a);
+    }
+    const lookups = await Promise.allSettled(
+      [...stockAlertBySku.keys()].slice(0, 5).map(async (stockItemId) => ({ stockItemId, ...(await this.decisionEngine.getSkuDecision(storeId, stockItemId)) }))
+    );
+    const reorder: ReorderCandidate[] = [];
+    for (const lookup of lookups) {
+      if (lookup.status === 'rejected') {
+        logger.warn('ai_suggestion_reorder_lookup_failed', { storeId, error: lookup.reason });
+        continue;
       }
-    }
-
-    const candidates = {
-      pricing: recommendations.map((r) => ({
-        id: r.id, sku: r.stockItem.sku, name: r.stockItem.name, action: r.action, currentPrice: Number(r.currentPrice),
-        recommendedPrice: Number(r.recommendedPrice), discountPct: Number(r.discountPct), riskScore: r.riskScore == null ? null : Number(r.riskScore),
-        confidence: r.confidence == null ? null : Number(r.confidence),
-      })),
-      alerts: alerts.map((a) => ({ id: a.id, type: a.type, severity: a.severity, title: a.title, sku: a.stockItem.sku, name: a.stockItem.name })),
-      reorder,
-    };
-    const allowed = {
-      APPROVE_PRICE: new Set(candidates.pricing.map((p) => p.id)),
-      REJECT_PRICE: new Set(candidates.pricing.map((p) => p.id)),
-      ACK_ALERT: new Set(candidates.alerts.map((a) => a.id)),
-      REORDER: new Set(candidates.reorder.map((r) => r.stockItemId)),
-    } as const;
-
-    const fallback = rankSuggestionsByRules(candidates);
-    if (!allowed.APPROVE_PRICE.size && !allowed.ACK_ALERT.size && !allowed.REORDER.size) {
-      return { suggestions: [], ...(await this.recordRules(storeId, userId, 'SUGGESTIONS', 'Gợi ý hành động', 'Không có việc cần xử lý')) };
-    }
-
-    const ask = 'Chọn và sắp xếp tối đa 6 việc nên làm tiếp theo.';
-    const ai = await this.tryComplete(storeId, userId, 'SUGGESTIONS', ask, {
-      instructions: instructionsFor(
-        role,
-        'Chọn tối đa 6 hành động từ danh sách ứng viên và sắp xếp theo mức ưu tiên. targetId phải là id có trong ứng viên tương ứng: APPROVE_PRICE/REJECT_PRICE dùng id trong "pricing", ACK_ALERT dùng id trong "alerts", REORDER dùng stockItemId trong "reorder". title tối đa 70 ký tự, reason 1–2 câu nêu số liệu cụ thể.'
-      ),
-      input: dataBlock(ask, candidates),
-      maxOutputTokens: 900,
-      jsonSchema: { name: 'action_suggestions', schema: SUGGESTION_SCHEMA as unknown as Record<string, unknown> },
-    }, JSON.stringify({ suggestions: fallback }));
-
-    let suggestions = fallback;
-    if (ai.meta.source === 'AI') {
-      const parsed = (ai.json as { suggestions?: ActionSuggestion[] } | undefined)?.suggestions ?? [];
-      const valid = parsed.filter((s) => {
-        const ok = allowed[s.kind]?.has(s.targetId) && (financial || (s.kind !== 'APPROVE_PRICE' && s.kind !== 'REJECT_PRICE'));
-        if (!ok) logger.warn('ai_suggestion_discarded', { storeId, kind: s.kind, targetId: s.targetId });
-        return ok;
+      const { stockItemId, analysis } = lookup.value;
+      if (analysis.coverage.reorderQuantity <= 0) continue;
+      const alert = stockAlertBySku.get(stockItemId)!;
+      reorder.push({
+        stockItemId, sku: analysis.sku, name: analysis.productName, available: analysis.inventory.available,
+        reorderQuantity: analysis.coverage.reorderQuantity, daysOfCover: analysis.coverage.daysOfCover,
+        leadTimeDays: analysis.engineConfig.leadTimeDays, riskScore: num(alert.riskScore), confidence: num(alert.confidence),
+        openedAt: alert.openedAt,
       });
-      suggestions = valid.length ? valid.slice(0, MAX_SUGGESTIONS) : fallback;
     }
-    return { suggestions, ...ai.meta };
+
+    const suggestions = rankSuggestions({
+      reorder,
+      alerts: alerts.map((a) => ({
+        id: a.id, stockItemId: a.stockItemId, type: a.type, severity: a.severity, title: a.title, sku: a.stockItem.sku,
+        riskScore: num(a.riskScore), confidence: num(a.confidence), openedAt: a.openedAt,
+      })),
+      pricing: recommendations.map((r) => ({
+        id: r.id, stockItemId: r.stockItemId, sku: r.stockItem.sku, name: r.stockItem.name, action: r.action,
+        currentPrice: Number(r.currentPrice), recommendedPrice: Number(r.recommendedPrice),
+        riskScore: num(r.riskScore), confidence: num(r.confidence), createdAt: r.createdAt,
+      })),
+    }, now);
+
+    return { suggestions, source: 'RULES' as AnswerSource, model: RULES_MODEL, generatedAt: now.toISOString() };
   }
 
   // ---------------------------------------------------------------------------
@@ -291,34 +245,4 @@ export class AiDecisionService {
       return undefined;
     }
   }
-}
-
-/** Deterministic ordering used without AI: critical alerts, reorders, then pricing by risk. */
-export function rankSuggestionsByRules(candidates: {
-  pricing: Array<{ id: number; sku: string; name: string; action: string; currentPrice: number; recommendedPrice: number; riskScore: number | null }>;
-  alerts: Array<{ id: number; type: string; severity: string; title: string; sku: string }>;
-  reorder: Array<{ stockItemId: number; sku: string; name: string; available: number; reorderQuantity: number; daysOfCover: number | null }>;
-}): ActionSuggestion[] {
-  const vnd = (n: number) => `${Math.round(n).toLocaleString('vi-VN')} đ`;
-  const out: ActionSuggestion[] = [];
-  for (const r of candidates.reorder) {
-    out.push({
-      kind: 'REORDER', targetId: r.stockItemId, priority: 'HIGH', title: `Nhập thêm ${r.reorderQuantity} ${r.name}`,
-      reason: `Còn ${r.available} đơn vị khả dụng${r.daysOfCover != null ? `, đủ bán khoảng ${r.daysOfCover} ngày` : ''}; Decision Engine đề xuất nhập ${r.reorderQuantity}.`,
-    });
-  }
-  for (const a of candidates.alerts.filter((x) => x.severity === 'CRITICAL')) {
-    out.push({ kind: 'ACK_ALERT', targetId: a.id, priority: 'HIGH', title: `Xử lý cảnh báo: ${a.title}`.slice(0, 70), reason: `Cảnh báo mức nghiêm trọng cho mã ${a.sku}.` });
-  }
-  for (const p of [...candidates.pricing].sort((x, y) => (y.riskScore ?? 0) - (x.riskScore ?? 0))) {
-    out.push({
-      kind: 'APPROVE_PRICE', targetId: p.id, priority: (p.riskScore ?? 0) >= 50 ? 'MEDIUM' : 'LOW',
-      title: `Xem đề xuất giá ${p.name}`.slice(0, 70),
-      reason: `Đề xuất đổi giá từ ${vnd(p.currentPrice)} sang ${vnd(p.recommendedPrice)} (điểm rủi ro ${p.riskScore ?? '–'}).`,
-    });
-  }
-  for (const a of candidates.alerts.filter((x) => x.severity !== 'CRITICAL')) {
-    out.push({ kind: 'ACK_ALERT', targetId: a.id, priority: 'LOW', title: `Xem cảnh báo: ${a.title}`.slice(0, 70), reason: `Cảnh báo mức ${a.severity.toLowerCase()} cho mã ${a.sku}.` });
-  }
-  return out.slice(0, MAX_SUGGESTIONS);
 }

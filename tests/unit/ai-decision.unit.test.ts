@@ -1,4 +1,4 @@
-import { AiDecisionService, rankSuggestionsByRules } from '../../src/modules/assistant/ai-decision.service';
+import { AiDecisionService } from '../../src/modules/assistant/ai-decision.service';
 import { FINANCIAL_DATA_RESTRICTED_MESSAGE } from '../../src/modules/assistant/assistant.service';
 import { LlmUnavailableError } from '../../src/modules/assistant/llm/openai-client';
 
@@ -119,85 +119,78 @@ describe('AiDecisionService', () => {
   });
 
   describe('suggestActions', () => {
+    const NOW = new Date('2026-11-01T03:00:00Z');
     const recommendation = {
-      id: 5, action: 'DECREASE', currentPrice: 50000, recommendedPrice: 42000, discountPct: 16, riskScore: 70, confidence: 80,
-      stockItem: { sku: 'B', name: 'Bánh' },
+      id: 5, stockItemId: 9, action: 'DECREASE', currentPrice: 50000, recommendedPrice: 42000, riskScore: 70, confidence: 80,
+      createdAt: NOW, stockItem: { sku: 'B', name: 'Bánh' },
     };
-    const stockoutAlert = { id: 7, type: 'STOCKOUT', severity: 'CRITICAL', title: 'Sắp hết Sữa', stockItemId: 3, stockItem: { sku: 'S', name: 'Sữa' } };
-    const engine = {
+    const stockoutAlert = {
+      id: 7, stockItemId: 3, type: 'STOCKOUT', severity: 'CRITICAL', title: 'Sắp hết Sữa', riskScore: 90, confidence: 95,
+      openedAt: NOW, stockItem: { sku: 'S', name: 'Sữa' },
+    };
+    const overstockAlert = {
+      id: 8, stockItemId: 4, type: 'OVERSTOCK', severity: 'WARNING', title: 'Tồn nhiều Kẹo', riskScore: 40, confidence: 80,
+      openedAt: NOW, stockItem: { sku: 'K', name: 'Kẹo' },
+    };
+    const makeEngine = () => ({
       getSkuDecision: jest.fn().mockResolvedValue({
         analysis: {
           sku: 'S', productName: 'Sữa', inventory: { available: 2 }, coverage: { reorderPoint: 12, reorderQuantity: 20, daysOfCover: 1 },
           engineConfig: { leadTimeDays: 7 },
         },
       }),
-    };
+    });
 
-    it('keeps only suggestions that point at this store’s candidates', async () => {
+    it('ranks store candidates without the language model and writes nothing', async () => {
       const prisma = makePrisma();
       prisma.pricingRecommendation.findMany.mockResolvedValue([recommendation]);
-      prisma.alert.findMany.mockResolvedValue([stockoutAlert]);
-      const { service, llm } = makeService({ prisma, engine });
-      llm.complete.mockResolvedValue(
-        llmOk('{}', {
-          suggestions: [
-            { kind: 'REORDER', targetId: 3, title: 'Nhập 20 Sữa', reason: 'Còn 2', priority: 'HIGH' },
-            { kind: 'APPROVE_PRICE', targetId: 999, title: 'Giá lạ', reason: 'x', priority: 'LOW' },
-            { kind: 'ACK_ALERT', targetId: 7, title: 'Xử lý cảnh báo', reason: 'Nghiêm trọng', priority: 'HIGH' },
-            { kind: 'ACK_ALERT', targetId: 5, title: 'Sai loại id', reason: 'x', priority: 'LOW' },
-            { kind: 'APPROVE_PRICE', targetId: 5, title: 'Duyệt giá Bánh', reason: 'Rủi ro 70', priority: 'MEDIUM' },
-          ],
-        })
-      );
+      prisma.alert.findMany.mockResolvedValue([stockoutAlert, overstockAlert]);
+      const { service, llm } = makeService({ prisma, engine: makeEngine() });
 
-      const result = await service.suggestActions(1, 'SHOP_OWNER', 7);
+      const result = await service.suggestActions(1, 'SHOP_OWNER', NOW);
 
-      expect(result.source).toBe('AI');
-      expect(result.suggestions.map((s) => `${s.kind}:${s.targetId}`)).toEqual(['REORDER:3', 'ACK_ALERT:7', 'APPROVE_PRICE:5']);
-      expect(llm.complete.mock.calls[0][0].jsonSchema.name).toBe('action_suggestions');
-      expect(prisma.pricingRecommendation.findMany.mock.calls[0][0].where).toEqual({ storeId: 1, status: 'PENDING' });
+      expect(result).toMatchObject({ source: 'RULES', model: 'StockPilot-Rules-v2', generatedAt: NOW.toISOString() });
+      // The reorder for SKU 3 replaces that SKU's stock-out alert; the rest follow by score.
+      expect(result.suggestions.map((s) => `${s.kind}:${s.targetId}`)).toEqual(['REORDER:3', 'APPROVE_PRICE:5', 'ACK_ALERT:8']);
+      expect(result.suggestions[0]).toMatchObject({ priority: 'HIGH', score: expect.any(Number) });
+      expect(llm.complete).not.toHaveBeenCalled();
+      expect(prisma.aiInteraction.create).not.toHaveBeenCalled();
+      expect(prisma.pricingRecommendation.findMany.mock.calls[0][0].where).toEqual({
+        storeId: 1, status: 'PENDING', action: { not: 'MAINTAIN' }, OR: [{ expiresAt: null }, { expiresAt: { gt: NOW } }],
+      });
       expect(prisma.alert.findMany.mock.calls[0][0].where).toEqual({ storeId: 1, status: 'OPEN' });
     });
 
     it('never reads or suggests pricing for warehouse staff', async () => {
       const prisma = makePrisma();
-      prisma.alert.findMany.mockResolvedValue([stockoutAlert]);
-      const { service, llm } = makeService({ prisma, engine });
-      llm.complete.mockResolvedValue(
-        llmOk('{}', { suggestions: [{ kind: 'APPROVE_PRICE', targetId: 5, title: 'x', reason: 'x', priority: 'HIGH' }] })
-      );
+      prisma.alert.findMany.mockResolvedValue([stockoutAlert, overstockAlert]);
+      const { service } = makeService({ prisma, engine: makeEngine() });
 
-      const result = await service.suggestActions(1, 'WAREHOUSE_STAFF', 8);
+      const result = await service.suggestActions(1, 'WAREHOUSE_STAFF', NOW);
 
       expect(prisma.pricingRecommendation.findMany).not.toHaveBeenCalled();
-      expect(llm.complete.mock.calls[0][0].input).not.toContain('recommendedPrice');
       expect(result.suggestions.every((s) => s.kind !== 'APPROVE_PRICE' && s.kind !== 'REJECT_PRICE')).toBe(true);
+      // Không lộ số tiền (định dạng "42.000 đ") cho nhân viên kho.
+      expect(result.suggestions.some((s) => /\d{1,3}(\.\d{3})+ đ/.test(s.reason))).toBe(false);
     });
 
-    it('ranks candidates by rules when AI is unavailable', async () => {
+    it('still ranks the alerts when a Decision Engine lookup fails', async () => {
       const prisma = makePrisma();
-      prisma.pricingRecommendation.findMany.mockResolvedValue([recommendation]);
-      prisma.alert.findMany.mockResolvedValue([stockoutAlert]);
-      const llm = makeLlm(false);
-      const { service } = makeService({ prisma, engine, llm });
+      prisma.alert.findMany.mockResolvedValue([stockoutAlert, overstockAlert]);
+      const engine = { getSkuDecision: jest.fn().mockRejectedValue(new Error('engine down')) };
+      const { service } = makeService({ prisma, engine });
 
-      const result = await service.suggestActions(1, 'SHOP_OWNER', 7);
+      const result = await service.suggestActions(1, 'SHOP_OWNER', NOW);
 
-      expect(result.source).toBe('RULES');
-      expect(result.suggestions.map((s) => s.kind)).toEqual(['REORDER', 'ACK_ALERT', 'APPROVE_PRICE']);
-      expect(llm.complete).not.toHaveBeenCalled();
+      expect(result.suggestions.map((s) => `${s.kind}:${s.targetId}`)).toEqual(['ACK_ALERT:7', 'ACK_ALERT:8']);
     });
 
-    it('returns an empty list without calling the model when nothing needs attention', async () => {
-      const { service, llm } = makeService();
-      const result = await service.suggestActions(1, 'SHOP_OWNER', 7);
+    it('returns an empty list when nothing needs attention', async () => {
+      const { service, llm, engine } = makeService();
+      const result = await service.suggestActions(1, 'SHOP_OWNER', NOW);
       expect(result.suggestions).toEqual([]);
+      expect(engine.getSkuDecision).not.toHaveBeenCalled();
       expect(llm.complete).not.toHaveBeenCalled();
     });
-  });
-
-  it('rankSuggestionsByRules caps the list at six items', () => {
-    const alerts = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, type: 'OVERSTOCK', severity: 'WARNING', title: `C${i}`, sku: `S${i}` }));
-    expect(rankSuggestionsByRules({ pricing: [], alerts, reorder: [] })).toHaveLength(6);
   });
 });
