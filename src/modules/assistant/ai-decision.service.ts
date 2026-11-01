@@ -37,7 +37,16 @@ const BASE_INSTRUCTIONS = [
   '   - Ở cuối câu trả lời, hãy luôn chủ động hỏi gợi mở 1 câu ngắn gọn, ấm áp sẵn sàng giúp đỡ ngay:',
   '     (Ví dụ: "Anh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!", hoặc "Anh/chị có cần em hỗ trợ thêm gì cho cửa hàng nữa không ạ?").',
   '',
-  '3. KHI ĐƯỢC YÊU CẦU LẬP KẾ HOẠCH HOẶC TƯ VẤN KINH DOANH:',
+  '3. KHI HỎI VỀ SỐ LIỆU THÁNG TRƯỚC, THÁNG BẤT KỲ HOẶC YÊU CẦU KẾT LUẬN & GIẢI PHÁP CHO CHỦ SHOP:',
+  '   - LẤY TOÀN BỘ SỐ LIỆU CHÍNH XÁC từ khối <store_data> (trong liveStoreSnapshot.multiMonthHistory hoặc ruleBasedAnalysis.dataSnapshot): Doanh thu thực tế, số đơn hàng, tổng sản phẩm bán ra, lợi nhuận gộp và biên lợi nhuận.',
+  '   - So sánh với các tháng lân cận để chỉ ra xu hướng tăng hay giảm (về doanh thu, số đơn, biên lợi nhuận).',
+  '   - Nêu bật các mặt hàng chủ lực bán chạy nhất trong tháng đó.',
+  '   - BẮT BUỘC ĐƯA RA CÁC KẾT LUẬN VÀ GIẢI PHÁP HÀNH ĐỘNG CHI TIẾT CHO CHỦ CỬA HÀNG:',
+  '     + Giải pháp nhập hàng & duy trì tồn kho an toàn cho các mặt hàng chủ lực.',
+  '     + Giải pháp định giá & kích cầu (combo, chiết khấu số lượng, tối ưu biên lợi nhuận).',
+  '     + Giải pháp xử lý hàng tồn kho chậm để quay vòng vốn nhanh.',
+  '',
+  '4. KHI ĐƯỢC YÊU CẦU LẬP KẾ HOẠCH HOẶC TƯ VẤN KINH DOANH:',
   '   - Thoải mái hỗ trợ mọi yêu cầu (lên kế hoạch bán hàng, kịch bản livestream/post bài, xả hàng tồn, tăng doanh thu...).',
   '   - Ưu tiên sử dụng chính xác tên sản phẩm, mã SKU, giá bán, tồn kho thực tế từ khối <store_data>.',
   '   - Trình bày mạch lạc bằng Markdown: gạch đầu dòng rõ ràng, bảng số liệu, in đậm điểm nhấn, tiền tệ ghi dạng 25.000 đ.',
@@ -107,7 +116,7 @@ export class AiDecisionService {
   async getStoreContext(storeId: number, role: Role | undefined, targetStockItemId?: number) {
     const canSeeFinancials = canViewFinancials(role);
     try {
-      const [store, stockItems, alerts, pricingRecommendations, orders30d] = await Promise.all([
+      const [store, stockItems, alerts, pricingRecommendations, orders30d, dailySummaries] = await Promise.all([
         this.prisma.store.findUnique({
           where: { id: storeId },
           select: { name: true, phone: true, address: true },
@@ -164,7 +173,37 @@ export class AiDecisionService {
               select: { totalAmount: true },
             })
           : Promise.resolve([]),
+        canSeeFinancials
+          ? this.prisma.dailySalesSummary.findMany({
+              where: { storeId },
+              select: { summaryDate: true, netRevenue: true, grossProfit: true, netSoldQty: true, cogs: true, orderCount: true },
+              orderBy: { summaryDate: 'desc' },
+            })
+          : Promise.resolve([]),
       ]);
+
+      // Tổng hợp lịch sử kinh doanh theo từng tháng (Multi-month performance history)
+      const monthMap: Record<string, { month: string; revenue: number; grossProfit: number; cogs: number; unitsSold: number; orderCount: number }> = {};
+      if (Array.isArray(dailySummaries)) {
+        for (const s of dailySummaries) {
+          const ym = s.summaryDate.toISOString().slice(0, 7);
+          if (!monthMap[ym]) {
+            monthMap[ym] = { month: ym, revenue: 0, grossProfit: 0, cogs: 0, unitsSold: 0, orderCount: 0 };
+          }
+          monthMap[ym].revenue += Number(s.netRevenue);
+          monthMap[ym].grossProfit += Number(s.grossProfit);
+          monthMap[ym].cogs += Number(s.cogs);
+          monthMap[ym].unitsSold += s.netSoldQty;
+          monthMap[ym].orderCount += s.orderCount;
+        }
+      }
+      const multiMonthHistory = Object.values(monthMap)
+        .sort((a, b) => b.month.localeCompare(a.month))
+        .slice(0, 8)
+        .map((m) => ({
+          ...m,
+          marginPct: m.revenue > 0 ? `${((m.grossProfit / m.revenue) * 100).toFixed(1)}%` : '0%',
+        }));
 
       const formattedProducts = stockItems.map((item) => {
         const onHand = item.balances.reduce((sum, b) => sum + b.quantity, 0);
@@ -218,6 +257,7 @@ export class AiDecisionService {
                 completedOrdersLast30d: orders30d.length,
                 totalRevenueLast30d: revenue30d,
               },
+              multiMonthHistory,
             }
           : {}),
       };

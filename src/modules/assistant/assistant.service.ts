@@ -198,6 +198,174 @@ export class AssistantService {
   /**
    * Main AI Pilot natural language processing engine that maps questions to database facts.
    */
+
+  /**
+   * Trích xuất ý định thời gian (tháng, tuần, hôm nay) từ câu hỏi của người dùng.
+   */
+  parseTimeIntent(question: string, now: Date = new Date()): { isMonthQuery: boolean; year: number; month: number; label: string } {
+    const q = (question || '').toLowerCase();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-12
+
+    // 1. "tháng trước", "tháng rồi", "tháng vừa qua", "tháng vừa rồi"
+    if (q.includes('tháng trước') || q.includes('tháng rồi') || q.includes('tháng vừa qua') || q.includes('tháng vừa rồi')) {
+      let prevM = currentMonth - 1;
+      let prevY = currentYear;
+      if (prevM === 0) {
+        prevM = 12;
+        prevY -= 1;
+      }
+      return { isMonthQuery: true, year: prevY, month: prevM, label: `Tháng ${prevM}/${prevY}` };
+    }
+
+    // 2. "tháng này", "tháng hiện tại"
+    if (q.includes('tháng này') || q.includes('tháng hiện tại')) {
+      return { isMonthQuery: true, year: currentYear, month: currentMonth, label: `Tháng ${currentMonth}/${currentYear}` };
+    }
+
+    // 3. Các tháng bằng chữ
+    const monthWords: Record<string, number> = {
+      'mười hai': 12, 'mười một': 11, 'mười': 10, 'chín': 9, 'tám': 8, 'bảy': 7,
+      'sáu': 6, 'năm': 5, 'bốn': 4, 'tư': 4, 'ba': 3, 'hai': 2, 'một': 1,
+    };
+    for (const [name, m] of Object.entries(monthWords)) {
+      if (q.includes(`tháng ${name}`)) {
+        return { isMonthQuery: true, year: currentYear, month: m, label: `Tháng ${m}/${currentYear}` };
+      }
+    }
+
+    // 4. "tháng 1" -> "tháng 12" kèm năm tùy chọn
+    const match = q.match(/tháng\s*(\d{1,2})(?:[\/\-\s]+(\d{4}))?/i);
+    if (match) {
+      const m = parseInt(match[1], 10);
+      const y = match[2] ? parseInt(match[2], 10) : currentYear;
+      if (m >= 1 && m <= 12) {
+        return { isMonthQuery: true, year: y, month: m, label: `Tháng ${m}/${y}` };
+      }
+    }
+
+    // 5. Nếu câu hỏi có từ "tháng" mà không nói rõ tháng nào, mặc định phân tích tháng trước
+    if (q.includes('tháng')) {
+      let prevM = currentMonth - 1;
+      let prevY = currentYear;
+      if (prevM === 0) {
+        prevM = 12;
+        prevY -= 1;
+      }
+      return { isMonthQuery: true, year: prevY, month: prevM, label: `Tháng ${prevM}/${prevY}` };
+    }
+
+    return { isMonthQuery: false, year: currentYear, month: currentMonth, label: `Tháng ${currentMonth}/${currentYear}` };
+  }
+
+  /**
+   * Phân tích chuyên sâu số liệu kinh doanh của một tháng cụ thể (hoặc tháng trước).
+   */
+  async explainMonthFinancials(storeId: number, year: number, month: number, viewerRole?: Role) {
+    const canSeeFinancials = canViewFinancials(viewerRole);
+    const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const end = new Date(year, month, 1, 0, 0, 0, 0);
+
+    const orders = await this.prisma.order.findMany({
+      where: {
+        storeId,
+        status: { in: ['FULFILLED', 'CONFIRMED'] },
+        createdAt: { gte: start, lt: end },
+      },
+      include: { items: true },
+    });
+
+    const revenue = orders.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
+    let cogs = 0;
+    let totalUnitsSold = 0;
+    const skuMap: Record<string, { sku: string; name: string; qty: number; revenue: number }> = {};
+
+    orders.forEach((o) => {
+      o.items.forEach((i) => {
+        cogs += toNumber(i.costPriceSnapshot) * i.quantity;
+        totalUnitsSold += i.quantity;
+        if (!skuMap[i.skuSnapshot]) {
+          skuMap[i.skuSnapshot] = { sku: i.skuSnapshot, name: i.nameSnapshot, qty: 0, revenue: 0 };
+        }
+        skuMap[i.skuSnapshot].qty += i.quantity;
+        skuMap[i.skuSnapshot].revenue += toNumber(i.subtotal);
+      });
+    });
+
+    const profit = Math.max(0, revenue - cogs);
+    const marginPct = revenue > 0 ? Number(((profit / revenue) * 100).toFixed(1)) : 0;
+    const topProducts = Object.values(skuMap)
+      .sort((a, b) => b.qty - a.qty)
+      .slice(0, 5);
+
+    // Lấy tháng trước để so sánh tăng trưởng
+    let prevYear = year;
+    let prevMonth = month - 1;
+    if (prevMonth === 0) {
+      prevMonth = 12;
+      prevYear -= 1;
+    }
+    const prevStart = new Date(prevYear, prevMonth - 1, 1, 0, 0, 0, 0);
+    const prevEnd = new Date(prevYear, prevMonth, 1, 0, 0, 0, 0);
+
+    const prevOrders = await this.prisma.order.findMany({
+      where: {
+        storeId,
+        status: { in: ['FULFILLED', 'CONFIRMED'] },
+        createdAt: { gte: prevStart, lt: prevEnd },
+      },
+      select: { totalAmount: true },
+    });
+    const prevRevenue = prevOrders.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
+    const diffRevenue = revenue - prevRevenue;
+    const growthPct = prevRevenue > 0 ? Number(((diffRevenue / prevRevenue) * 100).toFixed(1)) : null;
+
+    const compareText = prevRevenue === 0
+      ? 'Chưa có dữ liệu đối chiếu với tháng trước.'
+      : diffRevenue >= 0
+        ? `Tăng trưởng **+${formatVND(diffRevenue)}** (+${growthPct}%) so với Tháng ${prevMonth}/${prevYear}.`
+        : `Giảm **${formatVND(Math.abs(diffRevenue))}** (${growthPct}%) so với Tháng ${prevMonth}/${prevYear}.`;
+
+    const topItemsText = topProducts.length > 0
+      ? topProducts.map((p, idx) =>
+          canSeeFinancials
+            ? `${idx + 1}. **${p.name}** (${p.sku}): Bán **${p.qty.toLocaleString('vi-VN')}** sản phẩm | Doanh thu: **${formatVND(p.revenue)}**`
+            : `${idx + 1}. **${p.name}** (${p.sku}): Bán **${p.qty.toLocaleString('vi-VN')}** sản phẩm`
+        ).join('\n')
+      : 'Chưa có sản phẩm nào ghi nhận bán ra trong tháng này.';
+
+    const summary = [
+      `### 📊 BÁO CÁO TOÀN DIỆN THÁNG ${month}/${year}`,
+      `- **Tổng doanh thu thực tế:** **${formatVND(revenue)}**`,
+      `- **Lợi nhuận gộp ước tính:** **${formatVND(profit)}** (Biên lợi nhuận gộp: **${marginPct}%**)`,
+      `- **Tổng số đơn hàng hoàn tất:** **${orders.length.toLocaleString('vi-VN')}** đơn hàng`,
+      `- **Tổng sản phẩm tiêu thụ:** **${totalUnitsSold.toLocaleString('vi-VN')}** sản phẩm`,
+      `- **Giá vốn hàng bán (COGS):** ${formatVND(cogs)}`,
+      `- **So sánh với Tháng ${prevMonth}/${prevYear}:** ${compareText}`,
+      `\n#### 🏆 TOP 5 SẢN PHẨM BÁN CHẠY NHẤT TRONG THÁNG:\n${topItemsText}`,
+      `\n💡 **Đánh giá & Giải pháp chiến lược cho Chủ cửa hàng:**`,
+      `1. **Về nguồn cung:** Cần đảm bảo lượng tồn kho an toàn cho nhóm sản phẩm chủ lực trên, tránh để đứt hàng làm mất doanh số.`,
+      `2. **Tối ưu biên lợi nhuận:** Duy trì mức biên ${marginPct}%, đồng thời áp dụng chính sách bán kèm (combo) các sản phẩm có biên lợi nhuận cao hơn.`,
+      `3. **Kế hoạch tháng tới:** Dựa trên tốc độ bán của các mặt hàng tiêu dùng nhanh, lập phiếu nhập hàng định kỳ trước mỗi cuối tuần để tối ưu chi phí vận chuyển.`,
+    ].join('\n\n');
+
+    return {
+      summary,
+      data: {
+        year,
+        month,
+        revenue,
+        cogs,
+        profit,
+        marginPct,
+        orderCount: orders.length,
+        totalUnitsSold,
+        topProducts,
+        comparison: { prevRevenue, diffRevenue, growthPct },
+      },
+    };
+  }
+
   async answerQuestion(storeId: number, question: string, targetStockItemId?: number, viewerRole?: Role): Promise<{
     answer: string;
     actionLinks?: Array<{ label: string; url: string; variant?: string }>;
@@ -346,6 +514,20 @@ export class AssistantService {
         answer,
         actionLinks: canSeeFinancials ? [{ label: 'Xem phân tích chi tiết', url: '/analytics' }] : [],
         dataSnapshot: canSeeFinancials ? sorted : sorted.map(({ sku, name, sold }) => ({ sku, name, sold })),
+      };
+    }
+
+    // INTENT 2.5: Phân tích tài chính & số liệu theo THÁNG (tháng trước, tháng cụ thể...)
+    const timeIntent = this.parseTimeIntent(question);
+    if (canSeeFinancials && (timeIntent.isMonthQuery || q.includes('tháng'))) {
+      const monthResult = await this.explainMonthFinancials(storeId, timeIntent.year, timeIntent.month, viewerRole);
+      return {
+        answer: monthResult.summary,
+        actionLinks: [
+          { label: 'Xem báo cáo chi tiết', url: '/analytics' },
+          { label: 'Xem danh sách đơn hàng', url: '/orders' },
+        ],
+        dataSnapshot: monthResult.data,
       };
     }
 
