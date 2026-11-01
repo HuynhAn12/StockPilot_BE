@@ -26,10 +26,17 @@ assistantRouter.get(
   controller.explainStoreOverview
 );
 
+// Prioritized next actions (executed through the existing pricing/alert endpoints, never here)
+assistantRouter.get(
+  '/suggestions',
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  controller.suggestions
+);
+
 // Chat with assistant
 assistantRouter.post(
   '/chat',
-  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF', 'ADMIN'),
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
   validate({ body: assistantChatBodySchema }),
   controller.chat
 );
@@ -37,6 +44,6 @@ assistantRouter.post(
 // Chat history
 assistantRouter.get(
   '/history',
-  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF', 'ADMIN'),
+  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
   controller.getHistory
 );

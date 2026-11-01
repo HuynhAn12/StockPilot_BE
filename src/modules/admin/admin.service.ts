@@ -8,8 +8,14 @@ import { SystemSettingKey, SystemSettingsService } from '../../common/services/s
 import { comparePassword, hashPassword } from '../../common/utils/password';
 import { AuthService } from '../auth/auth.service';
 import { buildPaginationResult } from '../../common/utils/pagination';
-import { businessDateRangeToUtc, toBusinessDateKey } from '../../common/utils/business-date';
 import {
+  addBusinessDays,
+  businessDateKeyToDate,
+  businessDateRangeToUtc,
+  toBusinessDateKey,
+} from '../../common/utils/business-date';
+import {
+  AdminActivityTrendQuery,
   AdminAiUsageQuery,
   AdminAuditLogFilter,
   AdminAuditLogQuery,
@@ -233,6 +239,83 @@ export class AdminService {
       },
       supportSummary: supportSummary ?? [],
       activeSessionsCount: activeSessionsCount ?? 0,
+    };
+  }
+
+  /**
+   * Xu hướng hoạt động theo ngày nghiệp vụ. Mọi phép đếm chạy trong MySQL (GROUP BY ngày) —
+   * không nạp từng dòng audit về Node, vì mỗi giao dịch POS ghi nhiều dòng audit.
+   * Ngày được quy đổi bằng độ lệch múi giờ APP_TIMEZONE tại hôm nay (Asia/Ho_Chi_Minh không có DST).
+   */
+  async getActivityTrend(query: AdminActivityTrendQuery) {
+    const days = query.days;
+    const todayKey = toBusinessDateKey(new Date());
+
+    const dayBuckets: string[] = [];
+    for (let i = days - 1; i >= 0; i -= 1) {
+      dayBuckets.push(addBusinessDays(todayKey, -i));
+    }
+
+    const startUtc = businessDateRangeToUtc(dayBuckets[0]).startUtc;
+    const endUtc = businessDateRangeToUtc(todayKey).endUtc; // nửa đêm hôm sau — cận trên không tính
+    const offsetMinutes = Math.round(
+      (businessDateKeyToDate(todayKey).getTime() - businessDateRangeToUtc(todayKey).startUtc.getTime()) / 60000
+    );
+
+    const [dailyRows, windowRows, storeRows] = await Promise.all([
+      prisma.$queryRaw<Array<{ day: string; events: bigint; stores: bigint; failed: bigint | null }>>`
+        SELECT DATE_FORMAT(DATE_ADD(createdAt, INTERVAL ${offsetMinutes} MINUTE), '%Y-%m-%d') AS day,
+               COUNT(*) AS events,
+               COUNT(DISTINCT storeId) AS stores,
+               SUM(CASE WHEN action IN ('LOGIN_FAILED', 'LOGIN_BLOCKED') THEN 1 ELSE 0 END) AS failed
+        FROM audit_logs
+        WHERE createdAt >= ${startUtc} AND createdAt < ${endUtc}
+        GROUP BY day`,
+      prisma.$queryRaw<Array<{ stores: bigint }>>`
+        SELECT COUNT(DISTINCT storeId) AS stores
+        FROM audit_logs
+        WHERE createdAt >= ${startUtc} AND createdAt < ${endUtc}`,
+      prisma.$queryRaw<Array<{ day: string; created: bigint }>>`
+        SELECT DATE_FORMAT(DATE_ADD(createdAt, INTERVAL ${offsetMinutes} MINUTE), '%Y-%m-%d') AS day,
+               COUNT(*) AS created
+        FROM stores
+        WHERE createdAt >= ${startUtc} AND createdAt < ${endUtc}
+        GROUP BY day`,
+    ]);
+
+    const daily = new Map(dailyRows.map((r) => [r.day, r]));
+    const created = new Map(storeRows.map((r) => [r.day, Number(r.created)]));
+
+    let totalEvents = 0;
+    let peakEvents = 0;
+    let peakDate: string | null = null;
+
+    const daysData = dayBuckets.map((day) => {
+      const row = daily.get(day);
+      const auditEvents = row ? Number(row.events) : 0;
+      totalEvents += auditEvents;
+      if (auditEvents > peakEvents) {
+        peakEvents = auditEvents;
+        peakDate = day;
+      }
+      return {
+        date: day,
+        auditEvents,
+        activeStores: row ? Number(row.stores) : 0,
+        newStores: created.get(day) ?? 0,
+        failedLogins: row ? Number(row.failed ?? 0) : 0,
+      };
+    });
+
+    return {
+      days: daysData,
+      summary: {
+        totalEvents,
+        averageDailyEvents: Math.round(totalEvents / days),
+        peakDate, // null khi cả kỳ không có thao tác
+        peakEvents,
+        activeStoresWindow: Number(windowRows[0]?.stores ?? 0),
+      },
     };
   }
 

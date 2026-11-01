@@ -8,7 +8,9 @@
  * V2: complete-day windows, exposure-based history, sample σ, Φ⁻¹ service level, config-driven
  * dead-stock thresholds, σ/√n anomaly test, INSUFFICIENT_DATA gating, reorder quantity.
  */
-export const DECISION_ENGINE_VERSION = 'DECISION_ENGINE_V2';
+// V2.1: graded overstock score (no clamped plateau, replenishment guard, volume-aware trend). Bumping the
+// version marks every older snapshot stale, so scores are recomputed with the new formula.
+export const DECISION_ENGINE_VERSION = 'DECISION_ENGINE_V2.1';
 
 export interface ResolvedEngineConfig {
   leadTimeDays: number;

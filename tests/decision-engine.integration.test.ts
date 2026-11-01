@@ -4,7 +4,7 @@ import { DecisionEngineService } from '../src/modules/decision-engine/decision-e
 import { AlertEvaluationInput, AlertService } from '../src/modules/alerts/alert.service';
 import { PricingService } from '../src/modules/pricing/pricing.service';
 import { AssistantService } from '../src/modules/assistant/assistant.service';
-import { EngineConfigService } from '../src/modules/decision-engine/engine-config.service';
+import { DECISION_ENGINE_VERSION, EngineConfigService } from '../src/modules/decision-engine/engine-config.service';
 import { historicalSaleRowSchema } from '../src/modules/historical-sales/historical-sales.schema';
 import { prisma } from '../src/config/db';
 
@@ -593,7 +593,7 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             // V2: the formula version is a code constant (engine-defaults.ts), not the stored config column.
-            version: 'DECISION_ENGINE_V2',
+            version: DECISION_ENGINE_VERSION,
             storeId: 1,
             stockItemId: 10,
           }),

@@ -142,3 +142,8 @@ export type AdminAuditLogQuery = z.infer<typeof adminAuditLogQuerySchema>;
 export type AdminAuditLogFilter = z.infer<typeof adminAuditLogExportQuerySchema>;
 export type AdminAiUsageQuery = z.infer<typeof adminAiUsageQuerySchema>;
 export type RevokeSessionsInput = z.infer<typeof revokeSessionsSchema>;
+
+export const adminActivityTrendQuerySchema = z.object({
+  days: z.coerce.number().int().min(7).max(30).default(14),
+});
+export type AdminActivityTrendQuery = z.infer<typeof adminActivityTrendQuerySchema>;

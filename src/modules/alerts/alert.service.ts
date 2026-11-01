@@ -6,6 +6,7 @@ import { AuditLogService } from '../../common/services/audit-log.service';
 import { canViewFinancials } from '../../common/utils/role-access';
 import { logger } from '../../common/logger';
 import { classifyRisk } from '../decision-engine/risk-classification';
+import type { OverstockDetail } from '../decision-engine/risk-evaluator';
 
 export interface AlertEvaluationInput {
   storeId: number;
@@ -18,6 +19,8 @@ export interface AlertEvaluationInput {
   stockoutSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   overstockScore: number;
   overstockSeverity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  /** Score components; when present, the overstock alert names the actual cause. */
+  overstockDetail?: OverstockDetail;
   isSlowMoving: boolean;
   isDeadStock: boolean;
   deadStockSeverity: 'NONE' | 'WARNING' | 'CRITICAL';
@@ -69,6 +72,27 @@ function withAlertLifecycle(reasonJson: Prisma.JsonValue | null | undefined, lif
   return { ...base, lifecycle } as unknown as Prisma.InputJsonValue;
 }
 
+/** States the real cause of an overstock alert (above the max level, excess coverage, falling demand). */
+export function describeOverstock(sku: string, availableStock: number, detail?: OverstockDetail): string {
+  if (!detail || detail.drivers.length === 0) {
+    return `Sản phẩm ${sku} có mức tồn kho vượt ngưỡng an toàn so với tốc độ tiêu thụ hiện tại.`;
+  }
+  const parts: string[] = [];
+  if (detail.drivers.includes('ABOVE_MAX_LEVEL')) {
+    parts.push(`tồn khả dụng ${availableStock} vượt mức tối đa ${detail.maxStockLevel} (dư ${detail.unitsAboveMax})`);
+  }
+  if (detail.drivers.includes('EXCESS_COVERAGE') && detail.daysOfCover !== null) {
+    parts.push(
+      `đủ bán khoảng ${Math.round(detail.daysOfCover)} ngày, gấp ${detail.coverageMultiple} lần mục tiêu ${detail.targetCoverageDays} ngày ` +
+        `(dư khoảng ${detail.unitsBeyondTargetCover} đơn vị)`
+    );
+  }
+  if (detail.drivers.includes('FALLING_DEMAND')) {
+    parts.push(`sức bán 7 ngày gần đây chỉ bằng ${Math.round(detail.trendRatio * 100)}% trung bình 30 ngày`);
+  }
+  return `Sản phẩm ${sku}: ${parts.join('; ')}.`;
+}
+
 export class AlertService {
   constructor(private readonly prisma: PrismaClient = defaultPrisma) {}
 
@@ -93,6 +117,7 @@ export class AlertService {
       stockoutScore,
       stockoutSeverity,
       overstockScore,
+      overstockDetail,
       isSlowMoving,
       isDeadStock,
       deadStockSeverity,
@@ -173,8 +198,8 @@ export class AlertService {
         severity: overstockScore >= criticalRiskThreshold ? 'WARNING' : 'INFO',
         riskScore: overstockScore,
         title: `Cảnh báo thừa hàng: ${sku}`,
-        message: `Sản phẩm ${sku} có mức tồn kho vượt ngưỡng an toàn so với tốc độ tiêu thụ hiện tại.`,
-        reasonJson: { overstockScore, availableStock },
+        message: describeOverstock(sku, availableStock, overstockDetail),
+        reasonJson: { overstockScore, availableStock, ...(overstockDetail ? { overstock: overstockDetail } : {}) },
       };
     }
 

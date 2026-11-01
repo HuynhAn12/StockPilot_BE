@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { AssistantService } from './assistant.service';
+import { AiDecisionService } from './ai-decision.service';
 import { explainSkuQuerySchema } from './assistant.schema';
+import { FINANCIAL_DATA_RESTRICTED_MESSAGE } from './assistant.service';
 import { prisma } from '../../config/db';
 import { RateLimitedError } from '../../common/errors/app-error';
 import { SystemSettingsService } from '../../common/services/system-settings.service';
@@ -24,7 +25,7 @@ export async function assertAiQuota(storeId: number) {
 }
 
 export class AssistantController {
-  constructor(private readonly service: AssistantService = new AssistantService()) {}
+  constructor(private readonly service: AiDecisionService = new AiDecisionService()) {}
 
   explainSku = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -35,9 +36,10 @@ export class AssistantController {
         question: req.query.question,
       });
 
-      const result = await this.service.explainSku(storeId, query.stockItemId, query.question, req.user!.role);
+      const result = await this.service.explainSku(storeId, query.stockItemId, query.question, req.user!.role, req.user?.userId);
 
-      // Defense in depth: the service already builds staff text without financial content.
+      // Defense in depth: staff context never contains financial fields, so neither the rule text nor the
+      // model can mention them; these scrubs only guard the rule-based template wording.
       if (req.user?.role === 'WAREHOUSE_STAFF') {
         result.explanation = result.explanation
           .replace(/ \| \*\*Giá vốn:\*\* [^|]+ \| \*\*Biên lợi nhuận:\*\* \*\*[^*]+\*\*/g, '')
@@ -51,22 +53,7 @@ export class AssistantController {
         }
       }
 
-      // Log interaction
-      await prisma.aiInteraction.create({
-        data: {
-          storeId,
-          userId: req.user?.userId ?? null,
-          model: 'StockPilot-DecisionEngine-v2',
-          questionText: query.question || `Giải thích SP ${query.stockItemId}`,
-          responseText: result.explanation,
-          status: 'SUCCESS',
-        },
-      }).catch(() => {});
-
-      return res.status(200).json({
-        success: true,
-        data: result,
-      });
+      return res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);
     }
@@ -77,10 +64,9 @@ export class AssistantController {
       const storeId = req.user!.storeId!;
       await assertAiQuota(storeId);
 
-      const result = await this.service.explainStoreOverview(storeId, req.user!.role);
+      const result = await this.service.explainOverview(storeId, req.user!.role, req.user?.userId);
 
-      // Defense in depth: the service already omits capital values and pending pricing counts
-      // (metrics are projected by toOverviewSummaryView) for staff.
+      // Defense in depth for the rule-based wording; metrics are already projected per role.
       if (req.user?.role === 'WAREHOUSE_STAFF') {
         result.summary = result.summary
           .replace(/\(Vốn đọng: \*\*[^*]+\*\*\)/g, '')
@@ -88,22 +74,7 @@ export class AssistantController {
         result.pendingRecommendationsCount = 0;
       }
 
-      // Log interaction
-      await prisma.aiInteraction.create({
-        data: {
-          storeId,
-          userId: req.user?.userId ?? null,
-          model: 'StockPilot-DecisionEngine-v2',
-          questionText: 'Tổng quan kho hàng hôm nay',
-          responseText: result.summary,
-          status: 'SUCCESS',
-        },
-      }).catch(() => {});
-
-      return res.status(200).json({
-        success: true,
-        data: result,
-      });
+      return res.status(200).json({ success: true, data: result });
     } catch (error) {
       next(error);
     }
@@ -120,17 +91,15 @@ export class AssistantController {
           'doanh thu', 'lãi', 'lợi nhuận', 'giá vốn', 'tiền vốn', 'vốn đọng',
           'revenue', 'profit', 'cost price', 'margin', 'cogs', 'tổng vốn',
         ];
-        const isFinancialQuery = financialKeywords.some((kw) => q.toLowerCase().includes(kw));
-        if (isFinancialQuery) {
-          const staffRefusalMsg =
-            'Xin lỗi, tài khoản Nhân viên chỉ được phép tra cứu số lượng tồn kho và nghiệp vụ vận hành. Vui lòng liên hệ Chủ cửa hàng để xem dữ liệu tài chính.';
+        if (financialKeywords.some((kw) => q.toLowerCase().includes(kw))) {
           return res.status(200).json({
             success: true,
             data: {
               id: 'staff-guard',
-              answer: staffRefusalMsg,
+              answer: FINANCIAL_DATA_RESTRICTED_MESSAGE,
               actionLinks: [],
               meta: null,
+              source: 'RULES',
               createdAt: new Date().toISOString(),
             },
           });
@@ -138,32 +107,19 @@ export class AssistantController {
       }
 
       await assertAiQuota(storeId);
-      const result = await this.service.answerQuestion(
-        storeId,
-        q,
-        stockItemId ? Number(stockItemId) : undefined,
-        req.user!.role
-      );
-
-      const interaction = await prisma.aiInteraction.create({
-        data: {
-          storeId,
-          userId: req.user?.userId ?? null,
-          model: 'StockPilot-AIPilot-v2',
-          questionText: q || 'Phân tích tổng quan',
-          responseText: result.answer,
-          status: 'SUCCESS',
-        },
-      });
+      const result = await this.service.chat(storeId, q, stockItemId ? Number(stockItemId) : undefined, req.user!.role, req.user?.userId);
 
       return res.status(200).json({
         success: true,
         data: {
-          id: interaction.id.toString(),
+          id: result.interactionId ?? `local-${Date.now()}`,
           answer: result.answer,
           actionLinks: result.actionLinks || [],
           meta: result.dataSnapshot || null,
-          createdAt: interaction.createdAt,
+          source: result.source,
+          model: result.model,
+          fallbackReason: result.fallbackReason ?? null,
+          createdAt: new Date().toISOString(),
         },
       });
     } catch (error) {
@@ -171,26 +127,46 @@ export class AssistantController {
     }
   };
 
+  suggestions = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const storeId = req.user!.storeId!;
+      await assertAiQuota(storeId);
+      const result = await this.service.suggestActions(storeId, req.user!.role, req.user?.userId);
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * A user's own chat history only: owner answers can contain cost and profit figures.
+   * SKU explanations, overviews and suggestion runs are logged too but are not chat turns.
+   */
   getHistory = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const storeId = req.user!.storeId!;
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
 
       const interactions = await prisma.aiInteraction.findMany({
-        where: { storeId },
+        where: { storeId, userId: req.user!.userId },
         orderBy: { createdAt: 'desc' },
-        take: limit,
+        take: limit * 4,
+        select: { id: true, model: true, questionText: true, responseText: true, status: true, contextSummaryJson: true, createdAt: true },
       });
 
-      const serialized = interactions.map((item) => ({
-        ...item,
-        id: item.id.toString(),
-      }));
+      const chatTurns = interactions
+        .filter((item) => {
+          const feature = (item.contextSummaryJson as { feature?: string } | null)?.feature;
+          return !feature || feature === 'CHAT';
+        })
+        .slice(0, limit)
+        .map(({ contextSummaryJson, ...item }) => ({
+          ...item,
+          id: item.id.toString(),
+          source: (contextSummaryJson as { source?: string } | null)?.source === 'AI' ? 'AI' : 'RULES',
+        }));
 
-      return res.status(200).json({
-        success: true,
-        data: serialized,
-      });
+      return res.status(200).json({ success: true, data: chatTurns });
     } catch (error) {
       next(error);
     }

@@ -7,6 +7,7 @@ import { AdminService } from '../src/modules/admin/admin.service';
 import { AuthService } from '../src/modules/auth/auth.service';
 import { assertAiQuota } from '../src/modules/assistant/assistant.controller';
 import { HttpMetricsService } from '../src/common/services/http-metrics.service';
+import { addBusinessDays, businessDateRangeToUtc, toBusinessDateKey } from '../src/common/utils/business-date';
 
 const ADMIN_PASSWORD = 'Adm1nPassword!';
 
@@ -315,6 +316,95 @@ describe('Admin API', () => {
         CONVERTED: 0,
         REJECTED: 0,
       });
+    });
+  });
+
+  describe('GET /admin/activity-trend', () => {
+    const todayKey = () => toBusinessDateKey(new Date());
+
+    /** $queryRaw is called in order: per-day audit counts, window distinct stores, per-day new stores. */
+    const mockTrendQueries = (daily: unknown[], windowStores: number, stores: unknown[]) => {
+      db.$queryRaw
+        .mockResolvedValueOnce(daily)
+        .mockResolvedValueOnce([{ stores: BigInt(windowStores) }])
+        .mockResolvedValueOnce(stores);
+    };
+
+    it('maps grouped SQL rows onto zero-filled day buckets (BigInt counts, failed logins, new stores)', async () => {
+      const today = todayKey();
+      const threeDaysAgo = addBusinessDays(today, -3);
+      mockTrendQueries(
+        [
+          { day: threeDaysAgo, events: BigInt(4), stores: BigInt(1), failed: BigInt(0) },
+          { day: today, events: BigInt(10), stores: BigInt(2), failed: BigInt(3) },
+        ],
+        2,
+        [{ day: today, created: BigInt(1) }]
+      );
+
+      const res = await request(app).get('/api/v1/admin/activity-trend?days=14').set(auth(adminToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      const { days, summary } = res.body.data;
+      expect(days).toHaveLength(14);
+      expect(days[0].date).toBe(addBusinessDays(today, -13));
+      expect(days[13]).toEqual({ date: today, auditEvents: 10, activeStores: 2, newStores: 1, failedLogins: 3 });
+      expect(days[10]).toEqual({ date: threeDaysAgo, auditEvents: 4, activeStores: 1, newStores: 0, failedLogins: 0 });
+      // A day with no rows is reported as zeros, not omitted.
+      expect(days[5]).toEqual({ date: addBusinessDays(today, -8), auditEvents: 0, activeStores: 0, newStores: 0, failedLogins: 0 });
+      expect(summary).toEqual({
+        totalEvents: 14,
+        averageDailyEvents: 1,
+        peakDate: today,
+        peakEvents: 10,
+        activeStoresWindow: 2,
+      });
+    });
+
+    it('reports no peak day when the period has no activity', async () => {
+      mockTrendQueries([], 0, []);
+
+      const res = await request(app).get('/api/v1/admin/activity-trend?days=7').set(auth(adminToken));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.days).toHaveLength(7);
+      expect(res.body.data.summary).toMatchObject({ totalEvents: 0, peakDate: null, peakEvents: 0, activeStoresWindow: 0 });
+    });
+
+    it('buckets by Vietnam business day with a half-open UTC window', async () => {
+      mockTrendQueries([], 0, []);
+
+      await request(app).get('/api/v1/admin/activity-trend?days=7').set(auth(adminToken));
+
+      const [sqlParts, ...values] = db.$queryRaw.mock.calls[0];
+      const sql = sqlParts.join('?');
+      expect(sql).toContain('GROUP BY day');
+      expect(sql).toContain('createdAt <');
+      expect(sql).not.toContain('createdAt <=');
+
+      const [offsetMinutes, startUtc, endUtc] = values;
+      expect(offsetMinutes).toBe(420); // Asia/Ho_Chi_Minh = UTC+7
+      expect(startUtc).toEqual(businessDateRangeToUtc(addBusinessDays(todayKey(), -6)).startUtc);
+      expect(endUtc).toEqual(businessDateRangeToUtc(todayKey()).endUtc);
+
+      // Same shift MySQL applies: 23:30 VN stays on its own day, 00:30 VN moves to the next one.
+      const shiftDay = (iso: string) => new Date(new Date(iso).getTime() + offsetMinutes * 60000).toISOString().slice(0, 10);
+      expect(shiftDay('2026-10-30T16:30:00.000Z')).toBe('2026-10-30');
+      expect(shiftDay('2026-10-30T17:30:00.000Z')).toBe('2026-10-31');
+    });
+
+    it('rejects days outside allowed range [7, 30]', async () => {
+      const res = await request(app).get('/api/v1/admin/activity-trend?days=3').set(auth(adminToken));
+      expect(res.status).toBe(400);
+      const tooMany = await request(app).get('/api/v1/admin/activity-trend?days=31').set(auth(adminToken));
+      expect(tooMany.status).toBe(400);
+    });
+
+    it('is not available to shop owners', async () => {
+      const res = await request(app).get('/api/v1/admin/activity-trend').set(auth(ownerToken));
+      expect(res.status).toBe(403);
+      expect(db.$queryRaw).not.toHaveBeenCalled();
     });
   });
 
