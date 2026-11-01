@@ -158,5 +158,35 @@
     "hitCount": 0,
     "createdAt": "2026-11-01T14:55:14.981Z",
     "updatedAt": "2026-11-01T14:55:14.981Z"
+  },
+  {
+    "id": "learned-1793545232835-4b0ms",
+    "question": "Hãy subscribe cho kênh Ghiền Mì Gõ Để không bỏ lỡ những video hấp dẫn",
+    "normalizedQuestion": "subscribe kênh ghiền mì gõ bỏ lỡ những video hấp dẫn",
+    "answer": "Dạ em đã ghi nhận lời nhắc subscribe kênh Ghiền Mì Gõ từ anh/chị nhé! Nếu anh/chị muốn giải trí hay xem video thì cứ thoải mái ạ.\n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác cho cửa hàng không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T15:00:32.835Z",
+    "updatedAt": "2026-11-01T15:00:32.835Z"
+  },
+  {
+    "id": "learned-1793545282723-kq0v1",
+    "question": "Tôi muốn biết dữ liệu thế như thế nào",
+    "normalizedQuestion": "muốn biết dữ liệu",
+    "answer": "Dạ em chào anh/chị, để em tổng hợp nhanh tình hình tổng quan của cửa hàng **minh hiếu** (43 Trần Cao Vân, Đà Nẵng) cho mình nắm nhé ạ:\n\n### 📊 Tổng quan kho hàng & Cửa hàng\n- **Tổng số mặt hàng:** 216 sản phẩm\n- **Tổng giá trị vốn tồn kho:** 504.492.200 đ\n- **Tổng giá trị bán lẻ dự kiến:** 646.269.500 đ\n- **Cảnh báo cần lưu ý:** \n  - 🛑 Hết hàng: 1 sản phẩm (*Xúc xích tiệt trùng heo CP gói 5 cây - SP30*)\n  - ⚠️ Sắp hết: 1 sản phẩm (*Xúc xích Vissan dinh dưỡng heo 100g - SP31*) và một số mặt hàng dưới điểm đặt hàng.\n  - 📦 Tồn cao: 2 sản phẩm cần lưu ý đẩy hàng.\n\n### 💰 Kết quả kinh doanh gần đây\n- **Hôm nay (01/11/2026):** 1 đơn hàng, doanh thu 22.500 đ.\n- **Tháng 10/2026 vừa qua:** Tổng 1.173 đơn hàng với doanh thu đạt **817.651.500 đ** (Lợi nhuận gộp: 173.618.800 đ, biên lợi nhuận 21.2%).\n\nAnh/chị cần em hỗ trợ kiểm tra chi tiết tồn kho món hàng nào, xem báo cáo cụ thể tháng trước hay thiết lập chương trình xả hàng, tối ưu giá không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T15:01:22.723Z",
+    "updatedAt": "2026-11-01T15:01:22.723Z"
+  },
+  {
+    "id": "learned-1793545330540-6gzyb",
+    "question": "tôi muốn biết về thuế của cửa hàng",
+    "normalizedQuestion": "muốn biết thuế cửa hàng",
+    "answer": "Dạ em chào anh/chị,\n\nHiện tại dữ liệu của hệ thống StockPilot chỉ tập trung quản lý các thông tin nội bộ về kho hàng, danh mục sản phẩm, đơn hàng và kết quả kinh doanh của cửa hàng mình, nên hiện chưa tích hợp dữ liệu cụ thể về các khoản thuế. Đối với các vấn đề về thuế, anh/chị vui lòng tham khảo các quy định hiện hành hoặc liên hệ trực tiếp với cơ quan thuế địa phương (hoặc bộ phận kế toán) để được hướng dẫn chi tiết và chính xác nhất ạ.\n\nAnh/chị cần em hỗ trợ kiểm tra đơn hàng, xem tồn kho hay việc gì khác không ạ? Em có thể giúp anh/chị ngay đấy ạ!",
+    "category": "general",
+    "hitCount": 0,
+    "createdAt": "2026-11-01T15:02:10.540Z",
+    "updatedAt": "2026-11-01T15:02:10.541Z"
   }
 ]
