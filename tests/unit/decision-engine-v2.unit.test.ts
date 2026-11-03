@@ -194,6 +194,52 @@ describe('Decision Engine V2 - pricing invariants', () => {
     expect(sellingAtLoss).toMatchObject({ action: 'INCREASE', shouldGenerateRecommendation: true });
   });
 
+  it('never marks down an out-of-stock SKU (no sales because there is nothing to sell)', () => {
+    const outOfStock = {
+      ...baseInput,
+      sellingPrice: 100000,
+      costPrice: 50000,
+      daysSinceLastSale: 70,
+      daysOfCover: 0,
+      overstockScore: 0,
+      stockoutScore: 100,
+      trend: 'STABLE_ZERO' as const,
+      dataStatus: 'OK' as const,
+    };
+
+    expect(pricingEvaluator.evaluatePricing({ ...outOfStock, availableStock: 0 }).action).not.toBe('DECREASE');
+    expect(pricingEvaluator.evaluatePricing({ ...outOfStock, availableStock: 0, daysSinceLastSale: 400, overstockScore: 90 }).action).not.toBe('DECREASE');
+  });
+
+  it('still corrects a loss-making price when the SKU is out of stock', () => {
+    const result = pricingEvaluator.evaluatePricing({
+      ...baseInput,
+      sellingPrice: 90000,
+      costPrice: 100000,
+      daysSinceLastSale: 70,
+      overstockScore: 0,
+      stockoutScore: 100,
+      trend: 'STABLE',
+      availableStock: 0,
+    });
+    expect(result).toMatchObject({ action: 'INCREASE', shouldGenerateRecommendation: true });
+    expect(result.factors[0].code).toBe('SELLING_AT_LOSS');
+  });
+
+  it('keeps the markdown for in-stock slow movers', () => {
+    const result = pricingEvaluator.evaluatePricing({
+      ...baseInput,
+      sellingPrice: 100000,
+      costPrice: 50000,
+      daysSinceLastSale: 70,
+      daysOfCover: 10,
+      overstockScore: 0,
+      trend: 'STABLE',
+      availableStock: 12,
+    });
+    expect(result).toMatchObject({ action: 'DECREASE', recommendedPrice: 90000 });
+  });
+
   it('is deterministic', () => {
     const input = {
       ...baseInput,

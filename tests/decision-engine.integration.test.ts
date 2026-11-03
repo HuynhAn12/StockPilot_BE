@@ -882,6 +882,58 @@ describe('Decision Engine & Historical Sales Pipeline Integration', () => {
       );
     });
 
+    it('locks stock_items before pricing_recommendations in accept, modify and reject (same order as recomputeSku)', async () => {
+      const lockedTables: string[] = [];
+      (prisma.$queryRaw as jest.Mock).mockImplementation((strings: TemplateStringsArray) => {
+        const sql = strings.join('?');
+        if (sql.includes('FOR UPDATE')) {
+          lockedTables.push(sql.includes('stock_items') ? 'stock_items' : sql.includes('pricing_recommendations') ? 'pricing_recommendations' : sql);
+        }
+        return Promise.resolve([]);
+      });
+      (prisma.pricingRecommendation.findFirst as jest.Mock).mockResolvedValue({
+        id: 99,
+        storeId: 1,
+        stockItemId: 10,
+        action: 'DECREASE',
+        currentPrice: 200000,
+        recommendedPrice: 164000,
+        status: 'PENDING',
+        reasonJson: {},
+        stockItem: { sellingPrice: 200000, costPrice: 100000 },
+      });
+      (prisma.pricingRecommendation.update as jest.Mock).mockResolvedValue({ id: 99, stockItemId: 10, status: 'ACCEPTED' });
+      (prisma.stockItem.findFirst as jest.Mock).mockResolvedValue({ id: 10, sellingPrice: 200000, costPrice: 100000 });
+      (prisma.stockItem.update as jest.Mock).mockResolvedValue({ id: 10 });
+      (prisma.priceHistory.create as jest.Mock).mockResolvedValue({ id: 1 });
+      (prisma.engineConfig.findUnique as jest.Mock).mockResolvedValue(null);
+
+      const flows: Array<() => Promise<unknown>> = [
+        () => pricingService.acceptRecommendation(1, 100, 99, true),
+        () => pricingService.modifyRecommendation(1, 100, 99, 180000, true),
+        () => pricingService.rejectRecommendation(1, 100, 99),
+      ];
+      for (const flow of flows) {
+        lockedTables.length = 0;
+        await flow();
+        expect(lockedTables[0]).toBe('stock_items');
+        expect(lockedTables).toContain('pricing_recommendations');
+        expect(lockedTables.indexOf('stock_items')).toBeLessThan(lockedTables.indexOf('pricing_recommendations'));
+      }
+      (prisma.$queryRaw as jest.Mock).mockReset();
+    });
+
+    it('returns 404 without locking anything when the recommendation belongs to another store', async () => {
+      (prisma.pricingRecommendation.findFirst as jest.Mock).mockResolvedValue(null);
+      (prisma.$queryRaw as jest.Mock).mockResolvedValue([]);
+
+      await expect(pricingService.acceptRecommendation(2, 100, 99, true)).rejects.toMatchObject({ statusCode: 404 });
+      expect(prisma.pricingRecommendation.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: 99, storeId: 2 }) })
+      );
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
     it('creates a SLOW_MOVING alert when the engine marks a SKU as slow moving but not dead stock', async () => {
       (prisma.alert.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.alert.create as jest.Mock).mockResolvedValue({ id: 11, type: 'SLOW_MOVING' });
