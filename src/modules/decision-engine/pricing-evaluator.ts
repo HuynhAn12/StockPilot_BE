@@ -3,6 +3,12 @@ import { DEFAULT_ENGINE_CONFIG } from './engine-defaults';
 
 export type DecisionDataStatus = 'OK' | 'INSUFFICIENT_DATA';
 
+/**
+ * Days of cover beyond targetCoverageDays × this multiple make a SKU a markdown candidate
+ * (default target 30 -> 45 days, the value that used to be hard-coded).
+ */
+export const OVERSTOCK_PRICING_COVER_MULTIPLE = 1.5;
+
 export interface PricingEvaluationInput {
   sellingPrice: number;
   costPrice: number;
@@ -18,8 +24,17 @@ export interface PricingEvaluationInput {
   /** Config thresholds (defaults from DEFAULT_ENGINE_CONFIG keep older callers working). */
   slowMovingDays?: number;
   deadStockDays?: number;
+  /** Risk score that triggers a markdown (overstock) or a markup (stockout). */
+  highRiskThreshold?: number;
+  /** Coverage target; cover beyond OVERSTOCK_PRICING_COVER_MULTIPLE times it triggers a markdown. */
+  targetCoverageDays?: number;
   /** INSUFFICIENT_DATA blocks demand-based price changes; fact-based margin corrections still apply. */
   dataStatus?: DecisionDataStatus;
+  /**
+   * Available units. At or below zero the SKU cannot sell, so days without a sale are not a demand
+   * signal and no markdown is recommended. Omitted means unknown (older callers keep their behavior).
+   */
+  availableStock?: number;
 }
 
 export interface PricingEvaluationResult {
@@ -65,7 +80,10 @@ export class PricingEvaluator {
       confidenceScore,
       slowMovingDays = DEFAULT_ENGINE_CONFIG.slowMovingDays,
       deadStockDays = DEFAULT_ENGINE_CONFIG.deadStockDays,
+      highRiskThreshold = DEFAULT_ENGINE_CONFIG.highRiskThreshold,
+      targetCoverageDays = DEFAULT_ENGINE_CONFIG.targetCoverageDays,
       dataStatus = 'OK',
+      availableStock,
     } = input;
 
     const minimumPrice = PricingEvaluator.calculateMinimumPrice(costPrice, minimumMarginPct);
@@ -164,10 +182,13 @@ export class PricingEvaluator {
     // CASE 1: DECREASE (Markdown candidate due to Dead Stock, Slow Moving, or High Overstock)
     // Thresholds come from the store's engine config: slow-moving, dead stock, and critical dead stock
     // at twice the dead-stock threshold (90 / 180 days by default, matching docs/next-steps.md).
+    // An out-of-stock SKU stops selling because there is nothing to sell: never mark it down.
+    const isOutOfStock = availableStock !== undefined && availableStock <= 0;
     if (
-      (daysSinceLastSale !== null && daysSinceLastSale >= slowMovingDays) ||
-      overstockScore >= 50 ||
-      (daysOfCover !== null && daysOfCover > 45)
+      !isOutOfStock &&
+      ((daysSinceLastSale !== null && daysSinceLastSale >= slowMovingDays) ||
+        overstockScore >= highRiskThreshold ||
+        (daysOfCover !== null && daysOfCover > targetCoverageDays * OVERSTOCK_PRICING_COVER_MULTIPLE))
     ) {
       let baseMarkdown = 0.10;
 
@@ -242,7 +263,7 @@ export class PricingEvaluator {
     }
 
     // CASE 2: INCREASE (Markup candidate due to High Stockout Risk + Strong Demand Trend)
-    if (stockoutScore >= 60 && (trend === 'UP' || trend === 'STRONG_UP')) {
+    if (stockoutScore >= highRiskThreshold && (trend === 'UP' || trend === 'STRONG_UP')) {
       const markupPct = trend === 'STRONG_UP' ? Math.min(maxMarkupPct, 0.15) : Math.min(maxMarkupPct, 0.08);
       const targetPrice = Math.round((sellingPrice * (1.0 + markupPct)) / 1000) * 1000;
 
