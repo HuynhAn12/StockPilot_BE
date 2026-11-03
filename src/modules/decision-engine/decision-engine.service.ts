@@ -132,6 +132,39 @@ export function isDecisionSnapshotStale(
   return sourceChangedAt.some((changedAt) => Boolean(changedAt) && changedAt!.getTime() > calculatedAt.getTime());
 }
 
+/** Live evaluations run in parallel per overview request, bounded to protect the connection pool. */
+export const OVERVIEW_LIVE_CONCURRENCY = 5;
+
+/**
+ * Overview order, most urgent first: out of stock, then the higher of the stockout and overstock
+ * scores, then dead stock, then stockItemId so equal SKUs keep a stable order across pages.
+ */
+export function compareOverviewPriority(a: SkuDecisionAnalysisResult, b: SkuDecisionAnalysisResult): number {
+  const outOfStock = (x: SkuDecisionAnalysisResult) => (x.inventory.available <= 0 ? 1 : 0);
+  const topRisk = (x: SkuDecisionAnalysisResult) => Math.max(x.risk.stockout, x.risk.overstock);
+  const deadStock = (x: SkuDecisionAnalysisResult) => (x.risk.deadStock ? 1 : 0);
+  return (
+    outOfStock(b) - outOfStock(a) ||
+    topRisk(b) - topRisk(a) ||
+    deadStock(b) - deadStock(a) ||
+    a.stockItemId - b.stockItemId
+  );
+}
+
+/** Maps items with at most `concurrency` calls in flight; results keep the input order. */
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
 export class DecisionEngineService {
   constructor(
     private readonly prisma: PrismaClient = defaultPrisma,
@@ -222,6 +255,9 @@ export class DecisionEngineService {
             slowMovingDays: result.engineConfig.slowMovingDays,
             deadStockDays: result.engineConfig.deadStockDays,
             dataStatus: result.dataStatus,
+            availableStock: result.inventory.available,
+            highRiskThreshold: result.engineConfig.highRiskThreshold,
+            targetCoverageDays: result.engineConfig.targetCoverageDays,
           },
           result.pricingEvaluation
         );
@@ -456,6 +492,9 @@ export class DecisionEngineService {
       slowMovingDays: config.slowMovingDays,
       deadStockDays: config.deadStockDays,
       dataStatus,
+      availableStock: available,
+      highRiskThreshold: config.highRiskThreshold,
+      targetCoverageDays: config.targetCoverageDays,
     });
 
     const minimumPrice = PricingEvaluator.calculateMinimumPrice(Number(stockItem.costPrice), config.minimumMarginPct);
@@ -518,9 +557,10 @@ export class DecisionEngineService {
   }
 
   /**
-   * Retrieves high-level decision overview across store SKUs.
-   * Read-only: uses the latest DecisionSnapshot per SKU and evaluates live (without writing) only
-   * the SKUs that have no usable snapshot yet.
+   * Retrieves high-level decision overview across store SKUs, most urgent first (compareOverviewPriority).
+   * Read-only: uses the latest DecisionSnapshot per SKU and evaluates live (without writing) at most
+   * `maxLiveSkus` SKUs that have no usable snapshot yet. The rest are reported as pending and returned
+   * in pendingStockItemIds; queueing them is the caller's job (Trigger layer), never this service's.
    */
   async getOverview(
     storeId: number,
@@ -528,11 +568,14 @@ export class DecisionEngineService {
       riskFilter: 'ALL' | 'STOCKOUT' | 'OVERSTOCK' | 'DEAD_STOCK';
       page: number;
       limit: number;
-    }
+    },
+    limits: { maxLiveSkus?: number } = {}
   ) {
+    const maxLiveSkus = limits.maxLiveSkus ?? env.DECISION_OVERVIEW_MAX_LIVE_SKUS;
     const stockItems = await this.prisma.stockItem.findMany({
       where: { storeId, isActive: true },
       select: { id: true, updatedAt: true },
+      orderBy: { id: 'asc' },
     });
 
     const [latestSnapshots, lastMovements, config] = await Promise.all([
@@ -548,6 +591,7 @@ export class DecisionEngineService {
 
     const analyses: SkuDecisionAnalysisResult[] = [];
     const freshnessById = new Map<number, DecisionFreshness>();
+    const withoutSnapshot: number[] = [];
     for (const item of stockItems) {
       const snapshot = latestSnapshots.get(item.id);
       const fromSnapshot = snapshot ? DecisionEngineService.fromSnapshot(snapshot) : null;
@@ -566,19 +610,33 @@ export class DecisionEngineService {
         });
         continue;
       }
+      withoutSnapshot.push(item.id);
+    }
 
+    // Bounded live evaluation; failures are counted (and logged), never dropped silently.
+    const liveIds = withoutSnapshot.slice(0, maxLiveSkus);
+    const pendingStockItemIds = withoutSnapshot.slice(maxLiveSkus);
+    let failedSkuCount = 0;
+    const liveResults = await mapWithConcurrency(liveIds, OVERVIEW_LIVE_CONCURRENCY, async (stockItemId) => {
       try {
-        const analyzed = await this.analyzeSku(storeId, item.id, { persist: false });
-        analyses.push(analyzed);
-        freshnessById.set(item.id, { stale: true, snapshotAt: null, source: 'LIVE' });
+        return await this.analyzeSku(storeId, stockItemId, { persist: false });
       } catch (err) {
+        failedSkuCount++;
         logger.warn('decision_engine_sku_analysis_failed', {
           storeId,
-          stockItemId: item.id,
+          stockItemId,
           error: err,
         });
+        return null;
+      }
+    });
+    for (const analyzed of liveResults) {
+      if (analyzed) {
+        analyses.push(analyzed);
+        freshnessById.set(analyzed.stockItemId, { stale: true, snapshotAt: null, source: 'LIVE' });
       }
     }
+    analyses.sort(compareOverviewPriority);
 
     // Compute Summary Cards
     const totalSkus = analyses.length;
@@ -640,6 +698,8 @@ export class DecisionEngineService {
         deadStockCount,
         totalDeadStockCostValue: Number(totalDeadStockCostValue.toFixed(2)),
         totalDeadStockRetailValue: Number(totalDeadStockRetailValue.toFixed(2)),
+        pendingSkuCount: pendingStockItemIds.length,
+        failedSkuCount,
       },
       items: pagedItems,
       pagination: {
@@ -648,6 +708,7 @@ export class DecisionEngineService {
         total,
         totalPages: Math.ceil(total / query.limit),
       },
+      pendingStockItemIds,
     };
   }
 
@@ -737,7 +798,8 @@ export class DecisionEngineService {
       confidence: metrics.confidence,
       pricing: input.pricing,
       pricingEvaluation,
-      engineConfig: input.config,
+      // Snapshots written before configVersion existed do not say which settings they used.
+      engineConfig: { ...input.config, configVersion: input.config?.configVersion ?? 'UNKNOWN' },
       engineVersion: snapshot.version,
       factors: pricingEvaluation.factors,
       calculatedAt: snapshot.calculatedAt.toISOString(),
