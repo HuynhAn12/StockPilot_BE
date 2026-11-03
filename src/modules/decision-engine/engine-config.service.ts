@@ -60,6 +60,7 @@ export class EngineConfigService {
       criticalRiskThreshold: config.criticalRiskThreshold,
       // The formula version is a property of the running code; the stored column is legacy.
       engineVersion: DECISION_ENGINE_VERSION,
+      configVersion: config.updatedAt.toISOString(),
       source: 'CUSTOM',
     };
   }
@@ -137,6 +138,7 @@ export class EngineConfigService {
       highRiskThreshold: updated.highRiskThreshold,
       criticalRiskThreshold: updated.criticalRiskThreshold,
       engineVersion: DECISION_ENGINE_VERSION,
+      configVersion: updated.updatedAt.toISOString(),
       source: 'CUSTOM',
     };
   }
