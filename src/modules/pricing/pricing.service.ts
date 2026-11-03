@@ -25,6 +25,9 @@ export interface PricingEvaluationInput {
   slowMovingDays?: number;
   deadStockDays?: number;
   dataStatus?: DecisionDataStatus;
+  availableStock?: number;
+  highRiskThreshold?: number;
+  targetCoverageDays?: number;
 }
 
 export class PricingService {
@@ -111,6 +114,9 @@ export class PricingService {
       slowMovingDays: input.slowMovingDays,
       deadStockDays: input.deadStockDays,
       dataStatus: input.dataStatus,
+      availableStock: input.availableStock,
+      highRiskThreshold: input.highRiskThreshold,
+      targetCoverageDays: input.targetCoverageDays,
     });
   }
 
@@ -264,8 +270,9 @@ export class PricingService {
   }
 
   async acceptRecommendation(storeId: number, userId: number, recommendationId: number, applyToStockItem = true) {
+    const stockItemId = await this.findRecommendationStockItemId(storeId, recommendationId);
     return this.prisma.$transaction(async (tx) => {
-      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
+      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId, stockItemId);
       const stockItem = await this.assertStockPriceNotStale(tx, storeId, rec.stockItemId, rec.currentPrice);
       await this.assertRecommendationStillValid(tx, storeId, rec, stockItem);
 
@@ -336,8 +343,9 @@ export class PricingService {
   }
 
   async rejectRecommendation(storeId: number, userId: number, recommendationId: number, _reason?: string) {
+    const stockItemId = await this.findRecommendationStockItemId(storeId, recommendationId);
     return this.prisma.$transaction(async (tx) => {
-      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
+      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId, stockItemId);
 
       const updated = await tx.pricingRecommendation.update({
         where: { id: recommendationId },
@@ -376,8 +384,9 @@ export class PricingService {
     customPrice: number,
     applyToStockItem = true
   ) {
+    const stockItemId = await this.findRecommendationStockItemId(storeId, recommendationId);
     return this.prisma.$transaction(async (tx) => {
-      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId);
+      const rec = await this.getPendingRecommendationForDecision(tx, storeId, recommendationId, stockItemId);
       await this.assertStockPriceNotStale(tx, storeId, rec.stockItemId, rec.currentPrice);
 
       const minimumMarginPct = await this.getMinimumMarginPct(tx, storeId);
@@ -481,12 +490,35 @@ export class PricingService {
     });
   }
 
+  /**
+   * Resolves the SKU of a recommendation before the decision transaction opens, so that transaction
+   * can lock stock_items before pricing_recommendations. The read stays outside the transaction on
+   * purpose: under REPEATABLE READ a plain read inside it would fix the snapshot before the locks are
+   * taken, and the reads after the locks would miss changes committed while waiting.
+   */
+  private async findRecommendationStockItemId(storeId: number, recommendationId: number): Promise<number> {
+    const rec = await this.prisma.pricingRecommendation.findFirst({
+      where: { id: recommendationId, storeId },
+      select: { stockItemId: true },
+    });
+
+    if (!rec) {
+      throw new NotFoundError('Pricing recommendation not found');
+    }
+
+    return rec.stockItemId;
+  }
+
   private async getPendingRecommendationForDecision(
     tx: Prisma.TransactionClient,
     storeId: number,
-    recommendationId: number
+    recommendationId: number,
+    stockItemId: number
   ) {
-    // Lock only rows owned by the caller's store so a foreign id can neither be read nor locked.
+    // Lock order stock_items -> pricing_recommendations, the same as DecisionEngineService.recomputeSku,
+    // so a decision and a concurrent recompute of the SKU cannot deadlock. Both locks are store-scoped
+    // so a foreign id can neither be read nor locked.
+    await tx.$queryRaw`SELECT id FROM stock_items WHERE id = ${stockItemId} AND storeId = ${storeId} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM pricing_recommendations WHERE id = ${recommendationId} AND storeId = ${storeId} FOR UPDATE`;
 
     const rec = await tx.pricingRecommendation.findFirst({
@@ -496,6 +528,10 @@ export class PricingService {
 
     if (!rec) {
       throw new NotFoundError('Pricing recommendation not found');
+    }
+
+    if (rec.stockItemId !== stockItemId) {
+      throw new ConflictError('STALE_PRICING_RECOMMENDATION');
     }
 
     if (rec.status !== 'PENDING') {

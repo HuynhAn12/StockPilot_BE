@@ -44,6 +44,10 @@ export interface DecisionOverviewSummary {
   deadStockCount: number;
   totalDeadStockCostValue: number;
   totalDeadStockRetailValue: number;
+  /** SKUs without a snapshot that were not evaluated live in this request (queued for recompute). */
+  pendingSkuCount: number;
+  /** SKUs whose live evaluation failed in this request (logged, excluded from the list). */
+  failedSkuCount: number;
 }
 
 export type StaffDecisionOverviewSummary = Omit<DecisionOverviewSummary, 'totalDeadStockCostValue'>;
@@ -68,6 +72,7 @@ export function toEngineConfigView(
     highRiskThreshold: config.highRiskThreshold,
     criticalRiskThreshold: config.criticalRiskThreshold,
     engineVersion: config.engineVersion,
+    configVersion: config.configVersion,
     source: config.source,
   };
 }
@@ -125,5 +130,7 @@ export function toOverviewSummaryView(
     overstockRiskCount: summary.overstockRiskCount,
     deadStockCount: summary.deadStockCount,
     totalDeadStockRetailValue: summary.totalDeadStockRetailValue,
+    pendingSkuCount: summary.pendingSkuCount,
+    failedSkuCount: summary.failedSkuCount,
   };
 }

@@ -101,6 +101,8 @@ const envSchema = z
     DECISION_NIGHTLY_HOUR: z.coerce.number().int().min(0).max(23).default(1),
     DECISION_RECOMPUTE_DEBOUNCE_MS: z.coerce.number().int().min(0).max(60_000).default(500),
     DECISION_RECALCULATE_MAX_SKUS: z.coerce.number().int().min(1).max(5000).default(500),
+    // Max SKUs without a snapshot evaluated live per GET /overview; the rest are queued for recompute.
+    DECISION_OVERVIEW_MAX_LIVE_SKUS: z.coerce.number().int().min(1).max(5000).default(100),
     // AI Decision Assistant (OpenAI Responses API). Without a key the rule-based assistant answers instead.
     OPENAI_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
     OPENAI_MODEL: z.string().default('gpt-4.1-mini'),
