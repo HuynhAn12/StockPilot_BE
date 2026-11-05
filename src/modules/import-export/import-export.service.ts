@@ -78,6 +78,8 @@ export class ImportExportService {
     const parsedInput = importPreviewSchema.parse(input);
     const items = parsedInput.items;
     const mode = parsedInput.mode;
+    // ADJUST_STOCK / REPLACE_STOCK only change quantities of existing SKUs; name, price and category stay as they are.
+    const isStockMode = mode === 'ADJUST_STOCK' || mode === 'REPLACE_STOCK';
     const totalRows = items.length;
     const issues: ImportIssue[] = [];
     const validItems: typeof items = [];
@@ -149,7 +151,7 @@ export class ImportExportService {
       }
 
       // 2. Validate price relationship (Warning)
-      if (item.sellingPrice < item.costPrice) {
+      if (!isStockMode && item.sellingPrice < item.costPrice) {
         issues.push({
           row: rowNumber,
           sku: item.sku,
@@ -171,10 +173,27 @@ export class ImportExportService {
         storeId,
         sku: { in: Array.from(seenSkusInPayload) },
       },
-      select: { sku: true, product: { select: { code: true } } },
+      select: { id: true, sku: true, isActive: true, product: { select: { code: true } } },
     });
 
     const existingSkuSet = new Set(existingStockItems.map((s) => s.sku.toUpperCase()));
+    const inactiveSkuSet = new Set(existingStockItems.filter((s) => s.isActive === false).map((s) => s.sku.toUpperCase()));
+
+    // Stock modes: current quantity in the target warehouse, so the preview can show the variance.
+    const currentQuantityBySku = new Map<string, number>();
+    if (isStockMode && existingStockItems.length > 0) {
+      const warehouse = parsedInput.warehouseId
+        ? await this.prisma.warehouse.findFirst({ where: { id: parsedInput.warehouseId, storeId, isActive: true } })
+        : await this.prisma.warehouse.findFirst({ where: { storeId, isDefault: true, isActive: true } });
+      if (warehouse) {
+        const balances = await this.prisma.inventoryBalance.findMany({
+          where: { storeId, warehouseId: warehouse.id, stockItemId: { in: existingStockItems.map((s) => s.id) } },
+          select: { stockItemId: true, quantity: true },
+        });
+        const quantityById = new Map(balances.map((b) => [b.stockItemId, b.quantity]));
+        existingStockItems.forEach((s) => currentQuantityBySku.set(s.sku.toUpperCase(), quantityById.get(s.id) ?? 0));
+      }
+    }
     const existingSkuProductCode = new Map(
       existingStockItems
         .filter((s: any) => s.product?.code)
@@ -184,7 +203,7 @@ export class ImportExportService {
       const normalizedSku = item.sku.trim().toUpperCase();
       const isExisting = existingSkuSet.has(normalizedSku);
       const existingProductCode = existingSkuProductCode.get(normalizedSku);
-      if (existingProductCode && existingProductCode !== item.productCode.trim().toUpperCase()) {
+      if (!isStockMode && existingProductCode && existingProductCode !== item.productCode.trim().toUpperCase()) {
         issues.push({
           row: idx + 1,
           sku: item.sku,
@@ -214,10 +233,23 @@ export class ImportExportService {
         });
         invalidRowIndices.add(idx + 1);
       }
+      if (isExisting && isStockMode && inactiveSkuSet.has(normalizedSku)) {
+        issues.push({
+          row: idx + 1,
+          sku: item.sku,
+          field: 'sku',
+          severity: 'ERROR',
+          message: `Mã SP ${item.sku} đã ngừng kinh doanh, không thể cập nhật tồn kho`,
+        });
+        invalidRowIndices.add(idx + 1);
+      }
       return {
         row: idx + 1,
         ...item,
         isExistingInDb: isExisting,
+        ...(isStockMode && currentQuantityBySku.has(normalizedSku)
+          ? { currentQuantity: currentQuantityBySku.get(normalizedSku) }
+          : {}),
       };
     });
 
@@ -505,99 +537,108 @@ export class ImportExportService {
                 continue;
               }
 
-              // 1. Upsert Category
-              const category = await tx.category.upsert({
-                where: {
-                  storeId_code: {
-                    storeId,
-                    code: item.categoryCode.trim().toUpperCase(),
-                  },
-                },
-                create: {
-                  storeId,
-                  name: item.categoryName.trim(),
-                  code: item.categoryCode.trim().toUpperCase(),
-                },
-                update: {
-                  name: item.categoryName.trim(),
-                },
-              });
+              const isStockMode = mode === 'ADJUST_STOCK' || mode === 'REPLACE_STOCK';
+              if (isStockMode && !existingSku) {
+                throw new ValidationError(`${mode} requires an existing SKU; ${item.sku} was not found`);
+              }
 
-              // 2. Upsert Product
-              const product = await tx.product.upsert({
-                where: {
-                  storeId_code: {
-                    storeId,
-                    code: item.productCode.trim().toUpperCase(),
-                  },
-                },
-                create: {
-                  storeId,
-                  categoryId: category.id,
-                  name: item.productName.trim(),
-                  code: item.productCode.trim().toUpperCase(),
-                },
-                update: {
-                  name: item.productName.trim(),
-                  categoryId: category.id,
-                },
-              });
-              createdProducts++;
-
-              // 3. Upsert StockItem
+              // Stock modes keep name, price, category and thresholds unchanged: only the quantity moves.
               let stockItemId: number;
 
-              if (existingSku) {
-                const updated = await tx.stockItem.update({
-                  where: { id: existingSku.id },
-                  data: {
-                    name: item.productName.trim(),
-                    barcode: item.barcode || existingSku.barcode,
-                    costPrice: toDecimal(item.costPrice),
-                    sellingPrice: toDecimal(item.sellingPrice),
-                    minStockLevel: item.minStockLevel,
-                    maxStockLevel: item.maxStockLevel,
+              if (isStockMode && existingSku) {
+                stockItemId = existingSku.id;
+              } else {
+                // 1. Upsert Category
+                const category = await tx.category.upsert({
+                  where: {
+                    storeId_code: {
+                      storeId,
+                      code: item.categoryCode.trim().toUpperCase(),
+                    },
+                  },
+                  create: {
+                    storeId,
+                    name: item.categoryName.trim(),
+                    code: item.categoryCode.trim().toUpperCase(),
+                  },
+                  update: {
+                    name: item.categoryName.trim(),
                   },
                 });
-                stockItemId = updated.id;
-                updatedSkus++;
 
-                // A changed price/cost basis invalidates pending pricing recommendations, and every
-                // selling-price change is recorded in PriceHistory, atomically with the row.
-                const sellingChanged = !new Prisma.Decimal(existingSku.sellingPrice).equals(updated.sellingPrice);
-                const costChanged = !new Prisma.Decimal(existingSku.costPrice).equals(updated.costPrice);
-                if (sellingChanged || costChanged) {
-                  await PricingService.expirePendingRecommendations(tx, storeId, [updated.id]);
-                }
-                if (sellingChanged) {
-                  await tx.priceHistory.create({
-                    data: {
+                // 2. Upsert Product
+                const product = await tx.product.upsert({
+                  where: {
+                    storeId_code: {
                       storeId,
-                      stockItemId: updated.id,
-                      oldPrice: existingSku.sellingPrice,
-                      newPrice: updated.sellingPrice,
-                      source: 'IMPORT',
-                      changedById: userId,
-                      reason: `Bulk import job #${job.id}, row #${rowNumber}`,
+                      code: item.productCode.trim().toUpperCase(),
+                    },
+                  },
+                  create: {
+                    storeId,
+                    categoryId: category.id,
+                    name: item.productName.trim(),
+                    code: item.productCode.trim().toUpperCase(),
+                  },
+                  update: {
+                    name: item.productName.trim(),
+                    categoryId: category.id,
+                  },
+                });
+                createdProducts++;
+
+                if (existingSku) {
+                  const updated = await tx.stockItem.update({
+                    where: { id: existingSku.id },
+                    data: {
+                      name: item.productName.trim(),
+                      barcode: item.barcode || existingSku.barcode,
+                      costPrice: toDecimal(item.costPrice),
+                      sellingPrice: toDecimal(item.sellingPrice),
+                      minStockLevel: item.minStockLevel,
+                      maxStockLevel: item.maxStockLevel,
                     },
                   });
+                  stockItemId = updated.id;
+                  updatedSkus++;
+
+                  // A changed price/cost basis invalidates pending pricing recommendations, and every
+                  // selling-price change is recorded in PriceHistory, atomically with the row.
+                  const sellingChanged = !new Prisma.Decimal(existingSku.sellingPrice).equals(updated.sellingPrice);
+                  const costChanged = !new Prisma.Decimal(existingSku.costPrice).equals(updated.costPrice);
+                  if (sellingChanged || costChanged) {
+                    await PricingService.expirePendingRecommendations(tx, storeId, [updated.id]);
+                  }
+                  if (sellingChanged) {
+                    await tx.priceHistory.create({
+                      data: {
+                        storeId,
+                        stockItemId: updated.id,
+                        oldPrice: existingSku.sellingPrice,
+                        newPrice: updated.sellingPrice,
+                        source: 'IMPORT',
+                        changedById: userId,
+                        reason: `Bulk import job #${job.id}, row #${rowNumber}`,
+                      },
+                    });
+                  }
+                } else {
+                  const created = await tx.stockItem.create({
+                    data: {
+                      storeId,
+                      productId: product.id,
+                      sku: item.sku.trim(),
+                      name: item.productName.trim(),
+                      barcode: item.barcode,
+                      costPrice: toDecimal(item.costPrice),
+                      sellingPrice: toDecimal(item.sellingPrice),
+                      minStockLevel: item.minStockLevel,
+                      maxStockLevel: item.maxStockLevel,
+                    },
+                  });
+                  stockItemId = created.id;
+                  createdSkus++;
                 }
-              } else {
-                const created = await tx.stockItem.create({
-                  data: {
-                    storeId,
-                    productId: product.id,
-                    sku: item.sku.trim(),
-                    name: item.productName.trim(),
-                    barcode: item.barcode,
-                    costPrice: toDecimal(item.costPrice),
-                    sellingPrice: toDecimal(item.sellingPrice),
-                    minStockLevel: item.minStockLevel,
-                    maxStockLevel: item.maxStockLevel,
-                  },
-                });
-                stockItemId = created.id;
-                createdSkus++;
               }
 
               // 4. Handle Stock Inventory according to Mode with Deterministic Idempotency Key
@@ -622,6 +663,7 @@ export class ImportExportService {
                 );
               } else if (existingSku && mode === 'ADJUST_STOCK') {
                 action = 'ADJUSTED_STOCK';
+                updatedSkus++;
                 const adjQty = item.stockAdjustment;
                 if (adjQty === undefined) {
                   throw new ValidationError('ADJUST_STOCK requires stockAdjustment');
@@ -659,6 +701,7 @@ export class ImportExportService {
                 }
               } else if (existingSku && mode === 'REPLACE_STOCK') {
                 action = 'REPLACED_STOCK';
+                updatedSkus++;
                 const targetQty = item.countedQuantity;
                 if (targetQty === undefined) {
                   throw new ValidationError('REPLACE_STOCK requires countedQuantity');
