@@ -80,6 +80,7 @@ const envSchema = z
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
     TENANT_ROOT_DOMAIN: z.string().default('stockpilot.vn'),
+    TENANT_SUBDOMAIN_REQUIRED: z.preprocess((val) => val === 'true' || val === true, z.boolean()).default(false),
     PUBLIC_API_URL: z.string().optional(),
     PAYMENT_CONFIG_ENCRYPTION_KEY: z.string().optional(),
     APP_TIMEZONE: z.string().default('Asia/Ho_Chi_Minh').refine(isValidTimeZone, {
