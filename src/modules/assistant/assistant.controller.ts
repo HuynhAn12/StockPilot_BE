@@ -3,6 +3,8 @@ import { AiDecisionService } from './ai-decision.service';
 import { explainSkuQuerySchema } from './assistant.schema';
 import { FINANCIAL_DATA_RESTRICTED_MESSAGE } from './assistant.service';
 import { prisma } from '../../config/db';
+import { env } from '../../config/env';
+import { logger } from '../../common/logger';
 import { RateLimitedError } from '../../common/errors/app-error';
 import { SystemSettingsService } from '../../common/services/system-settings.service';
 import { businessDateRangeToUtc, toBusinessDateKey } from '../../common/utils/business-date';
@@ -166,6 +168,67 @@ export class AssistantController {
         }));
 
       return res.status(200).json({ success: true, data: chatTurns });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  /**
+   * Transcribes voice audio into Vietnamese text using Groq Whisper API (whisper-large-v3).
+   */
+  transcribe = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!env.GROQ_API_KEY) {
+        return res.status(503).json({ success: false, error: { message: 'GROQ_API_KEY chưa được cấu hình.' } });
+      }
+
+      let audioBuffer: Buffer | undefined;
+      let mimeType = 'audio/webm';
+      let fileName = 'audio.webm';
+
+      if (req.file) {
+        audioBuffer = req.file.buffer;
+        mimeType = req.file.mimetype || 'audio/webm';
+        fileName = req.file.originalname || 'audio.webm';
+      } else if (req.body?.audioBase64) {
+        audioBuffer = Buffer.from(req.body.audioBase64, 'base64');
+        if (req.body.mimeType) mimeType = req.body.mimeType;
+        if (req.body.fileName) fileName = req.body.fileName;
+      }
+
+      if (!audioBuffer || audioBuffer.length === 0) {
+        return res.status(400).json({ success: false, error: { message: 'Không tìm thấy dữ liệu âm thanh.' } });
+      }
+
+      const formData = new FormData();
+      const blob = new Blob([audioBuffer], { type: mimeType });
+      formData.append('file', blob, fileName);
+      formData.append('model', env.GROQ_WHISPER_MODEL || 'whisper-large-v3');
+      formData.append('language', 'vi');
+      formData.append('response_format', 'json');
+
+      const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.GROQ_API_KEY}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        logger.error('groq_transcribe_error', { status: response.status, errorData });
+        return res.status(response.status).json({
+          success: false,
+          error: { message: 'Lỗi khi nhận diện giọng nói từ Groq Whisper' },
+        });
+      }
+
+      const data = (await response.json()) as { text?: string };
+      return res.status(200).json({
+        success: true,
+        data: { text: (data.text || '').trim() },
+      });
     } catch (error) {
       next(error);
     }

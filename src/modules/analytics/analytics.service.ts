@@ -143,12 +143,14 @@ export class AnalyticsService {
 
     let totalCogs = 0;
     let totalUnitsSold = 0;
+    let totalUnitsReturned = 0;
     const productSalesMap = new Map<number, {
       id: number;
       name: string;
       sku: string;
       category: string;
       soldQty: number;
+      returnedQty: number;
       revenue: number;
       cost: number;
       profit: number;
@@ -164,12 +166,17 @@ export class AnalyticsService {
 
     for (const order of currentOrders) {
       for (const item of order.items) {
-        const itemRevenue = toNumber(item.subtotal);
-        const itemCost = toNumber(item.costPriceSnapshot) * item.quantity;
-        const itemProfit = Math.max(0, itemRevenue - itemCost);
+        const itemGross = toNumber(item.subtotal);
+        const itemRefunded = toNumber(item.refundedAmount || 0);
+        const itemNetRevenue = Math.max(0, itemGross - itemRefunded);
+        const itemQty = item.quantity || 0;
+        const itemReturned = item.returnedQuantity || 0;
+        const netQty = Math.max(0, itemQty - itemReturned);
+        const itemCost = toNumber(item.costPriceSnapshot) * netQty;
+        const itemProfit = Math.max(0, itemNetRevenue - itemCost);
         totalCogs += itemCost;
-        totalUnitsSold += item.quantity;
-
+        totalUnitsSold += netQty;
+        totalUnitsReturned += itemReturned;
         // Group by stockItem
         const sId = item.stockItemId;
         const existing = productSalesMap.get(sId) || {
@@ -178,12 +185,14 @@ export class AnalyticsService {
           sku: item.skuSnapshot,
           category: item.stockItem?.product?.category?.name || 'Khác',
           soldQty: 0,
+          returnedQty: 0,
           revenue: 0,
           cost: 0,
           profit: 0,
         };
-        existing.soldQty += item.quantity;
-        existing.revenue += itemRevenue;
+        existing.soldQty += netQty;
+        existing.returnedQty += itemReturned;
+        existing.revenue += itemNetRevenue;
         existing.cost += itemCost;
         existing.profit += itemProfit;
         productSalesMap.set(sId, existing);
@@ -197,7 +206,7 @@ export class AnalyticsService {
           profit: 0,
           orderCount: new Set<number>(),
         };
-        catData.revenue += itemRevenue;
+        catData.revenue += itemNetRevenue;
         catData.cost += itemCost;
         catData.profit += itemProfit;
         catData.orderCount.add(order.id);
@@ -217,7 +226,8 @@ export class AnalyticsService {
     let prevCogs = 0;
     for (const o of safePrevOrders) {
       for (const i of (o.items || [])) {
-        prevCogs += toNumber(i.costPriceSnapshot) * i.quantity;
+        const netQty = Math.max(0, (i.quantity || 0) - ((i as any).returnedQuantity || 0));
+        prevCogs += toNumber(i.costPriceSnapshot) * netQty;
       }
     }
     const prevProfit = Math.max(0, prevNetRevenue - prevCogs);
@@ -366,9 +376,15 @@ export class AnalyticsService {
           const vnHour = new Date(t.getTime() + 7 * 3600000).getUTCHours();
           return vnHour >= h && vnHour < h + 2;
         });
-        const rev = ordersInHour.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
+        const rev = ordersInHour.reduce((sum, o) => {
+          const itemNet = (o.items || []).reduce((s, it) => s + Math.max(0, toNumber(it.subtotal) - toNumber(it.refundedAmount || 0)), 0);
+          return sum + (itemNet > 0 ? itemNet : toNumber(o.totalAmount));
+        }, 0);
         let cost = 0;
-        ordersInHour.forEach((o) => o.items.forEach((i) => (cost += toNumber(i.costPriceSnapshot) * i.quantity)));
+        ordersInHour.forEach((o) => o.items.forEach((i) => {
+          const netQty = Math.max(0, (i.quantity || 0) - (i.returnedQuantity || 0));
+          cost += toNumber(i.costPriceSnapshot) * netQty;
+        }));
         chartSeries.push({
           label: hLabel,
           date: hLabel,
@@ -392,10 +408,15 @@ export class AnalyticsService {
           const t = o.fulfilledAt ?? o.createdAt;
           return t >= dayStart && t <= dayEnd;
         });
-        const rev = ordersInDay.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
+        const rev = ordersInDay.reduce((sum, o) => {
+          const itemNet = (o.items || []).reduce((s, it) => s + Math.max(0, toNumber(it.subtotal) - toNumber(it.refundedAmount || 0)), 0);
+          return sum + (itemNet > 0 ? itemNet : toNumber(o.totalAmount));
+        }, 0);
         let cost = 0;
-        ordersInDay.forEach((o) => o.items.forEach((i) => (cost += toNumber(i.costPriceSnapshot) * i.quantity)));
-
+        ordersInDay.forEach((o) => o.items.forEach((i) => {
+          const netQty = Math.max(0, (i.quantity || 0) - (i.returnedQuantity || 0));
+          cost += toNumber(i.costPriceSnapshot) * netQty;
+        }));
         chartSeries.push({
           label: dateStr,
           date: `${vy}-${String(vm + 1).padStart(2, '0')}-${String(vd).padStart(2, '0')}`,
@@ -413,9 +434,15 @@ export class AnalyticsService {
           const vnM = new Date(t.getTime() + 7 * 3600000).getUTCMonth();
           return vnM === m;
         });
-        const rev = ordersInMonth.reduce((sum, o) => sum + toNumber(o.totalAmount), 0);
+        const rev = ordersInMonth.reduce((sum, o) => {
+          const itemNet = (o.items || []).reduce((s, it) => s + Math.max(0, toNumber(it.subtotal) - toNumber(it.refundedAmount || 0)), 0);
+          return sum + (itemNet > 0 ? itemNet : toNumber(o.totalAmount));
+        }, 0);
         let cost = 0;
-        ordersInMonth.forEach((o) => o.items.forEach((i) => (cost += toNumber(i.costPriceSnapshot) * i.quantity)));
+        ordersInMonth.forEach((o) => o.items.forEach((i) => {
+          const netQty = Math.max(0, (i.quantity || 0) - (i.returnedQuantity || 0));
+          cost += toNumber(i.costPriceSnapshot) * netQty;
+        }));
         chartSeries.push({
           label: mLabel,
           date: `2026-${String(m + 1).padStart(2, '0')}`,
@@ -483,6 +510,8 @@ export class AnalyticsService {
       avgOrderValue,
       totalUnitsSold,
 
+      grossUnitsSold: totalUnitsSold + totalUnitsReturned,
+      returnedUnits: totalUnitsReturned,
       // Growth vs previous period
       growth,
 

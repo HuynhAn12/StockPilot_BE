@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "eslint src/ tests/",
     "start": "node dist/server.js",
     "security:audit": "npm audit --omit=dev --audit-level=critical",
@@ -20,13 +20,17 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
-    "test:coverage": "jest --coverage --coverageReporters=text --runInBand --detectOpenHandles --forceExit"
+    "test:coverage": "jest --coverage --coverageReporters=text --runInBand --detectOpenHandles --forceExit",
+    "ai:ingest": "tsx scripts/ingest-50gb-data.ts",
+    "ai:export-dataset": "tsx scripts/export-ai-dataset.ts"
   },
   "dependencies": {
     "@payos/node": "^2.0.5",
     "@prisma/client": "^5.22.0",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/multer": "^2.3.0",
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^13.0.3",
     "cloudinary": "^2.11.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

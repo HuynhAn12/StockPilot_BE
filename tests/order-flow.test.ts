@@ -93,12 +93,12 @@ describe('OrderService - Vòng đời đơn hàng & Trừ tồn kho', () => {
     await expect(orderService.confirmOrder(1, 100, 50)).rejects.toThrow(InsufficientStockError);
   });
 
-  it('Không cho phép hủy trực tiếp đơn hàng đã hoàn thành (FULFILLED)', async () => {
+  it('Không cho phép hủy lại đơn hàng đã bị hủy (CANCELED)', async () => {
     (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isDefault: true, isActive: true });
     (prisma.order.findFirst as jest.Mock).mockResolvedValue({
       id: 50,
       storeId: 1,
-      status: 'FULFILLED',
+      status: 'CANCELED',
       items: [],
     });
 
