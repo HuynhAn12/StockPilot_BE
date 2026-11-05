@@ -169,18 +169,14 @@ export class AnalyticsService {
         const itemGross = toNumber(item.subtotal);
         const itemRefunded = toNumber(item.refundedAmount || 0);
         const itemNetRevenue = Math.max(0, itemGross - itemRefunded);
-
         const itemQty = item.quantity || 0;
         const itemReturned = item.returnedQuantity || 0;
         const netQty = Math.max(0, itemQty - itemReturned);
-
         const itemCost = toNumber(item.costPriceSnapshot) * netQty;
         const itemProfit = Math.max(0, itemNetRevenue - itemCost);
-
         totalCogs += itemCost;
         totalUnitsSold += netQty;
         totalUnitsReturned += itemReturned;
-
         // Group by stockItem
         const sId = item.stockItemId;
         const existing = productSalesMap.get(sId) || {
@@ -297,51 +293,73 @@ export class AnalyticsService {
         tag: idx === 0 ? 'Bán chạy nhất' : 'Phát sinh đơn đều',
       }));
 
-    // Slow moving items (in inventory but low or no sales in this period)
+    // Slow moving items: in stock but not sold in this period. "Days without sale" counts from the last real
+    // sale (fulfilled order or imported sales history); a SKU that never sold counts from when it was created.
     const soldItemIds = new Set(productSalesMap.keys());
-    const slowMovers = balances
-      .filter((b) => b.quantity > 0 && !soldItemIds.has(b.stockItemId))
-      .slice(0, 10)
+    const unsoldBalances = balances.filter((b) => b.quantity > 0 && !soldItemIds.has(b.stockItemId));
+    const unsoldIds = unsoldBalances.map((b) => b.stockItemId);
+    const [lastOrderSales, lastImportedSales] = unsoldIds.length
+      ? await Promise.all([
+          prisma.orderItem?.groupBy
+            ? prisma.orderItem.groupBy({
+                by: ['stockItemId'],
+                where: { storeId, stockItemId: { in: unsoldIds }, order: { status: 'FULFILLED' } },
+                _max: { createdAt: true },
+              })
+            : Promise.resolve([]),
+          prisma.historicalSale?.groupBy
+            ? prisma.historicalSale.groupBy({
+                by: ['stockItemId'],
+                where: { storeId, stockItemId: { in: unsoldIds } },
+                _max: { soldAt: true },
+              })
+            : Promise.resolve([]),
+        ])
+      : [[], []];
+    const lastSaleAt = new Map<number, number>();
+    const noteLastSale = (stockItemId: number | null, at: Date | null | undefined) => {
+      if (stockItemId === null || !at) return;
+      lastSaleAt.set(stockItemId, Math.max(lastSaleAt.get(stockItemId) ?? 0, at.getTime()));
+    };
+    ((lastOrderSales ?? []) as Array<{ stockItemId: number; _max: { createdAt: Date | null } }>).forEach((row) =>
+      noteLastSale(row.stockItemId, row._max.createdAt)
+    );
+    ((lastImportedSales ?? []) as Array<{ stockItemId: number | null; _max: { soldAt: Date | null } }>).forEach((row) =>
+      noteLastSale(row.stockItemId, row._max.soldAt)
+    );
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const slowMovers = unsoldBalances
       .map((b) => {
         const costVal = b.quantity * toNumber(b.stockItem?.costPrice || 0);
+        const lastSale = lastSaleAt.get(b.stockItemId);
         const createdAtTime = b.stockItem?.createdAt ? new Date(b.stockItem.createdAt).getTime() : Date.now();
-        const daysSinceCreation = Math.max(1, Math.floor((Date.now() - createdAtTime) / (1000 * 60 * 60 * 24)));
+        const daysNoSale = Math.max(0, Math.floor((Date.now() - (lastSale ?? createdAtTime)) / DAY_MS));
         return {
           id: b.stockItem.id,
           name: b.stockItem.name,
           sku: b.stockItem.sku,
           stock: b.quantity,
           capital: costVal,
-          daysNoSale: daysSinceCreation,
-          suggestion: daysSinceCreation >= 30 ? 'Cân nhắc giảm giá kích cầu' : 'Theo dõi biến động tồn',
+          daysNoSale,
+          neverSold: lastSale === undefined,
+          lastSoldAt: lastSale !== undefined ? new Date(lastSale).toISOString() : null,
+          suggestion: daysNoSale >= 30 ? 'Cân nhắc giảm giá kích cầu' : 'Theo dõi biến động tồn',
         };
-      });
+      })
+      .sort((a, b) => b.daysNoSale - a.daysNoSale || b.capital - a.capital)
+      .slice(0, 10);
 
-    // Category Stats
-    const STANDARD_CATEGORIES = [
-      'Thực phẩm',
-      'Đồ uống',
-      'Gia vị & Đồ khô',
-      'Đồ dùng gia đình',
-      'Chăm sóc cá nhân',
-      'Đồ dùng văn phòng',
-      'Tiêu dùng khác',
-    ];
-
-    const categoryStats = STANDARD_CATEGORIES.map((catName) => {
-      const found = categoryMap.get(catName);
-      const rev = found?.revenue || 0;
-      const profit = found?.profit || 0;
-      const margin = rev > 0 ? Number(((profit / rev) * 100).toFixed(1)) : 0;
-      return {
-        name: catName,
-        revenue: rev,
-        profit,
-        margin,
-        orderCount: found?.orderCount.size || 0,
-        growth: '0%',
-      };
-    });
+    // Category Stats: the store's own categories, highest revenue first.
+    const categoryStats = [...categoryMap.values()]
+      .map((cat) => ({
+        name: cat.name,
+        revenue: cat.revenue,
+        profit: cat.profit,
+        margin: cat.revenue > 0 ? Number(((cat.profit / cat.revenue) * 100).toFixed(1)) : 0,
+        orderCount: cat.orderCount.size,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
 
     // Time trend series for chart
     // If range is today or 7d -> generate daily buckets
@@ -494,7 +512,6 @@ export class AnalyticsService {
       totalUnitsSold,
       grossUnitsSold: totalUnitsSold + totalUnitsReturned,
       returnedUnits: totalUnitsReturned,
-
       // Growth vs previous period
       growth,
 

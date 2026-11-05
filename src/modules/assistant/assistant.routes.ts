@@ -59,7 +59,7 @@ assistantRouter.get(
 // Transcribe speech using Groq Whisper API
 assistantRouter.post(
   '/transcribe',
-  requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'),
+  requireRole('SHOP_OWNER'),
   upload.single('audio'),
   controller.transcribe
 );

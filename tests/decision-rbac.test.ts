@@ -311,6 +311,7 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
       ['get', '/api/v1/assistant/suggestions'],
       ['get', '/api/v1/assistant/history'],
       ['post', '/api/v1/assistant/chat'],
+      ['post', '/api/v1/assistant/transcribe'],
     ] as const)('denies staff %s %s: AI Pilot is owner-only', async (method, url) => {
       const res = await request(app)[method](url).set(auth(staffToken)).send({ question: 'sản phẩm nào sắp hết hàng' });
 

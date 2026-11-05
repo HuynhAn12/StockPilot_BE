@@ -305,6 +305,9 @@ export class PosService {
           },
         },
       };
+    }, {
+      maxWait: 10_000,
+      timeout: 30_000,
     }).then((result) => {
       // Trigger background sync for sold items (alerts, summaries, decision engine)
       BusinessSyncService.getInstance(this.db)
