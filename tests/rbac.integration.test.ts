@@ -44,6 +44,7 @@ jest.mock('../src/config/db', () => ({
     },
     alert: { findMany: jest.fn() },
     pricingRecommendation: { findMany: jest.fn() },
+    payment: { updateMany: jest.fn(), findMany: jest.fn(), findFirst: jest.fn() },
     auditLog: { create: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn((callback) => callback(prisma)),

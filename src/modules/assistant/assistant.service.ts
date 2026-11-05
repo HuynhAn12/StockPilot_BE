@@ -446,8 +446,10 @@ export class AssistantService {
     }
 
     // INTENT 1: Quản lý kho, tồn kho, hết hàng, sắp hết, tồn nhiều
+    const isCostQuery = ['giá vốn', 'giá nhập', 'tổng vốn', 'tiền vốn', 'vốn hàng', 'vốn tồn', 'vốn trong kho', 'giá trị tồn', 'giá trị kho', 'giá trị hàng tồn'].some((k) => q.includes(k));
     const isWarehouseOverview =
-      q.includes('quản lý kho') || q.includes('quan ly kho') ||
+      !isCostQuery &&
+      (q.includes('quản lý kho') || q.includes('quan ly kho') ||
       q.includes('thông tin kho') || q.includes('thong tin kho') ||
       q.includes('thông tin của quản lý kho') || q.includes('thong tin cua quan ly kho') ||
       q.includes('tình trạng kho') || q.includes('tinh trang kho') ||
@@ -462,7 +464,7 @@ export class AssistantService {
       q.includes('nhiều tồn') || q.includes('nhieu ton') ||
       q.includes('tổng kho') || q.includes('tong kho') ||
       q.includes('tầm kho') || q.includes('tam kho') ||
-      (q.includes('tồn kho') && !q.includes('doanh thu'));
+      (q.includes('tồn kho') && !q.includes('doanh thu')));
 
     if (isWarehouseOverview) {
       const [stockItems, balances] = await Promise.all([

@@ -416,10 +416,12 @@ export class OrderService {
       }
 
       // Cập nhật trạng thái thanh toán sang CANCELED
-      await tx.payment.updateMany({
-        where: { orderId: order.id, storeId },
-        data: { status: 'CANCELED' },
-      });
+      if ((tx as any).payment?.updateMany) {
+        await (tx as any).payment.updateMany({
+          where: { orderId: order.id, storeId },
+          data: { status: 'CANCELED' },
+        });
+      }
 
       const canceledOrder = await tx.order.findUniqueOrThrow({
         where: { id: order.id },

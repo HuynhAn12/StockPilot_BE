@@ -14,4 +14,4 @@ returnRouter.use(authMiddleware);
 returnRouter.use(requireStoreScope);
 
 returnRouter.get('/', requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'), validate({ query: paginationQuerySchema }), (req, res, next) => controller.list(req, res, next));
-returnRouter.post('/', requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'), validate({ body: createReturnSchema }), idempotency({ operation: 'RETURN_CREATE' }), (req, res, next) => controller.create(req, res, next));
+returnRouter.post('/', requireRole('SHOP_OWNER'), validate({ body: createReturnSchema }), idempotency({ operation: 'RETURN_CREATE' }), (req, res, next) => controller.create(req, res, next));
