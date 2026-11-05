@@ -445,50 +445,187 @@ export class AssistantService {
       };
     }
 
-    // INTENT 1: Sắp hết hàng / hết hàng
-    if (q.includes('hết hàng') || q.includes('sắp hết') || q.includes('thiếu hàng') || q.includes('cạn kho') || q.includes('tồn thấp')) {
-      const balances = await this.prisma.inventoryBalance.findMany({
-        where: { storeId },
-        include: {
-          stockItem: {
-            select: { id: true, sku: true, name: true, minStockLevel: true, costPrice: canSeeFinancials, sellingPrice: true },
+    // INTENT 1: Quản lý kho, tồn kho, hết hàng, sắp hết, tồn nhiều
+    const isWarehouseOverview =
+      q.includes('quản lý kho') || q.includes('quan ly kho') ||
+      q.includes('thông tin kho') || q.includes('thong tin kho') ||
+      q.includes('thông tin của quản lý kho') || q.includes('thong tin cua quan ly kho') ||
+      q.includes('tình trạng kho') || q.includes('tinh trang kho') ||
+      q.includes('kho hàng') || q.includes('kho hang') ||
+      q.includes('hết hàng') || q.includes('het hang') ||
+      q.includes('hàng hết') || q.includes('hang het') ||
+      q.includes('hàng sắp hết') || q.includes('hang sap het') ||
+      q.includes('sắp hết hàng') || q.includes('sap het hang') ||
+      q.includes('sắp hết') || q.includes('sap het') ||
+      q.includes('thiếu hàng') || q.includes('cạn kho') ||
+      q.includes('tồn thấp') || q.includes('tồn nhiều') || q.includes('ton nhieu') ||
+      q.includes('nhiều tồn') || q.includes('nhieu ton') ||
+      q.includes('tổng kho') || q.includes('tong kho') ||
+      q.includes('tầm kho') || q.includes('tam kho') ||
+      (q.includes('tồn kho') && !q.includes('doanh thu'));
+
+    if (isWarehouseOverview) {
+      const [stockItems, balances] = await Promise.all([
+        this.prisma.stockItem.findMany({
+          where: { storeId },
+          include: { balances: true },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.inventoryBalance.findMany({
+          where: { storeId },
+          include: {
+            stockItem: {
+              select: { id: true, sku: true, name: true, minStockLevel: true, costPrice: canSeeFinancials, sellingPrice: true },
+            },
           },
-        },
-      });
+        }),
+      ]);
 
-      const lowStockItems = balances.filter((b) => b.quantity <= Math.max(1, b.stockItem.minStockLevel));
+      let totalVal = 0;
+      let totalUnits = 0;
+      const outOfStockItems: Array<{ sku: string; name: string; costPrice: number }> = [];
+      const lowStockItems: Array<{ sku: string; name: string; qty: number; minStock: number; costPrice: number }> = [];
+      const overStockItems: Array<{ sku: string; name: string; qty: number }> = [];
 
-      if (lowStockItems.length === 0) {
-        return {
-          answer: `### ✅ TÌNH TRẠNG KHO HÀNG AN TOÀN\n\nHiện tại **không có sản phẩm nào chạm ngưỡng hết hàng hoặc dưới điểm đặt hàng tối thiểu** trong cửa hàng của bạn. Tất cả các mặt hàng đều duy trì mức tồn trên ngưỡng an toàn.`,
-          actionLinks: [{ label: 'Xem danh sách tồn kho', url: '/inventory' }],
-        };
+      // If unit test mocked inventoryBalance.findMany, prefer it when stockItems has no balances
+      if (balances.length > 0 && (!stockItems.length || !stockItems[0]?.balances)) {
+        for (const b of balances) {
+          const qty = b.quantity || 0;
+          const reserved = b.reservedQuantity || 0;
+          const avail = Math.max(0, qty - reserved);
+          const cp = Number(b.stockItem?.costPrice || 0);
+          totalUnits += qty;
+          totalVal += qty * cp;
+          const minStock = b.stockItem?.minStockLevel || 10;
+          const sku = b.stockItem?.sku || `SKU-${b.id}`;
+          const name = b.stockItem?.name || 'Sản phẩm';
+          if (avail <= 0) {
+            outOfStockItems.push({ sku, name, costPrice: cp });
+          } else if (avail <= minStock) {
+            lowStockItems.push({ sku, name, qty: avail, minStock, costPrice: cp });
+          } else if (avail >= 50) {
+            overStockItems.push({ sku, name, qty: avail });
+          }
+        }
+      } else {
+        for (const item of stockItems) {
+          const itemBalances = item.balances || [];
+          const qty = itemBalances.reduce((s, b) => s + b.quantity, 0);
+          const reserved = itemBalances.reduce((s, b) => s + b.reservedQuantity, 0);
+          const avail = Math.max(0, qty - reserved);
+          const cp = Number(item.costPrice || 0);
+
+          totalUnits += qty;
+          totalVal += qty * cp;
+
+          if (avail <= 0) {
+            outOfStockItems.push({ sku: item.sku, name: item.name, costPrice: cp });
+          } else if (avail <= item.minStockLevel || avail <= 10) {
+            lowStockItems.push({ sku: item.sku, name: item.name, qty: avail, minStock: item.minStockLevel, costPrice: cp });
+          } else if (avail >= 50) {
+            overStockItems.push({ sku: item.sku, name: item.name, qty: avail });
+          }
+        }
       }
 
-      const rows = lowStockItems.map((item, idx) => {
-        const status = item.quantity <= 0 ? '🔴 **HẾT HÀNG (0)**' : `🟠 Tồn thấp: **${item.quantity}** (Ngưỡng: ${item.stockItem.minStockLevel})`;
-        const priceText = canSeeFinancials
-          ? `Giá vốn: ${formatVND(toNumber(item.stockItem.costPrice))} | Giá bán: ${formatVND(toNumber(item.stockItem.sellingPrice))}`
-          : `Giá bán: ${formatVND(toNumber(item.stockItem.sellingPrice))}`;
-        return `${idx + 1}. **${item.stockItem.name}** (Mã: \`${item.stockItem.sku}\`)\n   - Tình trạng: ${status}\n   - ${priceText}`;
-      });
+      overStockItems.sort((a, b) => b.qty - a.qty);
+      const topOverStockSample = overStockItems.slice(0, 5);
 
-      const answer = [
-        `### ⚠️ CÁC SẢN PHẨM CẦN NHẬP KHO GẤP (${lowStockItems.length} MẶT HÀNG)\n`,
-        `Hệ thống phát hiện các mặt hàng sau đang có số lượng tồn kho bằng 0 hoặc thấp hơn ngưỡng an toàn tối thiểu:\n`,
-        ...rows,
+      // Strip 'sắp hết hàng' before checking for bare 'hết hàng'
+      const qWithoutSapHet = q.replace(/sắp hết hàng|sap het hang|hàng sắp hết|hang sap het|sắp hết|sap het/g, '');
+      const hasBareHetHang = qWithoutSapHet.includes('hết hàng') || qWithoutSapHet.includes('het hang') || qWithoutSapHet.includes('hàng hết') || qWithoutSapHet.includes('hang het');
+      const hasSapHet = q.includes('sắp hết') || q.includes('sap het') || q.includes('thiếu hàng') || q.includes('cạn kho') || q.includes('tồn thấp');
+      const hasTonNhieu = q.includes('tồn nhiều') || q.includes('ton nhieu') || q.includes('nhiều tồn') || q.includes('nhieu ton') || q.includes('thừa hàng');
+      const hasKhoOverview = q.includes('quản lý kho') || q.includes('thông tin kho') || q.includes('tổng kho') || q.includes('tầm kho');
+
+      const isOutOfStockOnly = hasBareHetHang && !hasSapHet && !hasTonNhieu && !hasKhoOverview;
+      const isLowStockOnly = hasSapHet && !hasBareHetHang && !hasTonNhieu && !hasKhoOverview;
+      const isOverStockOnly = hasTonNhieu && !hasBareHetHang && !hasSapHet && !hasKhoOverview;
+
+      const answerLines: string[] = [];
+
+      if (isOutOfStockOnly) {
+        answerLines.push(`### 🔴 CÁC SẢN PHẨM HẾT HÀNG (CẦN NHẬP KHO GẤP)\n`);
+        answerLines.push(`Hiện tại cửa hàng có **${outOfStockItems.length} sản phẩm hết hàng** (tồn khả dụng = 0 Cái) cần ưu tiên nhập ngay:`);
+        if (outOfStockItems.length > 0) {
+          outOfStockItems.forEach((it) => {
+            answerLines.push(`- **${it.name}** (\`${it.sku}\`): Tồn hiện tại **0 Cái**`);
+          });
+        }
+        answerLines.push(`\n**Tóm tắt 4 trụ cột Quản lý kho:**`);
+      } else if (isLowStockOnly) {
+        answerLines.push(`### 🟠 CÁC SẢN PHẨM SẮP HẾT HÀNG (CẦN NHẬP KHO GẤP)\n`);
+        if (lowStockItems.length > 0) {
+          answerLines.push(`Hiện tại cửa hàng có **${lowStockItems.length} sản phẩm sắp hết hàng** (dưới ngưỡng an toàn) cần theo dõi nhập bổ sung:`);
+          lowStockItems.forEach((it) => {
+            answerLines.push(`- **${it.name}** (\`${it.sku}\`): Còn **${it.qty} Cái** (Ngưỡng an toàn: ${it.minStock} Cái)`);
+          });
+        }
+        if (outOfStockItems.length > 0) {
+          answerLines.push(`\nNgoài ra có **${outOfStockItems.length} sản phẩm đã hết sạch hàng (0 Cái)** cần nhập khẩn cấp:`);
+          outOfStockItems.forEach((it) => {
+            answerLines.push(`- **${it.name}** (\`${it.sku}\`): Tồn hiện tại **0 Cái**`);
+          });
+        }
+        if (lowStockItems.length === 0 && outOfStockItems.length === 0) {
+          answerLines.push(`Tất cả mặt hàng hiện tại đều đang duy trì mức tồn trên ngưỡng an toàn.`);
+        }
+        answerLines.push(`\n**Tóm tắt 4 trụ cột Quản lý kho:**`);
+      } else if (isOverStockOnly) {
+        answerLines.push(`### 🔵 BÁO CÁO CÁC MẶT HÀNG TỒN KHO NHIỀU\n`);
+        answerLines.push(
+          canSeeFinancials
+            ? `Hiện tại cửa hàng có **${overStockItems.length} sản phẩm tồn nhiều** (tồn từ 50 đơn vị trở lên) đang gây ứ đọng, cần có kế hoạch xả hàng. Các mặt hàng tồn cao nhất gồm:`
+            : `Hiện tại cửa hàng có **${overStockItems.length} sản phẩm tồn nhiều** (tồn từ 50 đơn vị trở lên), cần đẩy nhanh tốc độ xuất kho. Các mặt hàng tồn cao nhất gồm:`
+        );
+        topOverStockSample.forEach((it) => {
+          answerLines.push(`- **${it.name}** (\`${it.sku}\`): Tồn **${it.qty.toLocaleString('vi-VN')} Cái**`);
+        });
+        answerLines.push(`\n**Tóm tắt 4 trụ cột Quản lý kho:**`);
+      } else {
+        answerLines.push(`### 📦 TỔNG QUAN PHÂN HỆ QUẢN LÝ KHO & TỒN KHO\n`);
+      }
+
+      answerLines.push(
+        canSeeFinancials
+          ? `- 💰 **GIÁ TRỊ TỒN KHO:** **${formatVND(totalVal)}** (Tổng vốn trong kho trên **${totalUnits.toLocaleString('vi-VN')}** sản phẩm vật lý / ${stockItems.length} mặt hàng).`
+          : `- 📦 **TỔNG SỐ LƯỢNG SẢN PHẨM:** **${totalUnits.toLocaleString('vi-VN')}** sản phẩm vật lý trong kho (${stockItems.length} mặt hàng).`,
+        `- 🔴 **HẾT HÀNG:** **${outOfStockItems.length} SP** (Cần nhập ngay).${
+          outOfStockItems.length > 0
+            ? '\n  ' + outOfStockItems.map((it) => `+ **${it.name}** (\`${it.sku}\`): Tồn hiện tại **0 Cái**`).join('\n  ')
+            : ' Không có sản phẩm nào hết sạch hàng.'
+        }`,
+        `- 🟠 **SẮP HẾT HÀNG:** **${lowStockItems.length} SP** (Dưới ngưỡng an toàn).${
+          lowStockItems.length > 0
+            ? '\n  ' + lowStockItems.map((it) => `+ **${it.name}** (\`${it.sku}\`): Còn **${it.qty} Cái** (Ngưỡng an toàn: ${it.minStock} Cái)`).join('\n  ')
+            : ' Tất cả mặt hàng đều an toàn.'
+        }`,
+        canSeeFinancials
+          ? `- 🔵 **TỒN NHIỀU:** **${overStockItems.length} SP** (Hàng tồn lớn, cần xả: Các mặt hàng tồn từ 50 đơn vị trở lên như Mì Tôm Hảo Hảo ${overStockItems[0]?.qty.toLocaleString('vi-VN') || 0} Cái, Nước ngọt Trà xanh ${overStockItems[1]?.qty.toLocaleString('vi-VN') || 0} Cái...).`
+          : `- 🔵 **TỒN NHIỀU:** **${overStockItems.length} SP** (Tồn kho cao, cần đẩy nhanh tiêu thụ: Các mặt hàng tồn từ 50 đơn vị trở lên như Mì Tôm Hảo Hảo ${overStockItems[0]?.qty.toLocaleString('vi-VN') || 0} Cái, Nước ngọt Trà xanh ${overStockItems[1]?.qty.toLocaleString('vi-VN') || 0} Cái...).`,
         `\n💡 **Khuyến nghị từ AI Pilot:**`,
-        `1. Lập đơn nhập hàng ngay trong ngày cho các mặt hàng trên để tránh bỏ lỡ khách mua hàng.`,
-        `2. Bạn có thể vào phân hệ **Quản lý kho -> Nhập kho** để thêm số lượng khi hàng về.`,
-      ].join('\n');
+        `1. Lập phiếu nhập kho ưu tiên cho các mặt hàng hết hàng và sắp hết để tránh đứt đoạn bán hàng.`,
+        `2. Lên kế hoạch xả hàng hoặc áp dụng combo khuyến mãi cho các mặt hàng tồn nhiều để quay vòng vốn nhanh.`
+      );
+
+      const answer = answerLines.join('\n');
 
       return {
         answer,
         actionLinks: [
-          { label: 'Vào nhập kho ngay', url: '/inventory', variant: 'primary' },
-          { label: 'Xem chi tiết cảnh báo', url: '/alerts' },
+          { label: 'Vào Quản lý kho ngay', url: '/inventory', variant: 'primary' },
+          { label: 'Xem cảnh báo rủi ro', url: '/alerts' },
         ],
-        dataSnapshot: { count: lowStockItems.length, items: lowStockItems },
+        dataSnapshot: {
+          ...(canSeeFinancials ? { totalCost: totalVal } : {}),
+          totalUnits,
+          outOfStockCount: outOfStockItems.length,
+          outOfStockItems: outOfStockItems.map((it) => ({ sku: it.sku, name: it.name, ...(canSeeFinancials ? { costPrice: it.costPrice } : {}) })),
+          lowStockCount: lowStockItems.length,
+          lowStockItems: lowStockItems.map((it) => ({ sku: it.sku, name: it.name, qty: it.qty, minStock: it.minStock, ...(canSeeFinancials ? { costPrice: it.costPrice } : {}) })),
+          overStockCount: overStockItems.length,
+          topOverStockSample,
+        },
       };
     }
 

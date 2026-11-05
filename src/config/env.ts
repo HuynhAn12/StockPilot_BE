@@ -136,6 +136,10 @@ const envSchema = z
     AI_ENABLED: z.preprocess((value) => (value === '' ? undefined : value), z.enum(['true', 'false']).optional()),
     GROQ_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
     GROQ_WHISPER_MODEL: z.string().default('whisper-large-v3'),
+    AI_STORAGE_ROOT: z.string().default('D:/AI_Memory'),
+    AI_MAX_STORAGE_GB: z.coerce.number().positive().default(100),
+    AI_SQLITE_DB_PATH: z.string().default('D:/AI_Memory/db/ai-brain.sqlite'),
+    GEMINI_EMBEDDING_MODEL: z.string().default('models/gemini-embedding-001'),
   })
   .refine(
     (data) => {
