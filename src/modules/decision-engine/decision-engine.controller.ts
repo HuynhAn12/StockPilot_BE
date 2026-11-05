@@ -39,6 +39,8 @@ export class DecisionEngineController {
       const query = decisionOverviewQuerySchema.parse(req.query);
 
       const result = await this.service.getOverview(storeId, query);
+      // SKUs the read path did not evaluate are queued by the Trigger layer, not awaited.
+      this.jobsService.enqueueRecompute(storeId, result.pendingStockItemIds);
       const role = req.user!.role;
       return res.status(200).json({
         success: true,
@@ -87,6 +89,8 @@ export class DecisionEngineController {
       const data = updateEngineConfigSchema.parse(req.body);
 
       const updated = await this.configService.upsertConfig(storeId, data);
+      // Every snapshot of the store now uses old settings: recompute in the background (not awaited).
+      this.jobsService.onEngineConfigChanged(storeId).catch(() => undefined);
       return res.status(200).json({
         success: true,
         data: updated,

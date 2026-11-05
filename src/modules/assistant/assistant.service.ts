@@ -676,6 +676,79 @@ export class AssistantService {
       };
     }
 
+    // INTENT 4b: Giá vốn / giá trị tồn kho theo giá vốn (chỉ chủ shop).
+    // Đặt sau "bán lỗ" để "dưới giá vốn"/"lỗ vốn" vẫn vào nhánh lợi nhuận; "vốn đọng" thuộc nhánh ứ đọng.
+    // Hỏi kèm tên/mã sản phẩm ("giá vốn của Áo X") đã được nhánh SKU phía trên trả lời.
+    const COST_KEYWORDS = ['giá vốn', 'giá nhập', 'tổng vốn', 'tiền vốn', 'vốn hàng', 'vốn tồn', 'vốn trong kho', 'giá trị tồn', 'giá trị kho', 'giá trị hàng tồn'];
+    if (COST_KEYWORDS.some((k) => q.includes(k))) {
+      if (!canSeeFinancials) {
+        return restricted();
+      }
+      const [items, balances] = await Promise.all([
+        this.prisma.stockItem.findMany({
+          where: { storeId, isActive: true },
+          select: { id: true, sku: true, name: true, costPrice: true },
+        }),
+        this.prisma.inventoryBalance.findMany({
+          where: { storeId },
+          select: { stockItemId: true, quantity: true },
+        }),
+      ]);
+
+      const qtyByItem = new Map<number, number>();
+      for (const b of balances) qtyByItem.set(b.stockItemId, (qtyByItem.get(b.stockItemId) ?? 0) + b.quantity);
+
+      const stocked = items
+        .map((i) => {
+          const quantity = Math.max(0, qtyByItem.get(i.id) ?? 0);
+          const costPrice = toNumber(i.costPrice);
+          return { sku: i.sku, name: i.name, quantity, costPrice, value: quantity * costPrice };
+        })
+        .filter((i) => i.quantity > 0);
+
+      if (stocked.length === 0) {
+        return {
+          answer: `### 💰 GIÁ VỐN & GIÁ TRỊ TỒN KHO\n\nHiện kho **không còn hàng tồn**, nên giá trị tồn kho theo giá vốn là **${formatVND(0)}**.\n\n💡 Muốn xem giá vốn của một sản phẩm, hãy hỏi kèm tên hoặc mã sản phẩm.`,
+          actionLinks: [{ label: 'Xem sản phẩm', url: '/products' }],
+          dataSnapshot: { totalInventoryCostValue: 0, totalQuantity: 0, stockedSkus: 0, missingCostSkus: [], topByCapital: [] },
+        };
+      }
+
+      const totalValue = stocked.reduce((s, i) => s + i.value, 0);
+      const totalQty = stocked.reduce((s, i) => s + i.quantity, 0);
+      const missingCost = stocked.filter((i) => i.costPrice <= 0);
+      const top = [...stocked].sort((a, b) => b.value - a.value).slice(0, 5);
+      const share = (v: number) => (totalValue > 0 ? `${((v / totalValue) * 100).toFixed(1)}%` : '–');
+
+      const answer = [
+        `### 💰 GIÁ VỐN & GIÁ TRỊ TỒN KHO HIỆN TẠI\n`,
+        `- **Tổng giá trị tồn kho theo giá vốn:** **${formatVND(totalValue)}**`,
+        `- **Hàng đang tồn:** **${totalQty.toLocaleString('vi-VN')}** đơn vị thuộc **${stocked.length}** mã hàng`,
+        `- **Giá vốn bình quân (theo số lượng tồn):** **${formatVND(totalValue / totalQty)}**/đơn vị`,
+        ...(missingCost.length
+          ? [`- ⚠️ **${missingCost.length}** mã còn tồn nhưng **chưa nhập giá vốn** (${missingCost.slice(0, 3).map((i) => `\`${i.sku}\``).join(', ')}${missingCost.length > 3 ? '…' : ''}), nên tổng trên có thể thấp hơn thực tế.`]
+          : []),
+        `\n#### 📦 ${top.length} mã chiếm nhiều vốn nhất:`,
+        ...top.map((i, idx) => `${idx + 1}. **${i.name}** (\`${i.sku}\`): tồn ${i.quantity.toLocaleString('vi-VN')} × giá vốn ${formatVND(i.costPrice)} = **${formatVND(i.value)}** (${share(i.value)})`),
+        `\n💡 Muốn xem giá vốn của một sản phẩm cụ thể, hãy hỏi kèm tên hoặc mã, ví dụ: *"giá vốn của ${top[0].name}"*.`,
+      ].join('\n');
+
+      return {
+        answer,
+        actionLinks: [
+          { label: 'Xem quản lý kho', url: '/inventory' },
+          { label: 'Xem sản phẩm', url: '/products' },
+        ],
+        dataSnapshot: {
+          totalInventoryCostValue: totalValue,
+          totalQuantity: totalQty,
+          stockedSkus: stocked.length,
+          missingCostSkus: missingCost.map((i) => i.sku),
+          topByCapital: top,
+        },
+      };
+    }
+
     // INTENT 5: Nên nhập thêm sản phẩm nào
     if (q.includes('nên nhập') || q.includes('nhập thêm') || q.includes('nhập gì') || q.includes('đặt hàng')) {
       const balances = await this.prisma.inventoryBalance.findMany({

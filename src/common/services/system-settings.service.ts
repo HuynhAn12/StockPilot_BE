@@ -30,6 +30,11 @@ export const SYSTEM_SETTING_DEFINITIONS = {
     defaultValue: 0,
     description: 'Số lượt hỏi trợ lý AI tối đa mỗi cửa hàng mỗi ngày (0 = không giới hạn)',
   },
+  'tax.eInvoiceRevenueThreshold': {
+    schema: z.number().int().min(1).max(1_000_000_000_000),
+    defaultValue: 1_000_000_000,
+    description: 'Ngưỡng doanh thu năm (đồng) để cảnh báo chủ shop về hóa đơn điện tử từ máy tính tiền (NĐ 70/2025)',
+  },
 } as const;
 
 export type SystemSettingKey = keyof typeof SYSTEM_SETTING_DEFINITIONS;

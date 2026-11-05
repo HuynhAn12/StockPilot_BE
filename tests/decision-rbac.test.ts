@@ -305,14 +305,18 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
   });
 
   describe('Assistant (template mode)', () => {
-    it('explains a SKU to staff without financial content and without writing to the database', async () => {
-      const res = await request(app).get('/api/v1/assistant/sku/10').set(auth(staffToken));
+    it.each([
+      ['get', '/api/v1/assistant/sku/10'],
+      ['get', '/api/v1/assistant/overview'],
+      ['get', '/api/v1/assistant/suggestions'],
+      ['get', '/api/v1/assistant/history'],
+      ['post', '/api/v1/assistant/chat'],
+    ] as const)('denies staff %s %s: AI Pilot is owner-only', async (method, url) => {
+      const res = await request(app)[method](url).set(auth(staffToken)).send({ question: 'sản phẩm nào sắp hết hàng' });
 
-      expect(res.status).toBe(200);
-      expect(res.body.data.explanation).toContain('Sữa tươi');
-      expectNoFinancialData(res.body);
-      expect(prisma.alert.update).not.toHaveBeenCalled();
-      expect(prisma.pricingRecommendation.findFirst).not.toHaveBeenCalled();
+      expect(res.status).toBe(403);
+      expect(prisma.aiInteraction.create).not.toHaveBeenCalled();
+      expect(prisma.aiInteraction.findMany).not.toHaveBeenCalled();
     });
 
     it('keeps the owner explanation complete', async () => {
@@ -323,29 +327,6 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
       expect(res.body.data.explanation).toContain('ĐỀ XUẤT ĐIỀU CHỈNH GIÁ');
     });
 
-    it.each([
-      ['sản phẩm nào sắp hết hàng', 'CẦN NHẬP KHO GẤP'],
-      ['nên nhập thêm gì', 'KẾ HOẠCH ĐỀ XUẤT NHẬP HÀNG'],
-      ['hôm nay có rủi ro gì', 'RỦI RO'],
-    ])('answers operational staff question "%s" without financial content', async (question, heading) => {
-      const res = await request(app).post('/api/v1/assistant/chat').set(auth(staffToken)).send({ question });
-
-      expect(res.status).toBe(200);
-      expect(res.body.data.answer).toContain(heading);
-      expectNoFinancialData(res.body);
-    });
-
-    it.each(['hàng nào đang bán lỗ', 'có đề xuất giá nào không', 'doanh số tuần này'])(
-      'refuses financial staff question "%s"',
-      async (question) => {
-        const res = await request(app).post('/api/v1/assistant/chat').set(auth(staffToken)).send({ question });
-
-        expect(res.status).toBe(200);
-        expect(res.body.data.answer).toContain('chỉ được phép tra cứu số lượng tồn kho');
-        expectNoFinancialData(res.body);
-      }
-    );
-
     it('validates the chat body', async () => {
       const res = await request(app).post('/api/v1/assistant/chat').set(auth(ownerToken)).send({ question: 123456 });
       expect(res.status).toBe(400);
@@ -354,36 +335,26 @@ describe('Decision Engine role projection and store isolation (D9)', () => {
     it('treats a null stockItemId as "no product selected"', async () => {
       const res = await request(app)
         .post('/api/v1/assistant/chat')
-        .set(auth(staffToken))
+        .set(auth(ownerToken))
         .send({ question: 'sản phẩm nào sắp hết hàng', stockItemId: null });
 
       expect(res.status).toBe(200);
       expect(res.body.data.answer).toContain('CẦN NHẬP KHO GẤP');
     });
 
-    it('returns only the caller’s own chat turns, so staff cannot read owner answers', async () => {
+    it('returns only the caller’s own chat turns', async () => {
       (prisma.aiInteraction.findMany as jest.Mock).mockResolvedValue([
         { id: BigInt(9), model: 'StockPilot-Rules-v2', questionText: 'Còn hàng?', responseText: 'Còn 3', status: 'SUCCESS', contextSummaryJson: { feature: 'CHAT', source: 'RULES' }, createdAt: new Date() },
         { id: BigInt(8), model: 'gpt-test', questionText: 'Gợi ý hành động', responseText: '3 gợi ý', status: 'SUCCESS', contextSummaryJson: { feature: 'SUGGESTIONS', source: 'AI' }, createdAt: new Date() },
         { id: BigInt(7), model: 'gpt-test', questionText: 'Nên nhập gì?', responseText: 'Nhập sữa', status: 'SUCCESS', contextSummaryJson: { feature: 'CHAT', source: 'AI' }, createdAt: new Date() },
       ]);
 
-      const res = await request(app).get('/api/v1/assistant/history').set(auth(staffToken));
+      const res = await request(app).get('/api/v1/assistant/history').set(auth(ownerToken));
 
       expect(res.status).toBe(200);
       expect(res.body.data.map((item: { id: string; source: string }) => `${item.id}:${item.source}`)).toEqual(['9:RULES', '7:AI']);
       expect(res.body.data[0]).not.toHaveProperty('contextSummaryJson');
-      expect((prisma.aiInteraction.findMany as jest.Mock).mock.calls[0][0].where).toEqual({ storeId: 1, userId: 2 });
-    });
-
-    it('suggests actions for staff from alerts only, never reading pricing recommendations', async () => {
-      (prisma.alert.findMany as jest.Mock).mockResolvedValue([]);
-
-      const res = await request(app).get('/api/v1/assistant/suggestions').set(auth(staffToken));
-
-      expect(res.status).toBe(200);
-      expect(res.body.data).toMatchObject({ suggestions: [], source: 'RULES' });
-      expect(prisma.pricingRecommendation.findMany).not.toHaveBeenCalled();
+      expect((prisma.aiInteraction.findMany as jest.Mock).mock.calls[0][0].where).toEqual({ storeId: 1, userId: 1 });
     });
   });
 });

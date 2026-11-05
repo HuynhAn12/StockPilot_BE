@@ -59,6 +59,7 @@ describe('Tenant context and store payment config foundation', () => {
 
   beforeEach(() => {
     env.NODE_ENV = 'test';
+    env.TENANT_SUBDOMAIN_REQUIRED = undefined;
     jest.clearAllMocks();
 
     (prisma.store.findUnique as jest.Mock).mockImplementation(({ where }) => {
@@ -207,6 +208,19 @@ describe('Tenant context and store payment config foundation', () => {
     }
 
     expect(prisma.store.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('allows production store APIs without tenant hostname when TENANT_SUBDOMAIN_REQUIRED is false', async () => {
+    env.NODE_ENV = 'production';
+    env.TENANT_SUBDOMAIN_REQUIRED = false;
+
+    (prisma.storePaymentConfig.findUnique as jest.Mock).mockResolvedValueOnce(null);
+
+    await request(app)
+      .get('/api/v1/store/payment-config/payos')
+      .set('Host', 'stockpilot-backend.onrender.com')
+      .set(auth(ownerToken))
+      .expect(200);
   });
 
   it('rejects root-domain production store API requests without treating root as a tenant', async () => {

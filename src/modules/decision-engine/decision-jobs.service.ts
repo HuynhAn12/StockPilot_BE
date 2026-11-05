@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
 import { ConflictError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
+import { BusinessSyncService } from '../../common/services/business-sync.service';
 import { DbLeaseService } from '../../common/services/db-lease.service';
 import { addBusinessDays, businessDateKeyToDate, toBusinessDateKey } from '../../common/utils/business-date';
 import { DailySalesSummaryService } from '../daily-sales-summary/daily-sales-summary.service';
@@ -58,6 +59,35 @@ export class DecisionJobsService {
       remaining: outcome.result.remaining,
     });
     return outcome.result;
+  }
+
+  /**
+   * Hands SKUs to the post-commit recompute queue (coalesced, at-most-once). Never throws: the
+   * nightly reconciliation recomputes anything lost.
+   */
+  enqueueRecompute(storeId: number, stockItemIds: number[]): void {
+    if (stockItemIds.length === 0) {
+      return;
+    }
+    try {
+      BusinessSyncService.fireAndForget(this.prisma, (sync) => sync.syncStockItems(storeId, stockItemIds));
+    } catch (error) {
+      logger.warn('decision_enqueue_recompute_failed', { storeId, count: stockItemIds.length, error });
+    }
+  }
+
+  /** A store's engine config changed: every active SKU must be re-evaluated. Never throws. */
+  async onEngineConfigChanged(storeId: number): Promise<void> {
+    try {
+      const stockItems = await this.prisma.stockItem.findMany({
+        where: { storeId, isActive: true },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      this.enqueueRecompute(storeId, stockItems.map((item) => item.id));
+    } catch (error) {
+      logger.warn('decision_config_change_enqueue_failed', { storeId, error });
+    }
   }
 
   /**

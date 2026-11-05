@@ -39,6 +39,23 @@ function parseTrustProxy(value: unknown): boolean | number {
   return value as never;
 }
 
+function parseOptionalBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === '' || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0') {
+    return false;
+  }
+  return undefined;
+}
+
 function isStrongProductionSecret(value?: string): boolean {
   if (!value || value.length < 32) {
     return false;
@@ -80,6 +97,7 @@ const envSchema = z
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
     TENANT_ROOT_DOMAIN: z.string().default('stockpilot.vn'),
+    TENANT_SUBDOMAIN_REQUIRED: z.preprocess(parseOptionalBoolean, z.boolean().optional()),
     PUBLIC_API_URL: z.string().optional(),
     PAYMENT_CONFIG_ENCRYPTION_KEY: z.string().optional(),
     APP_TIMEZONE: z.string().default('Asia/Ho_Chi_Minh').refine(isValidTimeZone, {
@@ -101,6 +119,8 @@ const envSchema = z
     DECISION_NIGHTLY_HOUR: z.coerce.number().int().min(0).max(23).default(1),
     DECISION_RECOMPUTE_DEBOUNCE_MS: z.coerce.number().int().min(0).max(60_000).default(500),
     DECISION_RECALCULATE_MAX_SKUS: z.coerce.number().int().min(1).max(5000).default(500),
+    // Max SKUs without a snapshot evaluated live per GET /overview; the rest are queued for recompute.
+    DECISION_OVERVIEW_MAX_LIVE_SKUS: z.coerce.number().int().min(1).max(5000).default(100),
     // AI Decision Assistant (OpenAI Responses API). Without a key the rule-based assistant answers instead.
     OPENAI_API_KEY: z.preprocess((value) => (value === '' ? undefined : value), z.string().optional()),
     OPENAI_MODEL: z.string().default('gpt-4.1-mini'),

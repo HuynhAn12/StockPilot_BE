@@ -10,9 +10,10 @@ jest.mock('../src/config/db', () => ({
     stockItem: { findMany: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), findFirst: jest.fn() },
     importJob: { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
     importJobItem: { createMany: jest.fn(), findMany: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
-    inventoryBalance: { upsert: jest.fn(), findMany: jest.fn() },
+    inventoryBalance: { upsert: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     stockMovement: { create: jest.fn() },
     auditLog: { create: jest.fn() },
+    $queryRaw: jest.fn(),
     $transaction: jest.fn((callback) => callback(prisma)),
   },
 }));
@@ -301,6 +302,92 @@ describe('ImportExportService - Production-Grade Bulk Data Processing', () => {
       expect((prisma as any).importJob.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: { status: 'FAILED' },
+        })
+      );
+    });
+  });
+
+  describe('REPLACE_STOCK: stocktake file onto existing SKUs', () => {
+    // A stocktake export (e.g. KiotViet "Kiểm kho") has counts but no prices: price fields arrive as 0.
+    const countedItem = (sku: string, countedQuantity: number) => ({
+      categoryName: 'Nguyên liệu',
+      categoryCode: 'NGUYENLIEU',
+      productName: `Hàng ${sku}`,
+      productCode: sku,
+      sku,
+      costPrice: 0,
+      sellingPrice: 0,
+      initialQuantity: 0,
+      countedQuantity,
+      minStockLevel: 0,
+      maxStockLevel: 1000,
+    });
+
+    it('previews the current quantity, ignores product-code and price checks, and rejects inactive SKUs', async () => {
+      (prisma.stockItem.findMany as jest.Mock).mockResolvedValue([
+        { id: 1, sku: 'SP-A', isActive: true, product: { code: 'OTHER-PRODUCT' } },
+        { id: 2, sku: 'SP-OFF', isActive: false, product: { code: 'SP-OFF' } },
+      ]);
+      (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 7, storeId: 1, isDefault: true, isActive: true });
+      (prisma.inventoryBalance.findMany as jest.Mock).mockResolvedValue([{ stockItemId: 1, quantity: 29 }]);
+      (prisma as any).importJob.create.mockResolvedValue({ id: 'job_count', status: 'PREVIEWED' });
+      (prisma as any).importJobItem.createMany.mockResolvedValue({ count: 3 });
+
+      const result = await service.previewImport(1, 100, {
+        mode: 'REPLACE_STOCK',
+        items: [countedItem('SP-A', 11), countedItem('SP-OFF', 3), countedItem('SP-NEW', 5)],
+      });
+
+      expect(prisma.inventoryBalance.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ storeId: 1, warehouseId: 7 }) })
+      );
+      expect(result.previewItems[0]).toMatchObject({ sku: 'SP-A', currentQuantity: 29, countedQuantity: 11 });
+      expect(result.issues.map((i) => [i.row, i.severity])).toEqual([
+        [2, 'ERROR'],
+        [3, 'ERROR'],
+      ]);
+      expect(result.issues[0].message).toContain('ngừng kinh doanh');
+      expect(result.issues[1].message).toContain('requires an existing SKU');
+      expect(result.validRows).toBe(1);
+    });
+
+    it('commits only the counted quantity and never rewrites name, price, category or thresholds', async () => {
+      const item = countedItem('SP-A', 11);
+      const payloadJson = { items: [item], mode: 'REPLACE_STOCK', warehouseId: null };
+      const payloadHash = crypto.createHash('sha256').update(canonicalJsonStringify(payloadJson)).digest('hex');
+
+      (prisma as any).importJob.findFirst.mockResolvedValue({
+        id: 'job_count_commit',
+        storeId: 1,
+        status: 'PREVIEWED',
+        invalidRows: 0,
+        payloadHash,
+        expiresAt: new Date(Date.now() + 60000),
+        payloadJson,
+      });
+      (prisma as any).importJobItem.findMany.mockResolvedValue([
+        { id: 1, importJobId: 'job_count_commit', rowNumber: 1, sku: 'SP-A', status: 'PENDING', resultJson: item },
+      ]);
+      (prisma as any).importJob.updateMany.mockResolvedValue({ count: 1 });
+      (prisma as any).importJob.update.mockResolvedValue({});
+      (prisma.warehouse.findFirst as jest.Mock).mockResolvedValue({ id: 7, storeId: 1, isDefault: true, isActive: true });
+      (prisma.stockItem.findUnique as jest.Mock).mockResolvedValue({ id: 1, sku: 'SP-A', costPrice: 65000, sellingPrice: 110000 });
+      (prisma.stockItem.findFirst as jest.Mock).mockResolvedValue({ id: 1, storeId: 1, isActive: true });
+      (prisma.inventoryBalance.upsert as jest.Mock).mockResolvedValue({});
+      ((prisma as any).$queryRaw as jest.Mock).mockResolvedValue([{ id: 40, quantity: 29 }]);
+      (prisma.inventoryBalance.update as jest.Mock).mockResolvedValue({});
+      (prisma.stockMovement.create as jest.Mock).mockResolvedValue({ id: 99 });
+
+      const result = await service.commitImport(1, 100, { jobId: 'job_count_commit' });
+
+      expect(result.summary).toMatchObject({ updatedSkus: 1, createdSkus: 0, createdProducts: 0 });
+      expect(prisma.category.upsert).not.toHaveBeenCalled();
+      expect(prisma.product.upsert).not.toHaveBeenCalled();
+      expect(prisma.stockItem.update).not.toHaveBeenCalled();
+      expect(prisma.stockItem.create).not.toHaveBeenCalled();
+      expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ stockItemId: 1, beforeQuantity: 29, afterQuantity: 11, delta: -18 }),
         })
       );
     });
