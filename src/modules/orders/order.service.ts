@@ -486,15 +486,57 @@ export class OrderService {
 
     const searchTerm = query?.search || query?.q;
     if (searchTerm && typeof searchTerm === 'string' && searchTerm.trim()) {
-      const term = searchTerm.trim();
-      andConditions.push({
-        OR: [
-          { orderNumber: { contains: term } },
-          { customerName: { contains: term } },
-          { customerPhone: { contains: term } },
-          { createdBy: { fullName: { contains: term } } },
-        ],
-      });
+      const rawTerm = searchTerm.trim();
+      const lower = rawTerm.toLowerCase();
+      const noDiacritics = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+
+      const isCancelKeyword =
+        lower.includes('hủy') ||
+        lower.includes('huỷ') ||
+        noDiacritics.includes('huy') ||
+        lower.includes('cancel');
+
+      const isReturnKeyword =
+        lower.includes('trả') ||
+        noDiacritics.includes('tra') ||
+        lower.includes('hoàn') ||
+        noDiacritics.includes('hoan') ||
+        lower.includes('đổi') ||
+        noDiacritics.includes('doi') ||
+        lower.includes('return') ||
+        lower.includes('refund');
+
+      const cleanDigits = rawTerm.replace(/[^\d]/g, '');
+      const parsedAmount = cleanDigits && cleanDigits.length >= 3 ? Number(cleanDigits) : null;
+
+      const orConditions: any[] = [
+        { orderNumber: { contains: rawTerm } },
+        { customerName: { contains: rawTerm } },
+        { customerPhone: { contains: rawTerm } },
+        { createdBy: { fullName: { contains: rawTerm } } },
+        { cancelReason: { contains: rawTerm } },
+        { note: { contains: rawTerm } },
+      ];
+
+      if (isCancelKeyword) {
+        orConditions.push({ status: 'CANCELED' });
+      }
+
+      if (isReturnKeyword) {
+        orConditions.push(
+          { returns: { some: {} } },
+          { items: { some: { returnedQuantity: { gt: 0 } } } }
+        );
+      }
+
+      if (parsedAmount !== null && !isNaN(parsedAmount)) {
+        orConditions.push(
+          { totalAmount: parsedAmount },
+          { subtotalAmount: parsedAmount }
+        );
+      }
+
+      andConditions.push({ OR: orConditions });
     }
 
     if (query?.from || query?.to) {
