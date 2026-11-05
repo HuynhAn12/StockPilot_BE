@@ -64,3 +64,6 @@ CLAUDE.md
 # Agent skills (cai local, khong day len git)
 .agents/
 skills-lock.json
+
+# Local store payment configs
+data/momo-wallet-configs.json

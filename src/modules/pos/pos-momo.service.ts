@@ -188,11 +188,14 @@ export class PosMomoService {
     });
 
     // 6. Lấy cấu hình tài khoản MoMo Doanh Nghiệp của cửa hàng
-    const momoConfig = await this.getMomoConfig(storeId);
-    const partnerCode = (momoConfig as any).partnerCode || 'MOMOVA0I20261015';
-    const accessKey = (momoConfig as any).accessKey || 'sjqZwImFcjxZBhHF';
-    const secretKey = (momoConfig as any).secretKey || 'OK6GwHc66ZBSdqyuR5RXKTx0xA718DKh';
-    const businessName = (momoConfig as any).businessName || (momoConfig as any).merchantName || 'STOCKPILOT';
+    const momoRaw = this.getRawMomoConfig(storeId);
+    if (!momoRaw || !momoRaw.partnerCode || !momoRaw.accessKey || !momoRaw.secretKey) {
+      throw new ValidationError('Cửa hàng chưa cấu hình cổng thanh toán MoMo. Vui lòng vào Cài đặt để thiết lập Partner Code, Access Key và Secret Key.');
+    }
+    const partnerCode = momoRaw.partnerCode;
+    const accessKey = momoRaw.accessKey;
+    const secretKey = momoRaw.secretKey;
+    const businessName = momoRaw.businessName || momoRaw.merchantName || 'STOCKPILOT';
 
     let momoGatewayPayUrl = '';
     let momoGatewayQrUrl = '';
@@ -201,11 +204,12 @@ export class PosMomoService {
     try {
       const orderInfo = `Thanh toan don hang ${order.orderNumber}`;
       const redirectUrl = 'http://localhost:5173/pos';
-      const ipnUrl = 'http://localhost:5000/api/v1/pos/momo/ipn';
+      const publicBase = process.env.PUBLIC_API_URL ? process.env.PUBLIC_API_URL.replace(/\/+$/, '') : 'http://localhost:5000';
+      const ipnUrl = `${publicBase}/api/v1/pos/momo/ipn`;
       const rawSignature = `accessKey=${accessKey}&amount=${totalNumber}&extraData=&ipnUrl=${ipnUrl}&orderId=${momoOrderId}&orderInfo=${orderInfo}&partnerCode=${partnerCode}&redirectUrl=${redirectUrl}&requestId=${momoOrderId}&requestType=captureWallet`;
       const signature = crypto.createHmac('sha256', secretKey).update(rawSignature).digest('hex');
 
-      const endpoint = (momoConfig as any).endpoint || 'https://payment.momo.vn/v2/gateway/api/create';
+      const endpoint = momoRaw.endpoint || 'https://payment.momo.vn/v2/gateway/api/create';
       const momoRes = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -237,13 +241,15 @@ export class PosMomoService {
       console.warn('MoMo Gateway create API warning:', apiErr);
     }
 
-    // Mã QR Cổng MoMo Doanh Nghiệp & Điểm bán STOCKPILOT (COM-QRC ID: 4032108)
-    const storeQrId = (momoConfig as any).storeQrId || '4032108';
-    const merchantAccount = (momoConfig as any).merchantAccount || 'PMC2628818000000003';
-    const merchantQrCode = (momoConfig as any).merchantQrCode || '00020101021126220007vn.momo0207403210838630010A000000727013300069710250119PMC26288180000000030208QRIBFTTA53037045802VN6304CB72';
-    const qrImageUrl = (momoConfig as any).qrImageUrl || '/momo-merchant-qr.png';
-    const vietQrUrl = `https://api.vietqr.io/image/971025-${merchantAccount}-compact2.png?amount=${totalNumber}&addInfo=${encodeURIComponent(momoOrderId)}&accountName=${encodeURIComponent(businessName)}`;
-    const qrCodeUrl = momoGatewayQrUrl || qrImageUrl;
+    // Mã QR Cổng MoMo Doanh Nghiệp & Điểm bán
+    const storeQrId = momoRaw.storeQrId || '';
+    const merchantAccount = momoRaw.merchantAccount || '';
+    const merchantQrCode = momoRaw.merchantQrCode || '';
+    const qrImageUrl = momoRaw.qrImageUrl || '';
+    const vietQrUrl = merchantAccount
+      ? `https://api.vietqr.io/image/971025-${merchantAccount}-compact2.png?amount=${totalNumber}&addInfo=${encodeURIComponent(momoOrderId)}&accountName=${encodeURIComponent(businessName)}`
+      : (momoGatewayQrUrl || `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(`momo://?action=payWithApp&partnerCode=${partnerCode}&orderId=${momoOrderId}&amount=${totalNumber}`)}`);
+    const qrCodeUrl = momoGatewayQrUrl || qrImageUrl || vietQrUrl;
     const payUrl = momoGatewayPayUrl || `momo://?action=payWithApp&partnerCode=${partnerCode}&orderId=${momoOrderId}&amount=${totalNumber}`;
 
     return {
@@ -309,15 +315,16 @@ export class PosMomoService {
 
     // Tự động kiểm tra trực tiếp từ máy chủ Cổng thanh toán MoMo Gateway
     try {
-      const momoConfig = await this.getMomoConfig(storeId);
-      const partnerCode = (momoConfig as any).partnerCode || 'MOMOVA0I20261015_TEST';
-      const accessKey = (momoConfig as any).accessKey || 'zaJf1FrjfFLOkogx';
-      const secretKey = (momoConfig as any).secretKey || 'KhziNCbaF2oaETNAvlnDc1REp7J6e1by';
+      const momoRaw = this.getRawMomoConfig(storeId);
+      if (momoRaw && momoRaw.partnerCode && momoRaw.accessKey && momoRaw.secretKey) {
+        const partnerCode = momoRaw.partnerCode;
+        const accessKey = momoRaw.accessKey;
+        const secretKey = momoRaw.secretKey;
 
-      const rawSignature = `accessKey=${accessKey}&orderId=${momoOrderId}&partnerCode=${partnerCode}&requestId=${momoOrderId}`;
-      const signature = crypto.createHmac('sha256', secretKey).update(rawSignature).digest('hex');
+        const rawSignature = `accessKey=${accessKey}&orderId=${momoOrderId}&partnerCode=${partnerCode}&requestId=${momoOrderId}`;
+        const signature = crypto.createHmac('sha256', secretKey).update(rawSignature).digest('hex');
 
-      const queryEndpoint = (momoConfig as any).queryEndpoint || 'https://payment.momo.vn/v2/gateway/api/query';
+        const queryEndpoint = momoRaw.queryEndpoint || 'https://payment.momo.vn/v2/gateway/api/query';
       const queryRes = await fetch(queryEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -343,6 +350,7 @@ export class PosMomoService {
             transId: queryData.transId,
           };
         }
+      }
       }
     } catch (queryErr) {
       // Fallback
@@ -443,56 +451,82 @@ export class PosMomoService {
   }
 
   /**
-   * Lấy cấu hình Ví MoMo nhận tiền của cửa hàng
+   * Đọc cấu hình MoMo thô (bao gồm secretKey) cho các xử lý nội bộ backend
+   */
+  getRawMomoConfig(storeId: number): any {
+    const configPath = path.resolve(process.cwd(), 'data', 'momo-wallet-configs.json');
+    if (!fs.existsSync(configPath)) {
+      return null;
+    }
+    try {
+      const configs = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const cfg = configs[String(storeId)];
+      if (cfg && cfg.partnerCode && cfg.accessKey && cfg.secretKey) {
+        return cfg;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Lấy cấu hình Ví MoMo của cửa hàng (Không bao giờ trả secretKey ra API)
    */
   async getMomoConfig(storeId: number) {
-    const configPath = path.resolve(process.cwd(), 'data', 'momo-wallet-configs.json');
-    let configs: Record<string, any> = {};
-    if (fs.existsSync(configPath)) {
-      try {
-        configs = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      } catch (e) {
-        configs = {};
-      }
-    }
-
-    if (configs[String(storeId)]) {
+    const raw = this.getRawMomoConfig(storeId);
+    if (!raw) {
       return {
-        ...configs[String(storeId)],
-        isConfigured: true,
+        partnerCode: '',
+        accessKey: '',
+        businessName: '',
+        endpoint: 'https://payment.momo.vn/v2/gateway/api/create',
+        queryEndpoint: 'https://payment.momo.vn/v2/gateway/api/query',
+        posEndpoint: 'https://payment.momo.vn/v2/gateway/api/pos',
+        storeQrId: '',
+        merchantAccount: '',
+        qrImageUrl: '',
+        isConfigured: false,
+        hasSecretKey: false,
       };
     }
 
-    if (configs['default']) {
-      return {
-        ...configs['default'],
-        isConfigured: true,
-      };
-    }
-
-    // Mặc định thông tin MoMo Doanh Nghiệp chính thức của người dùng
     return {
-      partnerCode: 'MOMOVA0I20261015',
-      accessKey: 'sjqZwImFcjxZBhHF',
-      secretKey: 'OK6GwHc66ZBSdqyuR5RXKTx0xA718DKh',
-      publicKey: 'MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA0bdyiSaX+Ab/seENKgN9NwIcPSYw6GlwRZjh3ZfqFuEKr7ecohIc8PkPPimJzjE8L2e2ihnNvfri1YVTS29v7se1BqWI/hfb8Mrlz5P8jl8vQUZtT/osQYY8EZluJy3vc5GbVvvCt4PN0nw3qbITri25uyMLqR4zcJHLidLs1TBcuDoJggxkG23d0wtBQJu4saAGcmY3YhWJ09UaMtdJB+fdZiYdzuDwTYoINmSC9oegeawU7Zc580W+2RDrgxdJDUrmommhjgoyg0LCCtp4xcz0mpSUmn0wIey79fDRqH5soaxVaF763IdSvmUrxBM4e9NpFvziOa58VDTf618aMlMGU06TLlrg09GPlVMxLV+xn1xZ4hBBvqEH5mz8I9y34zGA7Q89ksnwaSPJECc6GBo3Vc2ajOTYhDB9NaQktx7fQGDA9hkdF/qwP2vq3+HgGB5LZx40vSDunFGLDePj87tU18Y4YgQZXk9gRUpRaoQpSriTVLQGV1Fe3QKLG4DSKlBO79myk0TUcq3Iydcx1RKvzFJSHGEwEX6rm3/bBPtPHU4CVWpa0Z1QWKKwB0GHehwtmbf599QNMNg67MT2qOVF/iLbiGv3ZkTJ4F1/zJ9O94choP/0afmoGd3J+QTes4588Tiq71ifUoRe98ed9cIXtNiKhIOqOnOlTBSox2ECAwEAAQ==',
-      endpoint: 'https://payment.momo.vn/v2/gateway/api/create',
-      queryEndpoint: 'https://payment.momo.vn/v2/gateway/api/query',
-      posEndpoint: 'https://payment.momo.vn/v2/gateway/api/pos',
-      businessName: 'STOCKPILOT',
-      merchantName: 'STOCKPILOT',
+      partnerCode: raw.partnerCode,
+      accessKey: raw.accessKey,
+      businessName: raw.businessName || raw.merchantName || '',
+      endpoint: raw.endpoint || 'https://payment.momo.vn/v2/gateway/api/create',
+      queryEndpoint: raw.queryEndpoint || 'https://payment.momo.vn/v2/gateway/api/query',
+      posEndpoint: raw.posEndpoint || 'https://payment.momo.vn/v2/gateway/api/pos',
+      storeQrId: raw.storeQrId || '',
+      merchantAccount: raw.merchantAccount || '',
+      qrImageUrl: raw.qrImageUrl || '',
       isConfigured: true,
+      hasSecretKey: true,
     };
   }
 
   /**
-   * Lưu cấu hình Cổng MoMo Doanh Nghiệp cho cửa hàng
+   * Lưu cấu hình Cổng MoMo Doanh Nghiệp cho cửa hàng.
+   * Nếu ô secretKey để trống thì tự động giữ lại khóa bí mật cũ.
    */
   async saveMomoConfig(storeId: number, input: any) {
-    const partnerCode = (input.partnerCode || '').trim() || 'MOMOVA0I20261015';
-    const accessKey = (input.accessKey || '').trim() || 'sjqZwImFcjxZBhHF';
-    const secretKey = (input.secretKey || '').trim() || 'OK6GwHc66ZBSdqyuR5RXKTx0xA718DKh';
-    const businessName = (input.businessName || input.merchantName || 'STOCKPILOT').trim();
+    const existing = this.getRawMomoConfig(storeId);
+
+    const partnerCode = (input.partnerCode || '').trim() || existing?.partnerCode || '';
+    const accessKey = (input.accessKey || '').trim() || existing?.accessKey || '';
+    let secretKey = (input.secretKey || '').trim();
+
+    // Khi lưu mà để trống ô secret thì giữ khóa cũ
+    if (!secretKey && existing?.secretKey) {
+      secretKey = existing.secretKey;
+    }
+
+    if (!partnerCode || !accessKey || !secretKey) {
+      throw new ValidationError('Cửa hàng chưa cấu hình cổng MoMo. Vui lòng điền đầy đủ Partner Code, Access Key và Secret Key.');
+    }
+
+    const businessName = (input.businessName || input.merchantName || existing?.businessName || 'STOCKPILOT').trim();
 
     const dataDir = path.resolve(process.cwd(), 'data');
     if (!fs.existsSync(dataDir)) {
@@ -503,7 +537,7 @@ export class PosMomoService {
     if (fs.existsSync(configPath)) {
       try {
         configs = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      } catch (e) {
+      } catch {
         configs = {};
       }
     }
@@ -512,20 +546,32 @@ export class PosMomoService {
       partnerCode,
       accessKey,
       secretKey,
-      endpoint: input.endpoint || 'https://payment.momo.vn/v2/gateway/api/create',
-      queryEndpoint: input.queryEndpoint || 'https://payment.momo.vn/v2/gateway/api/query',
-      posEndpoint: input.posEndpoint || 'https://payment.momo.vn/v2/gateway/api/pos',
-      publicKey: input.publicKey || configs['default']?.publicKey || '',
+      endpoint: input.endpoint || existing?.endpoint || 'https://payment.momo.vn/v2/gateway/api/create',
+      queryEndpoint: input.queryEndpoint || existing?.queryEndpoint || 'https://payment.momo.vn/v2/gateway/api/query',
+      posEndpoint: input.posEndpoint || existing?.posEndpoint || 'https://payment.momo.vn/v2/gateway/api/pos',
+      publicKey: input.publicKey || existing?.publicKey || '',
+      storeQrId: input.storeQrId || existing?.storeQrId || '',
+      merchantAccount: input.merchantAccount || existing?.merchantAccount || '',
+      merchantQrCode: input.merchantQrCode || existing?.merchantQrCode || '',
+      qrImageUrl: input.qrImageUrl || existing?.qrImageUrl || '',
       businessName,
       merchantName: businessName,
       isConfigured: true,
     };
 
     configs[String(storeId)] = updatedConfig;
-    configs['default'] = updatedConfig;
-
     fs.writeFileSync(configPath, JSON.stringify(configs, null, 2), 'utf8');
 
-    return updatedConfig;
+    // Trả kết quả an toàn ra API không chứa secretKey
+    return {
+      partnerCode,
+      accessKey,
+      businessName,
+      endpoint: updatedConfig.endpoint,
+      queryEndpoint: updatedConfig.queryEndpoint,
+      posEndpoint: updatedConfig.posEndpoint,
+      isConfigured: true,
+      hasSecretKey: true,
+    };
   }
 }
