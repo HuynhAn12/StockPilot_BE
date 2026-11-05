@@ -81,6 +81,27 @@ export function createApp(): Express {
   app.use(requestLoggerMiddleware);
   app.use(sensitiveFieldsMiddleware);
 
+  // Root ping endpoint
+  app.get('/', (req, res) => {
+    return res.status(200).json({
+      status: 'OK',
+      service: 'StockPilot Backend Core API',
+      version: '1.0.0',
+    });
+  });
+
+  // URL rewrite fallback: automatically map root-relative routes (e.g. /auth/login) to /api/v1/*
+  app.use((req, res, next) => {
+    if (!req.url.startsWith('/api/v1') && req.url !== '/' && !req.url.startsWith('/health')) {
+      if (req.url.startsWith('/api/')) {
+        req.url = req.url.replace(/^\/api\//, '/api/v1/');
+      } else {
+        req.url = `/api/v1${req.url.startsWith('/') ? '' : '/'}${req.url}`;
+      }
+    }
+    next();
+  });
+
   // Rate Limiting (Production only)
   if (env.NODE_ENV === 'production') {
     const generalLimiter = rateLimit({
