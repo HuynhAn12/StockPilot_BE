@@ -1,5 +1,5 @@
 # Normalize line endings: repo always stores LF, regardless of each machine's core.autocrlf.
-* text=auto
+* text=auto eol=lf
 
 # Binary files
 *.png binary
