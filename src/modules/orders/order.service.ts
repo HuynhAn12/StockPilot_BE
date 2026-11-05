@@ -328,7 +328,7 @@ export class OrderService {
 
       if (!order) throw new NotFoundError('Đơn hàng không tồn tại');
 
-      // If staff, verify order belongs to today or was created/handled by this staff
+      // If staff, verify order belongs to today AND was created by this staff
       if (userRole === 'WAREHOUSE_STAFF') {
         const now = new Date();
         const vnNow = new Date(now.getTime() + 7 * 3600000);
@@ -340,8 +340,12 @@ export class OrderService {
         const isToday = order.createdAt ? order.createdAt >= startOfToday : false;
         const isCreator = Boolean(userId && order.createdById === userId);
 
-        if (!isToday && !isCreator) {
-          throw new ForbiddenError('Nhân viên chỉ có quyền hủy các đơn hàng phát sinh trong ca trực hôm nay');
+        if (!isToday) {
+          throw new ForbiddenError('Nhân viên không thể hủy đơn hàng của ngày hôm qua hoặc các ngày trước. Chỉ Chủ cửa hàng mới có quyền hủy.');
+        }
+
+        if (!isCreator) {
+          throw new ForbiddenError('Nhân viên chỉ có quyền hủy đơn hàng do chính mình tạo ra trong ngày hôm nay.');
         }
       }
 

@@ -243,6 +243,54 @@ describe('RBAC integration - store APIs', () => {
       request(app).post('/api/v1/orders/100/cancel').set(auth(staffToken)).send({ cancelReason: 'customer request' })
     ).resolves.toMatchObject({ status: 403 });
 
+    // Staff can cancel order created today by themselves
+    (prisma.order.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 101,
+      orderNumber: 'ORD-101',
+      status: 'DRAFT',
+      createdById: 2,
+      createdAt: new Date(),
+      items: [],
+    });
+    (prisma.$queryRaw as jest.Mock).mockResolvedValueOnce([{ id: 101, status: 'DRAFT' }]);
+    (prisma.order.updateMany as jest.Mock).mockResolvedValueOnce({ count: 1 });
+    (prisma.order.findUniqueOrThrow as jest.Mock).mockResolvedValueOnce({
+      id: 101,
+      orderNumber: 'ORD-101',
+      status: 'CANCELED',
+      items: [],
+    });
+    await expect(
+      request(app).post('/api/v1/orders/101/cancel').set(auth(staffToken)).send({ cancelReason: 'hủy đơn trong ca' })
+    ).resolves.toMatchObject({ status: 200 });
+
+    // Staff CANNOT cancel order created yesterday even if by themselves
+    const yesterday = new Date(Date.now() - 24 * 3600 * 1000);
+    (prisma.order.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 102,
+      orderNumber: 'ORD-102',
+      status: 'DRAFT',
+      createdById: 2,
+      createdAt: yesterday,
+      items: [],
+    });
+    await expect(
+      request(app).post('/api/v1/orders/102/cancel').set(auth(staffToken)).send({ cancelReason: 'hủy đơn hôm qua' })
+    ).resolves.toMatchObject({ status: 403 });
+
+    // Staff CANNOT cancel order created today by someone else (e.g. userId: 1)
+    (prisma.order.findFirst as jest.Mock).mockResolvedValueOnce({
+      id: 103,
+      orderNumber: 'ORD-103',
+      status: 'DRAFT',
+      createdById: 1,
+      createdAt: new Date(),
+      items: [],
+    });
+    await expect(
+      request(app).post('/api/v1/orders/103/cancel').set(auth(staffToken)).send({ cancelReason: 'hủy đơn người khác' })
+    ).resolves.toMatchObject({ status: 403 });
+
     await expect(request(app).get('/api/v1/orders').set(auth(adminToken))).resolves.toMatchObject({ status: 403 });
     await expect(request(app).post('/api/v1/orders/100/fulfill').set(auth(adminToken))).resolves.toMatchObject({ status: 403 });
 
