@@ -39,6 +39,23 @@ function parseTrustProxy(value: unknown): boolean | number {
   return value as never;
 }
 
+function parseOptionalBoolean(value: unknown): boolean | undefined {
+  if (value === undefined || value === '' || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0') {
+    return false;
+  }
+  return undefined;
+}
+
 function isStrongProductionSecret(value?: string): boolean {
   if (!value || value.length < 32) {
     return false;
@@ -80,7 +97,7 @@ const envSchema = z
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
     TENANT_ROOT_DOMAIN: z.string().default('stockpilot.vn'),
-    TENANT_SUBDOMAIN_REQUIRED: z.preprocess((val) => val === 'true' || val === true, z.boolean()).default(false),
+    TENANT_SUBDOMAIN_REQUIRED: z.preprocess(parseOptionalBoolean, z.boolean().optional()),
     PUBLIC_API_URL: z.string().optional(),
     PAYMENT_CONFIG_ENCRYPTION_KEY: z.string().optional(),
     APP_TIMEZONE: z.string().default('Asia/Ho_Chi_Minh').refine(isValidTimeZone, {

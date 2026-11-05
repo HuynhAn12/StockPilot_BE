@@ -30,7 +30,8 @@ export function requireStoreScope(req: Request, res: Response, next: NextFunctio
     return next(new ForbiddenError('Account is not linked to a store'));
   }
 
-  if (env.TENANT_SUBDOMAIN_REQUIRED && !req.tenant) {
+  const requiresSubdomain = env.TENANT_SUBDOMAIN_REQUIRED ?? (env.NODE_ENV === 'production');
+  if (requiresSubdomain && !req.tenant) {
     return next(new ForbiddenError('Store tenant hostname is required for shop APIs'));
   }
 
