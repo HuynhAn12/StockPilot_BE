@@ -490,53 +490,63 @@ export class OrderService {
       const lower = rawTerm.toLowerCase();
       const noDiacritics = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
 
-      const isCancelKeyword =
-        lower.includes('hủy') ||
-        lower.includes('huỷ') ||
-        noDiacritics.includes('huy') ||
-        lower.includes('cancel');
+      // Strict keyword intents for Return and Cancel
+      const isPureReturnSearch =
+        lower === 'trả' ||
+        lower === 'tra' ||
+        lower === 'đã trả' ||
+        lower === 'da tra' ||
+        lower === 'trả hàng' ||
+        lower === 'tra hang' ||
+        lower === 'đổi trả' ||
+        lower === 'doi tra';
 
-      const isReturnKeyword =
-        lower.includes('trả') ||
-        noDiacritics.includes('tra') ||
-        lower.includes('hoàn') ||
-        noDiacritics.includes('hoan') ||
-        lower.includes('đổi') ||
-        noDiacritics.includes('doi') ||
-        lower.includes('return') ||
-        lower.includes('refund');
+      const isPureCancelSearch =
+        lower === 'hủy' ||
+        lower === 'huỷ' ||
+        lower === 'huy' ||
+        lower === 'đã hủy' ||
+        lower === 'da huy' ||
+        lower === 'hủy đơn' ||
+        lower === 'huy don' ||
+        lower === 'cancel' ||
+        lower === 'canceled' ||
+        lower === 'cancelled';
 
-      const cleanDigits = rawTerm.replace(/[^\d]/g, '');
-      const parsedAmount = cleanDigits && cleanDigits.length >= 3 ? Number(cleanDigits) : null;
+      if (isPureReturnSearch) {
+        // Khi người dùng tìm "trả" -> CHỈ hiển thị đơn có phát sinh trả hàng (phần Số lượng có chữ Trả)
+        andConditions.push({
+          items: {
+            some: {
+              returnedQuantity: { gt: 0 },
+            },
+          },
+        });
+      } else if (isPureCancelSearch) {
+        // Khi người dùng tìm "hủy" -> CHỈ hiển thị đơn có trạng thái ĐÃ HỦY
+        andConditions.push({
+          status: 'CANCELED',
+        });
+      } else {
+        const cleanDigits = rawTerm.replace(/[^\d]/g, '');
+        const parsedAmount = cleanDigits && cleanDigits.length >= 3 ? Number(cleanDigits) : null;
 
-      const orConditions: any[] = [
-        { orderNumber: { contains: rawTerm } },
-        { customerName: { contains: rawTerm } },
-        { customerPhone: { contains: rawTerm } },
-        { createdBy: { fullName: { contains: rawTerm } } },
-        { cancelReason: { contains: rawTerm } },
-        { note: { contains: rawTerm } },
-      ];
+        const orConditions: any[] = [
+          { orderNumber: { contains: rawTerm } },
+          { customerName: { contains: rawTerm } },
+          { customerPhone: { contains: rawTerm } },
+          { createdBy: { fullName: { contains: rawTerm } } },
+        ];
 
-      if (isCancelKeyword) {
-        orConditions.push({ status: 'CANCELED' });
+        if (parsedAmount !== null && !isNaN(parsedAmount)) {
+          orConditions.push(
+            { totalAmount: parsedAmount },
+            { subtotalAmount: parsedAmount }
+          );
+        }
+
+        andConditions.push({ OR: orConditions });
       }
-
-      if (isReturnKeyword) {
-        orConditions.push(
-          { returns: { some: {} } },
-          { items: { some: { returnedQuantity: { gt: 0 } } } }
-        );
-      }
-
-      if (parsedAmount !== null && !isNaN(parsedAmount)) {
-        orConditions.push(
-          { totalAmount: parsedAmount },
-          { subtotalAmount: parsedAmount }
-        );
-      }
-
-      andConditions.push({ OR: orConditions });
     }
 
     if (query?.from || query?.to) {
