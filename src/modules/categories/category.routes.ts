@@ -15,7 +15,7 @@ categoryRouter.use(requireStoreScope);
 categoryRouter.get('/', validate({ query: paginationQuerySchema }), (req, res, next) => controller.list(req, res, next));
 categoryRouter.get('/:id', validate({ params: idParamSchema }), (req, res, next) => controller.getById(req, res, next));
 
-// Mutating endpoints require SHOP_OWNER
-categoryRouter.post('/', requireRole('SHOP_OWNER'), validate({ body: createCategorySchema }), (req, res, next) => controller.create(req, res, next));
-categoryRouter.put('/:id', requireRole('SHOP_OWNER'), validate({ params: idParamSchema, body: updateCategorySchema }), (req, res, next) => controller.update(req, res, next));
+// Mutating endpoints: SHOP_OWNER and WAREHOUSE_STAFF can create and update categories; only SHOP_OWNER can delete
+categoryRouter.post('/', requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'), validate({ body: createCategorySchema }), (req, res, next) => controller.create(req, res, next));
+categoryRouter.put('/:id', requireRole('SHOP_OWNER', 'WAREHOUSE_STAFF'), validate({ params: idParamSchema, body: updateCategorySchema }), (req, res, next) => controller.update(req, res, next));
 categoryRouter.delete('/:id', requireRole('SHOP_OWNER'), validate({ params: idParamSchema }), (req, res, next) => controller.delete(req, res, next));
