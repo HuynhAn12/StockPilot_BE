@@ -58,7 +58,7 @@ export class PublicService {
         popular: true,
         features: [
           'Tất cả tính năng của gói Khởi Nghiệp',
-          'Tích hợp AI Pilot gợi ý nhập hàng thông minh',
+          'Tích hợp Pilot AI gợi ý nhập hàng thông minh',
           'Dynamic Pricing - Đề xuất giá bán tối ưu theo nhu cầu thị trường',
           'Hỗ trợ 3 tài khoản nhân viên phân quyền chi tiết',
           'Quét mã vạch camera điện thoại siêu tốc',

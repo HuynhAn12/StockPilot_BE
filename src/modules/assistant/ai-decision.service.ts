@@ -26,7 +26,7 @@ export interface AiAnswerMeta {
 const RULES_MODEL = 'StockPilot-Rules-v2';
 
 const BASE_INSTRUCTIONS = [
-  'Bạn là AI Pilot — Trợ lý Cá nhân AI & Cố vấn Quản trị Cửa hàng của StockPilot tại Việt Nam.',
+  'Bạn là Pilot AI — Trợ lý Cá nhân AI & Cố vấn Quản trị Cửa hàng của StockPilot tại Việt Nam.',
   '',
   'QUY TẮC CỐT LÕI (BẮT BUỘC TUÂN THỦ):',
   '1. TRẢ LỜI ĐÚNG VÀ TRÚNG CÂU HỎI (QUAN TRỌNG NHẤT):',

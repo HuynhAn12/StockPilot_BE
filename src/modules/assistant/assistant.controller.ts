@@ -206,7 +206,7 @@ export class AssistantController {
       formData.append('model', env.GROQ_WHISPER_MODEL || 'whisper-large-v3');
       formData.append('language', 'vi');
       formData.append('response_format', 'json');
-      formData.append('prompt', 'StockPilot, KiotViet, Sapo, POS, quản lý bán hàng, tồn kho, doanh thu, lợi nhuận, giá vốn, hóa đơn, khách hàng, nhà cung cấp, sản phẩm, chiết khấu.');
+      formData.append('prompt', 'StockPilot, Pilot AI, KiotViet, Sapo, POS, quản lý bán hàng, tồn kho, doanh thu, lợi nhuận, giá vốn, hóa đơn, khách hàng, nhà cung cấp, sản phẩm, chiết khấu.');
 
       const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
         method: 'POST',
@@ -230,7 +230,7 @@ export class AssistantController {
       transcribedText = transcribedText
         .replace(/\b(cây\s*ốc\s*việt|k\s*kiốt\s*việt|ki\s*ốt\s*việt|k\s*kiot\s*viet|kiot\s*viet)\b/gi, 'KiotViet')
         .replace(/\b(stock\s*pilot|s\s*tốc\s*pai\s*lợt|tốc\s*pai\s*lợt)\b/gi, 'StockPilot')
-        .replace(/\b(ai\s*pilot|ây\s*ai\s*pai\s*lợt)\b/gi, 'AI Pilot')
+        .replace(/\b(pilot\s*ai|ai\s*pilot|ây\s*ai\s*pai\s*lợt|pai\s*lợt\s*ai)\b/gi, 'Pilot AI')
         .replace(/\b(sa\s*po)\b/gi, 'Sapo')
         .replace(/\b(pi\s*âu\s*ét|bê\s*ô\s*ét)\b/gi, 'POS');
 

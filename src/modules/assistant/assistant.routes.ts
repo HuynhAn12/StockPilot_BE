@@ -17,7 +17,7 @@ const upload = multer({
 assistantRouter.use(authMiddleware);
 assistantRouter.use(requireStoreScope);
 
-// AI Pilot is an owner tool (decided 2026-11-03): warehouse staff work from Alerts and Inventory instead.
+// Pilot AI is an owner tool (decided 2026-11-03): warehouse staff work from Alerts and Inventory instead.
 
 // Explain single SKU
 assistantRouter.get(

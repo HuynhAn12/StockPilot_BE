@@ -223,7 +223,7 @@ export class AssistantService {
   }
 
   /**
-   * Main AI Pilot natural language processing engine that maps questions to database facts.
+   * Main Pilot AI natural language processing engine that maps questions to database facts.
    */
 
   /**
@@ -605,7 +605,7 @@ export class AssistantService {
         canSeeFinancials
           ? `- 🔵 **TỒN NHIỀU:** **${overStockItems.length} SP** (Hàng tồn lớn, cần xả: Các mặt hàng tồn từ 50 đơn vị trở lên như Mì Tôm Hảo Hảo ${overStockItems[0]?.qty.toLocaleString('vi-VN') || 0} Cái, Nước ngọt Trà xanh ${overStockItems[1]?.qty.toLocaleString('vi-VN') || 0} Cái...).`
           : `- 🔵 **TỒN NHIỀU:** **${overStockItems.length} SP** (Tồn kho cao, cần đẩy nhanh tiêu thụ: Các mặt hàng tồn từ 50 đơn vị trở lên như Mì Tôm Hảo Hảo ${overStockItems[0]?.qty.toLocaleString('vi-VN') || 0} Cái, Nước ngọt Trà xanh ${overStockItems[1]?.qty.toLocaleString('vi-VN') || 0} Cái...).`,
-        `\n💡 **Khuyến nghị từ AI Pilot:**`,
+        `\n💡 **Khuyến nghị từ Pilot AI:**`,
         `1. Lập phiếu nhập kho ưu tiên cho các mặt hàng hết hàng và sắp hết để tránh đứt đoạn bán hàng.`,
         `2. Lên kế hoạch xả hàng hoặc áp dụng combo khuyến mãi cho các mặt hàng tồn nhiều để quay vòng vốn nhanh.`
       );
@@ -672,7 +672,7 @@ export class AssistantService {
       const answer = [
         `### 🏆 TOP 5 SẢN PHẨM BÁN CHẠY NHẤT (7 NGÀY QUA)\n`,
         ...rows,
-        `\n💡 **Khuyến nghị từ AI Pilot:**`,
+        `\n💡 **Khuyến nghị từ Pilot AI:**`,
         `- Duy trì lượng tồn kho an toàn cho các mặt hàng chủ lực này.`,
         `- Cân nhắc đàm phán chiết khấu nhập số lượng lớn với nhà cung cấp để tăng thêm biên lợi nhuận.`,
       ].join('\n');
@@ -803,7 +803,7 @@ export class AssistantService {
       const answer = [
         `### ⚠️ CẢNH BÁO RỦI RO LỢI NHUẬN\n`,
         ...rows,
-        `\n💡 **Khuyến nghị từ AI Pilot:**`,
+        `\n💡 **Khuyến nghị từ Pilot AI:**`,
         `1. Cần điều chỉnh tăng giá bán các sản phẩm đang bán lỗ ngay lập tức để bảo vệ dòng tiền cửa hàng.`,
         `2. Vào phân hệ **Gợi ý giá bán** để hệ thống tính toán tự động mức giá tối ưu theo biên lợi nhuận mục tiêu.`,
       ].join('\n');
@@ -1007,7 +1007,7 @@ export class AssistantService {
             `### ⚠️ MẶT HÀNG CÓ NGUY CƠ DƯ THỪA / ĐỌNG VỐN (${overstocks.length} MẶT HÀNG)\n`,
             ...rows,
             `\n- **Tổng vốn đọng trong lượng hàng này:** **${formatVND(totalTiedCapital)}**`,
-            `\n💡 **Khuyến nghị từ AI Pilot:** Áp dụng chương trình combo bán kèm hoặc giảm giá 5 - 10% để kích thích người mua giải phóng lượng vốn lưu động này.`,
+            `\n💡 **Khuyến nghị từ Pilot AI:** Áp dụng chương trình combo bán kèm hoặc giảm giá 5 - 10% để kích thích người mua giải phóng lượng vốn lưu động này.`,
           ].join('\n')
         : [
             `### ⚠️ MẶT HÀNG CÓ NGUY CƠ DƯ THỪA (${overstocks.length} MẶT HÀNG)\n`,
