@@ -54,7 +54,20 @@ export function createApp(): Express {
   // CORS Policy
   app.use(
     cors({
-      origin: env.NODE_ENV === 'production' ? corsOrigins : true,
+      origin:
+        env.NODE_ENV === 'production'
+          ? (origin, callback) => {
+              if (!origin) return callback(null, true);
+              if (
+                corsOrigins.includes(origin) ||
+                origin.endsWith('.vercel.app') ||
+                origin.startsWith('http://localhost')
+              ) {
+                return callback(null, true);
+              }
+              return callback(new Error('Not allowed by CORS'));
+            }
+          : true,
       credentials: true,
     })
   );
