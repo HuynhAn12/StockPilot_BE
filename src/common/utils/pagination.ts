@@ -15,6 +15,7 @@ export const productListQuerySchema = paginationQuerySchema.extend({
   q: z.string().optional(),
   search: z.string().optional(),
   categoryId: z.coerce.number().int().positive().optional(),
+  all: z.preprocess((val) => val === 'true' || val === true, z.boolean().optional()),
   isActive: z.preprocess((val) => {
     if (val === 'true' || val === true) return true;
     if (val === 'false' || val === false) return false;

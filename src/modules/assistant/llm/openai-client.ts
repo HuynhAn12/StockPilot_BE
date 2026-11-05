@@ -209,7 +209,7 @@ function responsesBody(model: string, request: LlmRequest): Record<string, unkno
 }
 
 /** Thinking models (e.g. Gemini 2.5) spend part of max_tokens on reasoning, so the cap gets headroom. */
-const CHAT_REASONING_HEADROOM_TOKENS = 2048;
+const CHAT_REASONING_HEADROOM_TOKENS = 3000;
 
 function chatBody(model: string, request: LlmRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {

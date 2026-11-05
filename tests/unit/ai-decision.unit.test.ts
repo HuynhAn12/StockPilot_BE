@@ -48,7 +48,7 @@ describe('AiDecisionService', () => {
 
       expect(result).toMatchObject({ explanation: 'AI TEXT', source: 'AI', model: 'gpt-test-2025', interactionId: '42' });
       const request = llm.complete.mock.calls[0][0];
-      expect(request.input).toContain('<data>');
+      expect(request.input).toContain('<store_data>');
       expect(request.input).toContain('"sku": "SKU-10"');
       expect(request.instructions).not.toContain('NHÂN VIÊN KHO');
       expect(prisma.aiInteraction.create).toHaveBeenCalledWith({
