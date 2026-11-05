@@ -262,7 +262,7 @@ export class AssistantService {
     }
 
     // 4. "tháng 1" -> "tháng 12" kèm năm tùy chọn
-    const match = q.match(/tháng\s*(\d{1,2})(?:[\/\-\s]+(\d{4}))?/i);
+    const match = q.match(/tháng\s*(\d{1,2})(?:[/\-\s]+(\d{4}))?/i);
     if (match) {
       const m = parseInt(match[1], 10);
       const y = match[2] ? parseInt(match[2], 10) : currentYear;

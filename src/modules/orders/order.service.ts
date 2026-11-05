@@ -658,8 +658,8 @@ export class OrderService {
     let cashTotal = 0;
     let transferCount = 0;
     let transferTotal = 0;
-    let walletCount = 0;
-    let walletTotal = 0;
+    const walletCount = 0;
+    const walletTotal = 0;
 
     for (const p of paymentAggs) {
       const m = String(p.method || 'CASH').toUpperCase();
