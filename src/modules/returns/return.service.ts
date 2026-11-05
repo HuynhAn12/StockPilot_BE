@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
-import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createReturnSchema } from './return.schema';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
@@ -19,7 +19,8 @@ export class ReturnService {
     storeId: number,
     userId: number,
     input: z.infer<typeof createReturnSchema>,
-    clientRequestKey?: string
+    clientRequestKey?: string,
+    userRole?: string
   ) {
     const returnNumber = `RET-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
@@ -44,6 +45,26 @@ export class ReturnService {
 
       if (!order) {
         throw new NotFoundError('Đơn hàng không tồn tại trong cửa hàng');
+      }
+
+      if (userRole === 'WAREHOUSE_STAFF') {
+        const now = new Date();
+        const vnNow = new Date(now.getTime() + 7 * 3600000);
+        const vnYear = vnNow.getUTCFullYear();
+        const vnMonth = vnNow.getUTCMonth();
+        const vnDate = vnNow.getUTCDate();
+        const startOfToday = new Date(Date.UTC(vnYear, vnMonth, vnDate, -7, 0, 0, 0));
+
+        const isToday = order.createdAt ? order.createdAt >= startOfToday : false;
+        const isCreator = Boolean(userId && order.createdById === userId);
+
+        if (!isToday) {
+          throw new ForbiddenError('Nhân viên không thể đổi trả đơn hàng của ngày hôm qua hoặc các ngày trước. Chỉ Chủ cửa hàng mới có quyền xử lý.');
+        }
+
+        if (!isCreator) {
+          throw new ForbiddenError('Nhân viên chỉ có quyền đổi trả đơn hàng do chính mình tạo ra trong ngày hôm nay.');
+        }
       }
 
       if (order.status !== 'FULFILLED') {

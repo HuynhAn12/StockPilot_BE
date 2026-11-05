@@ -12,7 +12,8 @@ export class ReturnController {
         storeId,
         userId,
         req.body,
-        (req as any).idempotencyContext?.effectKey
+        (req as any).idempotencyContext?.effectKey,
+        req.user?.role
       );
       return res.status(201).json({ success: true, message: 'Tạo phiếu trả hàng thành công', data: result });
     } catch (error) {
