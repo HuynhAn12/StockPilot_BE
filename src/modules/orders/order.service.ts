@@ -1,6 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { prisma as defaultPrisma } from '../../config/db';
-import { ConflictError, NotFoundError, ValidationError } from '../../common/errors/app-error';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../common/errors/app-error';
 import { z } from 'zod';
 import { createOrderSchema, cancelOrderSchema } from './order.schema';
 import { StockLedgerService } from '../inventory/stock-ledger.service';
@@ -337,11 +337,11 @@ export class OrderService {
         const vnDate = vnNow.getUTCDate();
         const startOfToday = new Date(Date.UTC(vnYear, vnMonth, vnDate, -7, 0, 0, 0));
 
-        const isToday = order.createdAt >= startOfToday;
-        const isCreator = order.createdById === userId;
+        const isToday = order.createdAt ? order.createdAt >= startOfToday : false;
+        const isCreator = Boolean(userId && order.createdById === userId);
 
         if (!isToday && !isCreator) {
-          throw new ConflictError('Bạn không có quyền hủy đơn hàng này');
+          throw new ForbiddenError('Nhân viên chỉ có quyền hủy các đơn hàng phát sinh trong ca trực hôm nay');
         }
       }
 
