@@ -96,7 +96,7 @@ const envSchema = z
     JWT_REFRESH_SECRET: z.string().optional(),
     JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
     CORS_ORIGIN: z.string().default('*'),
-    TENANT_ROOT_DOMAIN: z.string().default('stockpilot.vn'),
+    TENANT_ROOT_DOMAIN: z.string().default('stockpilot.name.vn'),
     TENANT_SUBDOMAIN_REQUIRED: z.preprocess(parseOptionalBoolean, z.boolean().optional()),
     PUBLIC_API_URL: z.string().optional(),
     PAYMENT_CONFIG_ENCRYPTION_KEY: z.string().optional(),

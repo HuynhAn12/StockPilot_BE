@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import nodemailer from 'nodemailer';
 import { logger } from '../logger';
 
@@ -79,7 +80,7 @@ export async function sendRegisterOtpEmail({ to, name, otp, expiresMinutes = 10 
   const secure = process.env.SMTP_SECURE === 'true' || port === 465;
   const user = process.env.SMTP_USER || process.env.GMAIL_USER || '';
   const pass = process.env.SMTP_PASS || process.env.GMAIL_PASS || process.env.GMAIL_APP_PASSWORD || '';
-  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.vn>');
+  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.name.vn>');
 
   if (!user || !pass) {
     logger.info(`[Email Service - Giả lập SMTP] Không có SMTP_USER/SMTP_PASS, hiển thị mã OTP đăng ký ra console:`);
@@ -195,7 +196,7 @@ export async function sendPasswordResetOtpEmail({ to, name, otp, expiresMinutes 
   const secure = process.env.SMTP_SECURE === 'true' || port === 465;
   const user = process.env.SMTP_USER || process.env.GMAIL_USER || '';
   const pass = process.env.SMTP_PASS || process.env.GMAIL_PASS || process.env.GMAIL_APP_PASSWORD || '';
-  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.vn>');
+  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.name.vn>');
 
   // Nếu chưa cấu hình tài khoản SMTP, ghi log nổi bật ra terminal để tiện test
   if (!user || !pass) {
@@ -258,7 +259,7 @@ export async function sendPlatformEmail({ to, subject, text, html }: PlatformEma
   const secure = process.env.SMTP_SECURE === 'true' || port === 465;
   const user = process.env.SMTP_USER || process.env.GMAIL_USER || '';
   const pass = process.env.SMTP_PASS || process.env.GMAIL_PASS || process.env.GMAIL_APP_PASSWORD || '';
-  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.vn>');
+  const from = process.env.EMAIL_FROM || (user ? `"StockPilot" <${user}>` : '"StockPilot Vietnam" <no-reply@stockpilot.name.vn>');
   const recipients = Array.isArray(to) ? to : [to];
 
   if (recipients.length === 0) return { sent: false };

@@ -1,0 +1,69 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: stockpilot-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password_123
+      MYSQL_DATABASE: stockpilot
+      MYSQL_USER: stockpilot_user
+      MYSQL_PASSWORD: user_password_123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password_123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stockpilot-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stockpilot-backend
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DATABASE_URL: mysql://stockpilot_user:user_password_123@mysql:3306/stockpilot
+      JWT_SECRET: "stockpilot_secret_key_super_secure_jwt_2026"
+      JWT_REFRESH_SECRET: "stockpilot_refresh_secret_key_super_secure_2026"
+      CORS_ORIGIN: "https://stockpilot.name.vn,https://*.stockpilot.name.vn,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+      TENANT_ROOT_DOMAIN: stockpilot.name.vn
+      PAYMENT_CONFIG_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      TENANT_SUBDOMAIN_REQUIRED: "false"
+      APP_TIMEZONE: Asia/Ho_Chi_Minh
+    ports:
+      - "5000:5000"
+    networks:
+      - stockpilot-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+    container_name: stockpilot-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    networks:
+      - stockpilot-net
+
+volumes:
+  mysql_data:
+
+networks:
+  stockpilot-net:
+    driver: bridge
+

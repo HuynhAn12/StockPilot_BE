@@ -1,0 +1,62 @@
+name: Continuous Deployment to VPS (stockpilot.name.vn)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Auto Deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Remote Deployment over SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USERNAME: ${{ secrets.VPS_USERNAME || 'root' }}
+          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_PORT: ${{ secrets.VPS_PORT || 22 }}
+          TARGET_DIR: ${{ secrets.VPS_PROJECT_DIR || '/var/www/stockpilot' }}
+        run: |
+          echo "======================================================="
+          echo "🚀 [GitHub Actions] Bắt đầu tự động cập nhật VPS..."
+          echo "======================================================="
+
+          REMOTE_CMD="
+            TARGET_DIR=\"$TARGET_DIR\"
+            if [ ! -d \"\$TARGET_DIR\" ]; then
+              echo '⚠️ Thư mục \$TARGET_DIR chưa tồn tại. Đang tạo...'
+              mkdir -p \"\$TARGET_DIR\"
+            fi
+            cd \"\$TARGET_DIR\"
+            if [ -f \"deploy.sh\" ]; then
+              chmod +x deploy.sh
+              bash deploy.sh
+            elif [ -f \"backend/deploy.sh\" ]; then
+              chmod +x backend/deploy.sh
+              bash backend/deploy.sh
+            else
+              echo '📥 Đang kéo code từ nhánh main...'
+              git fetch origin main
+              git reset --hard origin/main
+              docker compose up -d --build
+            fi
+          "
+
+          if [ -n "$VPS_SSH_KEY" ]; then
+            echo "🔑 Xác thực bằng SSH Key..."
+            mkdir -p ~/.ssh
+            echo "$VPS_SSH_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa -p "$VPS_PORT" "$VPS_USERNAME@$VPS_HOST" "$REMOTE_CMD"
+          elif [ -n "$VPS_PASSWORD" ]; then
+            echo "🔒 Xác thực bằng SSH Password..."
+            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+            export SSHPASS="$VPS_PASSWORD"
+            sshpass -e ssh -o StrictHostKeyChecking=no -p "$VPS_PORT" "$VPS_USERNAME@$VPS_HOST" "$REMOTE_CMD"
+          else
+            echo "❌ Lỗi: Bạn cần cấu hình VPS_SSH_KEY hoặc VPS_PASSWORD trong GitHub Secrets!"
+            exit 1
+          fi

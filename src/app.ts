@@ -61,7 +61,17 @@ export function createApp(): Express {
               if (
                 corsOrigins.includes(origin) ||
                 origin.endsWith('.vercel.app') ||
-                origin.startsWith('http://localhost')
+                origin.startsWith('http://localhost') ||
+                origin.startsWith('http://127.0.0.1') ||
+                origin === 'https://stockpilot.name.vn' ||
+                origin.endsWith('.stockpilot.name.vn') ||
+                corsOrigins.some((allowed) => {
+                  if (allowed.includes('*')) {
+                    const regex = new RegExp('^' + allowed.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
+                    return regex.test(origin);
+                  }
+                  return false;
+                })
               ) {
                 return callback(null, true);
               }
