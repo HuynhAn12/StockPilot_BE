@@ -7,7 +7,7 @@ RUN npm ci
 FROM deps AS build
 COPY prisma ./prisma
 COPY src ./src
-COPY tsconfig.json ./
+COPY tsconfig*.json ./
 RUN npm run prisma:generate
 RUN npm run build
 RUN npm prune --omit=dev
