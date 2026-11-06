@@ -1,19 +1,34 @@
+# StockPilot production stack (VPS). Đặt file này ở thư mục cha chứa backend/ và frontend/
+# (deploy.sh tự chép bản mới nhất ra đó mỗi lần deploy):
+#
+#   /var/www/stockpilot/
+#   ├── backend/            (repo StockPilot_BE, có backend/.env)
+#   ├── frontend/           (repo StockPilot_FE)
+#   └── docker-compose.yml  (bản sao của file này)
+#
+# Mọi khóa bí mật nằm trong backend/.env (không commit). Mẫu: backend/production.env.example.
+# Chạy: docker compose --env-file backend/.env up -d --build
+#
+# Các cổng chỉ mở trên 127.0.0.1: chỉ Nginx của máy chủ (đứng sau Cloudflare) gọi được vào,
+# không ai truy cập thẳng MySQL / API / frontend qua IP của VPS.
+
 services:
   mysql:
     image: mysql:8.0
     container_name: stockpilot-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root_password_123
-      MYSQL_DATABASE: stockpilot
-      MYSQL_USER: stockpilot_user
-      MYSQL_PASSWORD: user_password_123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Thiếu MYSQL_ROOT_PASSWORD trong backend/.env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-stockpilot}
+      MYSQL_USER: ${MYSQL_USER:-stockpilot_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Thiếu MYSQL_PASSWORD trong backend/.env}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password_123"]
+      # $$ để Compose không thay biến: mật khẩu được đọc bên trong container.
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\"$$MYSQL_ROOT_PASSWORD\""]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,19 +44,18 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+    env_file:
+      - ./backend/.env
     environment:
       NODE_ENV: production
       PORT: 5000
-      DATABASE_URL: mysql://stockpilot_user:user_password_123@mysql:3306/stockpilot
-      JWT_SECRET: "stockpilot_secret_key_super_secure_jwt_2026"
-      JWT_REFRESH_SECRET: "stockpilot_refresh_secret_key_super_secure_2026"
-      CORS_ORIGIN: "https://stockpilot.name.vn,https://*.stockpilot.name.vn,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
-      TENANT_ROOT_DOMAIN: stockpilot.name.vn
-      PAYMENT_CONFIG_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-      TENANT_SUBDOMAIN_REQUIRED: "false"
-      APP_TIMEZONE: Asia/Ho_Chi_Minh
+      # Mật khẩu chỉ dùng chữ và số (xem production.env.example) để không phải mã hóa URL.
+      DATABASE_URL: mysql://${MYSQL_USER:-stockpilot_user}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-stockpilot}
+      TENANT_ROOT_DOMAIN: ${TENANT_ROOT_DOMAIN:-stockpilot.name.vn}
+      # Số proxy đứng trước backend: Cloudflare → Nginx máy chủ → Nginx container frontend.
+      TRUST_PROXY: ${TRUST_PROXY:-3}
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     networks:
       - stockpilot-net
 
@@ -56,7 +70,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     networks:
       - stockpilot-net
 
@@ -66,4 +80,3 @@ volumes:
 networks:
   stockpilot-net:
     driver: bridge
-

@@ -10,3 +10,6 @@
 *.webp binary
 *.xlsx binary
 *.pdf binary
+
+# Shell scripts run on the Linux VPS: always LF.
+*.sh text eol=lf
