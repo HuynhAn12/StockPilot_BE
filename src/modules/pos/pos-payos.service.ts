@@ -306,8 +306,8 @@ export class PosPayosService {
 
     // 9. Gọi PayOS tạo Payment Link bằng SDK chính thức (timeout 10s)
     const description = `POS ${orderCode}`.slice(0, 25);
-    const cancelUrl = process.env.PAYOS_CANCEL_URL || 'https://stockpilot.name.vn/pos/cancel';
-    const returnUrl = process.env.PAYOS_RETURN_URL || 'https://stockpilot.name.vn/pos/success';
+    const cancelUrl = process.env.PAYOS_CANCEL_URL || `https://${process.env.TENANT_ROOT_DOMAIN || 'taphoasandg.com'}/pos/cancel`;
+    const returnUrl = process.env.PAYOS_RETURN_URL || `https://${process.env.TENANT_ROOT_DOMAIN || 'taphoasandg.com'}/pos/success`;
 
     let payosData: any;
     let createError: any = null;

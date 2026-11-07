@@ -51,7 +51,7 @@ services:
       PORT: 5000
       # Mật khẩu chỉ dùng chữ và số (xem production.env.example) để không phải mã hóa URL.
       DATABASE_URL: mysql://${MYSQL_USER:-stockpilot_user}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-stockpilot}
-      TENANT_ROOT_DOMAIN: ${TENANT_ROOT_DOMAIN:-stockpilot.name.vn}
+      TENANT_ROOT_DOMAIN: ${TENANT_ROOT_DOMAIN:-taphoasandg.com}
       # Số proxy đứng trước backend: Cloudflare → Nginx máy chủ → Nginx container frontend.
       TRUST_PROXY: ${TRUST_PROXY:-3}
     ports:
