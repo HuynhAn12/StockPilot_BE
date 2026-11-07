@@ -54,6 +54,18 @@ async function main() {
       isActive: true,
     },
   });
+
+  await prisma.user.upsert({
+    where: { email: "admin@stockpilot.vn" },
+    update: {},
+    create: {
+      email: "admin@stockpilot.vn",
+      passwordHash,
+      fullName: "He Thong Admin",
+      role: "ADMIN",
+      isActive: true,
+    },
+  });
   console.log("Users OK");
 
   // 3. WAREHOUSE

@@ -16,6 +16,7 @@ FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /app/data /app/backend/data /app/ai_memory/db && chown -R node:node /app
 USER node
 COPY --chown=node:node package*.json ./
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
